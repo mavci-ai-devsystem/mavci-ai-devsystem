@@ -28,7 +28,10 @@ import {
   CI_TOKEN_SECRET, CI_TOKEN_EXPIRY_WARN_DAYS,
 } from './config.mjs';
 import { abs, exists, readJson, readJsonOrNull, readTextOrNull, todayIso } from './lib/fsx.mjs';
-import { pluginVersion, verifyIntegrity, validateAll, expiredWaivers, expiringWaivers, projectRoot } from './state.mjs';
+import {
+  pluginVersion, verifyIntegrity, validateAll, expiredWaivers, expiringWaivers, projectRoot,
+  stampHookRun, lastHookRun, lastGate,
+} from './state.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(HERE, '..');
@@ -200,29 +203,56 @@ function checkMarketplace(root, out) {
     return;
   }
 
-  // The repo must match SYSTEM_REPO EXACTLY. Printing whatever is there and
-  // calling it ok is a fail-open: a marketplace Claude Code cannot resolve means
-  // the plugin never installs, so no hook is registered and NOTHING is enforced -
-  // the total-enforcement-failure case, reported green. The commonest way to get
-  // there is a settings file copied from the template but never filled in, which
-  // leaves the literal __SYSTEM_REPO__ placeholder sitting in the marketplace
-  // source. That is called out separately because it names its own fix.
-  const repo = mk.source?.repo;
-  if (repo !== SYSTEM_REPO) {
-    const isPlaceholder = typeof repo === 'string' && PLACEHOLDER_RE.test(repo);
+  // The source must match SYSTEM_REPO EXACTLY, in the HTTPS form. Printing
+  // whatever is there and calling it ok is a fail-open: a marketplace Claude Code
+  // cannot resolve means the plugin never installs, so no hook is registered and
+  // NOTHING is enforced - the total-enforcement-failure case, reported green.
+  //
+  // Two ways to get there, and each names its own fix:
+  //   1. A settings file copied from the template but never filled in, leaving
+  //      the literal __SYSTEM_REPO__ placeholder in the marketplace source.
+  //   2. The `github` source form. It resolves over SSH (Gate 3, 6.18), so it
+  //      works on the machine that wrote it and fails on any machine without an
+  //      SSH key - the worst kind of defect, because it is invisible where it
+  //      was authored.
+  const src = mk.source ?? {};
+  const expected = `https://github.com/${SYSTEM_REPO}.git`;
+  const shown = src.url ?? src.repo;
+
+  if (typeof shown === 'string' && PLACEHOLDER_RE.test(shown)) {
     out.push({
       status: FAIL,
-      text: line(FAIL, `marketplace ${MARKETPLACE_NAME} points at ${repo === undefined ? '(no source.repo)' : `"${repo}"`}, not ${SYSTEM_REPO}`,
-        (isPlaceholder
-          ? 'That is an UNSUBSTITUTED template placeholder: settings were copied but never filled in.' + '\n         '
-          : '')
-        + 'Claude Code cannot resolve this marketplace, so the plugin never installs,'
+      text: line(FAIL, `marketplace ${MARKETPLACE_NAME} still contains a template placeholder: "${shown}"`,
+        'Settings were copied but never filled in. Claude Code cannot resolve this marketplace,'
+        + '\n         so the plugin never installs, no hook is registered, and nothing is enforced.'
+        + '\n         Re-run /mavci:connect.'),
+    });
+    return;
+  }
+
+  if (src.source === 'github') {
+    out.push({
+      status: FAIL,
+      text: line(FAIL, `marketplace ${MARKETPLACE_NAME} uses the "github" source form`,
+        'That form resolves over SSH. On any machine without an SSH key loaded the clone'
+        + '\n         fails, the plugin never installs, and nothing is enforced there - while it keeps'
+        + '\n         working on the machine that wrote it.'
+        + `\n         Fix: "source": { "source": "url", "url": "${expected}" }  (or re-run /mavci:connect)`),
+    });
+    return;
+  }
+
+  if (src.source !== 'url' || src.url !== expected) {
+    out.push({
+      status: FAIL,
+      text: line(FAIL, `marketplace ${MARKETPLACE_NAME} points at ${shown === undefined ? '(no source url)' : `"${shown}"`}, not ${expected}`,
+        'Claude Code cannot resolve this marketplace, so the plugin never installs,'
         + '\n         no hook is registered, and nothing is enforced at all. Re-run /mavci:connect.'),
     });
     return;
   }
 
-  out.push({ status: OK, text: line(OK, `marketplace ${MARKETPLACE_NAME} -> ${repo}`) });
+  out.push({ status: OK, text: line(OK, `marketplace ${MARKETPLACE_NAME} -> ${expected}`) });
 }
 
 function checkBaseline(root, out) {
@@ -475,12 +505,90 @@ function checkGateHeartbeat(root, out) {
   out.push({ status: OK, text: line(OK, `gate last ran ${ageH < 1 ? 'under an hour' : `${Math.round(ageH)}h`} ago (${last.verdict})`) });
 }
 
-/* ----------------------------------------------------------- hook selftest
- * The single most important check in this file. It does not read config - it
- * runs the guard against a command that MUST be denied and asserts the denial.
- * A config that parses is not evidence that a block still works.
+/* ------------------------------------------------ hook REGISTRATION probe
+ * Gate 3 finding, and the reason the self-test below is no longer allowed to
+ * report a pass on its own.
+ *
+ * v0.1.2 installed cleanly and registered ZERO hooks - Claude Code rejected
+ * every entry in hooks.json on a schema error and reported it nowhere doctor
+ * could see. Meanwhile doctor printed "hook self-test passed (5 cases)",
+ * because that test spawns the scripts itself. It was proving the scripts work,
+ * which was never in question, while the thing that calls them did not exist.
+ *
+ * The only evidence that Claude Code actually loaded our hooks is an artefact
+ * one of them wrote. `doctor.mjs --preflight` is wired as a SessionStart hook
+ * and stamps control/hook-run.json; gate.mjs stamps integrity.json.last_gate.
+ * Neither can be produced by anything but a hook Claude Code chose to run.
+ *
+ * Returns: 'proven' | 'absent' | 'version-skew' | 'stale' | 'unmatched'.
  */
-function selftestHooks(out) {
+const HOOK_RECEIPT_MAX_AGE_H = 12;
+
+function checkHookRegistration(root, out) {
+  const receipts = [lastHookRun(root), lastGate(root)].filter((r) => r?.at);
+  if (!receipts.length) {
+    out.push({
+      status: FAIL,
+      text: line(FAIL, 'NO PLUGIN HOOK HAS EVER RUN IN THIS PROJECT',
+        'Claude Code did not register the plugin\'s hooks, so there is no risk guard, no'
+        + '\n         standards gate and no phase gate here - nothing is enforced at all.'
+        + '\n         The plugin can install cleanly and still register zero hooks: a schema error'
+        + '\n         in hooks.json makes the loader drop every entry silently.'
+        + '\n         Check: /plugin  ->  mavci-core  ->  Errors, then restart the session.'),
+    });
+    return 'absent';
+  }
+
+  const newest = receipts.sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
+  const installed = pluginVersion();
+  if (newest.plugin_version && newest.plugin_version !== installed) {
+    out.push({
+      status: FAIL,
+      text: line(FAIL, `the registered hooks are from plugin ${newest.plugin_version}, not ${installed}`,
+        'The plugin was updated but the session still holds the old hooks, or the new'
+        + '\n         version failed to load. Restart the session, then re-run doctor.'),
+    });
+    return 'version-skew';
+  }
+
+  // Which of these Claude Code populates is version-dependent, so a match on
+  // ANY of the three is proof. A match on none is not proof of failure.
+  const mine = [process.env.CLAUDE_CODE_SESSION_ID, process.env.CLAUDE_PID].filter(Boolean).map(String);
+  const theirs = [newest.session_id, newest.env_session_id, newest.parent_pid].filter((v) => v != null).map(String);
+  if (mine.some((m) => theirs.includes(m))) {
+    out.push({ status: OK, text: line(OK, `plugin hooks are registered (${newest.event ?? 'gate'} hook ran in this session)`) });
+    return 'proven';
+  }
+
+  const ageH = (Date.now() - Date.parse(newest.at)) / 3_600_000;
+  if (!(ageH < HOOK_RECEIPT_MAX_AGE_H)) {
+    out.push({
+      status: FAIL,
+      text: line(FAIL, `no plugin hook has run for ${Math.round(ageH)}h`,
+        'SessionStart fires on every session, so a receipt this old means the hooks are'
+        + '\n         no longer registered. Check /plugin -> mavci-core -> Errors and restart.'),
+    });
+    return 'stale';
+  }
+
+  out.push({
+    status: WARN,
+    text: line(WARN, `a plugin hook ran ${Math.round(ageH * 60)}m ago, but not provably in THIS session`,
+      'Claude Code did not expose a session id this run, so registration could not be'
+      + '\n         confirmed for the current session. Restart the session if enforcement looks absent.'),
+  });
+  return 'unmatched';
+}
+
+/* ----------------------------------------------------------- hook selftest
+ * Runs the guard against a command that MUST be denied and asserts the denial.
+ * A config that parses is not evidence that a block still works.
+ *
+ * IMPORTANT: this proves the SCRIPTS behave. It says nothing about whether
+ * Claude Code calls them - that is checkHookRegistration above, and this
+ * function refuses to report a pass without it.
+ */
+function selftestHooks(out, registration) {
   const cases = [
     { name: 'rm -rf', input: { tool_name: 'Bash', tool_input: { command: 'rm -rf /' } }, expect: 'deny' },
     { name: 'prod deploy', input: { tool_name: 'Bash', tool_input: { command: 'vercel deploy --prod' } }, expect: 'deny' },
@@ -515,8 +623,21 @@ function selftestHooks(out) {
       out.push({ status: FAIL, text: line(FAIL, 'HOOK SELF-TEST FAILED', failures.join('\n         ')
         + '\n         Enforcement is not working. This usually means Claude Code changed the hook'
         + '\n         output schema. Do NOT continue as if the system is protecting you.') });
+    } else if (registration === 'proven') {
+      out.push({ status: OK, text: line(OK, `hook self-test passed (${cases.length} cases), and the hooks that run them are registered`) });
+    } else if (registration === 'unknown' || registration === 'unmatched') {
+      out.push({ status: WARN, text: line(WARN, `hook self-test passed (${cases.length} cases) - SCRIPTS ONLY`,
+        'This spawned the scripts directly, so it is not evidence that Claude Code calls them.'
+        + (registration === 'unmatched'
+          ? '\n         See the hook-registration line above.'
+          : '\n         Hook registration can only be checked inside a connected project.')) });
     } else {
-      out.push({ status: OK, text: line(OK, `hook self-test passed (${cases.length} cases)`) });
+      // registration is 'absent', 'stale' or 'version-skew': the scripts are fine
+      // and nothing invokes them. Reporting this as a pass is how v0.1.2 certified
+      // an enforcement layer that did not exist.
+      out.push({ status: FAIL, text: line(FAIL, `the guard scripts behave correctly (${cases.length} cases) but NOTHING CALLS THEM`,
+        'The plugin\'s hooks are not registered, so every one of those denials is'
+        + '\n         theoretical. Enforcement is absent. Fix registration first.') });
     }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -525,12 +646,35 @@ function selftestHooks(out) {
 
 /* ------------------------------------------------------------------ main */
 
+/**
+ * SessionStart hands us JSON on stdin (4.8). Read it only when we are actually
+ * running as a hook: `readFileSync(0)` on an interactive terminal would block.
+ */
+function readHookStdin() {
+  if (process.stdin.isTTY) return {};
+  try {
+    const raw = fs.readFileSync(0, 'utf8');
+    return raw.trim() ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const root = projectRoot();
   const preflight = argv.includes('--preflight');
   const sync = argv.includes('--sync');
   const out = [];
+
+  // Stamp the registration receipt FIRST and unconditionally. Reaching this line
+  // under --preflight means Claude Code ran a hook from this plugin, and that is
+  // the only fact the later probe can trust. Best effort by design: a receipt we
+  // could not write must never take the session down.
+  if (preflight) {
+    try { stampHookRun(root, { event: 'SessionStart', session_id: readHookStdin().session_id }); }
+    catch { /* never let bookkeeping break a session */ }
+  }
 
   try {
     checkNode(out);
@@ -549,7 +693,11 @@ function main() {
       checkGateHeartbeat(root, out);
       checkLessons(root, out);
     }
-    if (!preflight) selftestHooks(out);
+    // Outside a connected project there is no control/ directory to hold a
+    // receipt, so registration is unknowable rather than absent. 'unknown'
+    // still refuses to let the self-test below print a clean pass.
+    const registration = connected ? checkHookRegistration(root, out) : 'unknown';
+    if (!preflight) selftestHooks(out, registration);
   } catch (err) {
     out.push({ status: FAIL, text: line(FAIL, 'doctor crashed', err.message) });
   }

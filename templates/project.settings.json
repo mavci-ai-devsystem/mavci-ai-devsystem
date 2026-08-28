@@ -1,9 +1,11 @@
 {
   "$comment": "CANONICAL RISK POLICY - see ARCHITECTURE.md section 7 for what each group means and why. Written into every project by /mavci:new-project and /mavci:connect; __SYSTEM_REPO__ is substituted at write time from scripts/config.mjs. /mavci:doctor diffs a project's copy against this file: a missing deny rule is a FAIL, an extra allow rule is a WARNING (on Windows, 'Yes, and don't ask again' writes into this committed file rather than settings.local.json). Rule arrays contain ONLY rules - a comment string inside them would be parsed as a permission rule and rejected at startup.",
 
+  "$comment2": "HTTPS, NOT THE `github` SOURCE FORM. Gate 3 finding: {\"source\":\"github\",\"repo\":\"owner/repo\"} resolves over SSH, so on a machine with no SSH key loaded the marketplace never clones and the plugin never installs - which means zero hooks and zero enforcement, reported as a clean start. The explicit HTTPS git URL uses the machine's ordinary git credential helper instead, which is the credential the onboarding protocol already requires. See NATIVE-CAPABILITIES 6.18.",
+
   "extraKnownMarketplaces": {
     "mavci": {
-      "source": { "source": "github", "repo": "__SYSTEM_REPO__" }
+      "source": { "source": "url", "url": "https://github.com/__SYSTEM_REPO__.git" }
     }
   },
   "enabledPlugins": {

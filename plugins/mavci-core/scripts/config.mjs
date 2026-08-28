@@ -48,13 +48,15 @@ export const PATHS = {
   waivers: `${CONTROL_DIR}/waivers.json`,
   integrity: `${CONTROL_DIR}/integrity.json`,
   gateRun: `${CONTROL_DIR}/gate-run.json`,
+  hookRun: `${CONTROL_DIR}/hook-run.json`,
 };
 
 /**
  * Every file the integrity hash covers. Anything that governs an agent belongs here.
- * `integrity.json` is excluded - it holds the hash. `gate-run.json` is excluded
- * because it changes on every turn by design; it is still inside control/, so
- * agents cannot write it and cannot fake a completed gate.
+ * `integrity.json` is excluded - it holds the hash. `gate-run.json` and
+ * `hook-run.json` are excluded because they change on every turn and every
+ * session by design; both are still inside control/, so agents cannot write
+ * them and cannot fake a completed gate or a registered hook.
  */
 export const CONTROL_GLOBS = [
   PATHS.state,

@@ -43,7 +43,47 @@ jobs:
       - name: Plugin structure
         run: node scripts/ci/check-plugin.mjs
 
+      # doctor must FAIL when Claude Code did not register the plugin's hooks.
+      # v0.1.2 registered zero hooks and doctor reported "hook self-test passed":
+      # it was testing the guard scripts, not whether anything calls them.
+      - name: Doctor proves hook registration
+        run: node scripts/ci/check-doctor.mjs
+
       # A __TOKEN__ reaching a generated project is a build failure: __PROJECT_ID__
       # in package.json makes `npm ci` fail, so a fresh scaffold is not green.
       - name: No template placeholder survives a render
         run: node scripts/ci/check-placeholders.mjs
+
+  # Claude Code's own validator is the AUTHORITY on plugin and hook schema.
+  #
+  # v0.1.2 shipped `"command": ["node", "..."]` in hooks.json. Claude Code's
+  # plugin loader rejected all eight entries with `expected string, received
+  # array` and installed the plugin with ZERO hooks and no visible error: no
+  # risk guard, no standards gate, no phase gate. Every local probe missed it,
+  # because `--plugin-dir` and doctor's self-test never go through the loader's
+  # schema validation. `claude plugin validate --strict` reproduces those eight
+  # errors exactly, so from 0.1.3 it runs before anything ships.
+  #
+  # Deliberately unpinned: the point is to track the schema real users' Claude
+  # Code enforces, so this job breaks when upstream changes it. It needs no
+  # authentication. If the CLI is missing the step fails, which is correct -
+  # "could not check" is never a pass (invariant 5).
+  #
+  # This is a CI tool, not a system dependency. selftest.yml still proves the
+  # whole toolchain runs with Claude Code absent (ARCHITECTURE section 11).
+  plugin-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '22'
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code@latest
+
+      - name: Claude Code validates the plugin
+        run: claude plugin validate ./plugins/mavci-core --strict
+
+      - name: Claude Code validates the marketplace
+        run: claude plugin validate . --strict

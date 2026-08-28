@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/risk-guard.mjs"],
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/risk-guard.mjs"],
             "timeout": 20,
             "statusMessage": "mavci: risk policy"
           }
@@ -17,7 +18,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/risk-guard.mjs"],
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/risk-guard.mjs"],
             "timeout": 20,
             "statusMessage": "mavci: risk policy"
           }
@@ -31,12 +33,14 @@
         "hooks": [
           {
             "type": "command",
-            "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs", "--mark-dirty"],
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs", "--mark-dirty"],
             "timeout": 10
           },
           {
             "type": "command",
-            "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs", "--changed", "--advisory"],
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs", "--changed", "--advisory"],
             "async": true,
             "timeout": 60,
             "statusMessage": "mavci: checking standards"
@@ -44,7 +48,8 @@
           {
             "type": "command",
             "if": "Edit(./.mavci/**)",
-            "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/redact.mjs", "--sweep"],
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/redact.mjs", "--sweep"],
             "timeout": 20
           }
         ]
@@ -56,7 +61,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"],
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"],
             "timeout": 30,
             "statusMessage": "mavci: standards gate"
           }
@@ -69,7 +75,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"],
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"],
             "timeout": 30,
             "statusMessage": "mavci: standards gate"
           }
@@ -82,7 +89,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/doctor.mjs", "--preflight"],
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/doctor.mjs", "--preflight"],
             "timeout": 20
           }
         ]

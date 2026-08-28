@@ -169,12 +169,17 @@ mavci-ai-devsystem/                      # private GitHub repo (mavci-ai-devsyst
 ```json
 {
   "extraKnownMarketplaces": {
-    "mavci": { "source": { "source": "github", "repo": "mavci-ai-devsystem/mavci-ai-devsystem" } }
+    "mavci": { "source": { "source": "url", "url": "https://github.com/mavci-ai-devsystem/mavci-ai-devsystem.git" } }
   },
   "enabledPlugins": { "mavci-core@mavci": true },
   "permissions": { "...": "risk policy, section 7" }
 }
 ```
+
+The HTTPS `url` form is deliberate. The shorter `{"source":"github","repo":"..."}`
+form resolves over SSH and fails on a machine authenticated by HTTPS token
+(6.18, observed in Gate 3) — and its failure mode is a plugin that never
+installs, so nothing is enforced and nothing says so.
 
 ### How a change reaches every project without manual edits
 
@@ -186,16 +191,36 @@ mavci-ai-devsystem/                      # private GitHub repo (mavci-ai-devsyst
 
 No project file changes except that one recorded version field, which is the point: local and CI can never silently diverge.
 
-### Two prerequisites per machine, stated honestly
+### Three prerequisites per machine, stated honestly
 
-1. **Git credentials for the private system repo — `gh auth login`.** The repo is
-   private, so `/plugin marketplace add` clones it with the machine's ordinary git
-   credentials. Without them the install fails. This is one step, done once per
-   machine. It is not zero: any claim that a second machine needs "no setup" is
-   wrong, and the acceptance test says so explicitly.
-2. **The workspace trust dialog**, accepted once per clone per machine. Repository-supplied `extraKnownMarketplaces` are ignored until then (verified 6.6).
+Gate 3 (2026-08-28) turned the first of these from one step into two. Both new
+sentences below are observed behaviour, not documentation.
 
-Neither is project configuration, and neither recurs. `claude -p` and SDK sessions never get the trust dialog and therefore never load the plugin — **headless Claude is outside the design envelope.** CI does not use Claude; it runs `verify.mjs` with `node`.
+1. **A git credential that resolves WITHOUT A PROMPT, configured before Claude
+   Code launches.** The repo is private, so the marketplace is cloned with the
+   machine's ordinary git credentials. It is not enough for them to exist:
+   Claude Code cannot prompt while resolving `extraKnownMarketplaces`, and fails
+   with `unable to get password from user` on a machine where an interactive
+   `git clone` of the same repo succeeds (6.19). `gh auth login` alone does not
+   always suffice — follow it with `gh auth setup-git`, or set `GH_TOKEN`.
+2. **The HTTPS marketplace form.** `{"source":"github","repo":"owner/repo"}`
+   resolves over **SSH**, so it silently requires an SSH key that a machine
+   authenticated by HTTPS token does not have (6.18). Every project's
+   `settings.json` therefore carries
+   `{"source":"url","url":"https://github.com/<owner>/<repo>.git"}`. This is not
+   a per-machine step — it is a template invariant, listed here because it is
+   what makes step 1 sufficient. `doctor` fails the `github` form.
+3. **The workspace trust dialog**, accepted once per clone per machine.
+   Repository-supplied `extraKnownMarketplaces` are ignored until then
+   (verified 6.6).
+
+None of this is project configuration, and none of it recurs. `claude -p` and SDK sessions never get the trust dialog and therefore never load the plugin — **headless Claude is outside the design envelope.** CI does not use Claude; it runs `verify.mjs` with `node`.
+
+**What all three protect.** If any one of them is missing, the marketplace does
+not resolve, the plugin does not install, **no hook is registered, and nothing
+is enforced** — and the session starts normally and says nothing. That silent
+total failure is why `doctor` now proves hook registration from an artefact only
+a hook can write, rather than inferring it (section 6.4, `control/hook-run.json`).
 
 ---
 

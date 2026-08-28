@@ -43,4 +43,17 @@ jobs:
           node scripts/ci/check-fixtures.mjs
           node scripts/ci/check-risk-guard.mjs
           node scripts/ci/check-gate.mjs
+          node scripts/ci/check-plugin.mjs
+          node scripts/ci/check-doctor.mjs
           node scripts/ci/check-escape-hatch.mjs
+
+      # The release gate that would have stopped v0.1.2. A hooks.json Claude Code
+      # rejects installs cleanly and registers ZERO hooks, so a tag must never
+      # exist without its own validator having passed on the exact tagged tree.
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code@latest
+
+      - name: Claude Code validates the tagged plugin and marketplace
+        run: |
+          claude plugin validate ./plugins/mavci-core --strict
+          claude plugin validate . --strict

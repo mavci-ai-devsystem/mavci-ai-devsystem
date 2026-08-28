@@ -70,10 +70,15 @@ lapses silently and CI fails with "repository not found".
 
 ```bash
 gh auth login          # required: the system repo is private
+gh auth setup-git      # required: the credential must resolve WITHOUT a prompt
 ```
 
-This is **one step, not zero**. Without credentials `/plugin marketplace add`
-cannot clone the repo. What needs no setup is the project itself.
+This is **two steps, not zero**. The system repo is private, so the marketplace
+is cloned with the machine's git credentials — and it is not enough for them to
+exist. Claude Code cannot prompt while resolving `extraKnownMarketplaces`: it
+fails with `unable to get password from user` on a machine where an interactive
+`git clone` of the same repo works fine. `setup-git` (or `GH_TOKEN`) is what
+makes the credential non-interactive. What needs no setup is the project itself.
 
 Then in any project, on first launch, accept the workspace trust dialog. Without
 it, repository-supplied `extraKnownMarketplaces` entries are ignored — this is
@@ -86,7 +91,10 @@ documented Claude Code behaviour, not a bug.
 ```bash
 # in a project repo
 claude
-/plugin marketplace add mavci-ai-devsystem/mavci-ai-devsystem
+# only for the FIRST project on a machine - after /mavci-core:connect writes
+# settings.json, every later launch installs the plugin on its own.
+# The https:// URL is required: the shorter owner/repo form resolves over SSH.
+/plugin marketplace add https://github.com/mavci-ai-devsystem/mavci-ai-devsystem.git
 /plugin install mavci-core@mavci
 
 /mavci-core:connect        # existing repo  (the normal case)

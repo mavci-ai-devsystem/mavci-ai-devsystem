@@ -424,6 +424,45 @@ export function lastGate(root) {
   return readJsonOrNull(abs(root, PATHS.integrity))?.last_gate ?? null;
 }
 
+/* ------------------------------------------------- hook registration receipt
+ * Gate 3 finding. v0.1.2 installed cleanly and registered ZERO hooks: Claude
+ * Code rejected every entry in hooks.json on a schema error and said nothing.
+ * Nothing in the system noticed, because every local probe tested the SCRIPTS
+ * rather than whether Claude Code had actually loaded them - doctor's own hook
+ * self-test cheerfully reported "5 cases passed" with no hook registered at all.
+ *
+ * This file is the only artefact that cannot be produced without Claude Code
+ * having run one of our hooks: doctor.mjs --preflight writes it, and it is
+ * wired as a SessionStart hook, so it is stamped once per session IF AND ONLY
+ * IF the plugin's hooks registered. `checkHookRegistration` in doctor.mjs turns
+ * its absence into a FAIL.
+ *
+ * It lives in control/ so an agent cannot forge one, and outside CONTROL_GLOBS
+ * so stamping it never invalidates the seal - exactly like gate-run.json.
+ */
+export function stampHookRun(root, { event, session_id }) {
+  const p = abs(root, PATHS.hookRun);
+  if (!exists(path.dirname(p))) return null;
+  const doc = {
+    schema_version: 1,
+    event,
+    at: nowIso(),
+    plugin_version: pluginVersion(),
+    // Three independent ways to recognise "this session". Which of them Claude
+    // Code populates is version-dependent, so a match on ANY is proof and a
+    // match on none is not, by itself, taken as failure.
+    session_id: session_id ?? null,
+    env_session_id: process.env.CLAUDE_CODE_SESSION_ID ?? null,
+    parent_pid: Number.isInteger(process.ppid) ? process.ppid : null,
+  };
+  try { writeJsonAtomic(p, doc); } catch { return null; }
+  return doc;
+}
+
+export function lastHookRun(root) {
+  return readJsonOrNull(abs(root, PATHS.hookRun));
+}
+
 /* ------------------------------------------------------------------ init */
 
 export function init(root, manifest) {

@@ -117,9 +117,26 @@ Phase 1 built: `architect`, `builder`, `verifier`; 8+4 checker rules; the five
 scripts; hooks; scaffold; CI. Not yet built, per plan: `guardian`, `scribe`,
 `/release`, `/retro`, `/research`, five standards packs, nine further rules.
 
-Distribution is **unproven** — local work used `--plugin-dir`, which takes
-precedence over an installed plugin (6.9), so the real GitHub path (marketplace
-add, install, trust dialog, version propagation) has never actually run.
+Distribution is **partly proven.** Gate 3 (2026-08-28) ran the real GitHub path:
+the marketplace cloned and `mavci-core@mavci` installed from `settings.json`
+alone, with no `/plugin install`. The auto-load path works (6.20).
+
+It also found the defect that mattered. v0.1.2 put the argv array in `command`
+in `hooks.json`; Claude Code rejected all eight entries and installed the plugin
+with **zero hooks** — no risk guard, no standards gate, no phase gate — cleanly
+and silently. Fixed in 0.1.3, along with the three checks that should have
+caught it: `claude plugin validate --strict` in CI, strict hooks-schema
+validation in `check-plugin.mjs`, and `doctor` proving hook registration from
+`control/hook-run.json` instead of inferring it from the scripts behaving.
+
+**The lesson, which generalises past this bug:** `--plugin-dir` does not run the
+plugin loader's schema validation (4.22), so local development cannot see this
+whole class of fault. Before any release, `claude plugin validate --strict` is
+the authority — not our reading of the docs, and not a local run.
+
+Still unproven: version propagation across a bump (`/plugin marketplace update`
+→ `/plugin update`), and hooks actually firing in an installed plugin. Both are
+the next Gate 3 re-run.
 
 ---
 

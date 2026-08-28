@@ -61,13 +61,13 @@ The four stack-specific rules from fix 3 are in. `supabase.rls_policy_per_table`
 
 Two repositories, because the two paths have different failure modes and **the existing-repo path is the one that matters for all six real projects**.
 
-**Setup:** system repo pushed to `github.com/mavci-ai-devsystem/mavci-ai-devsystem` with tag `v0.1.0`. Machine A = Windows, with `gh auth login` completed. `MAVCI_TOKEN` set as an org-level secret.
+**Setup:** system repo pushed to `github.com/mavci-ai-devsystem/mavci-ai-devsystem` with tag `v0.1.0`. Machine A = Windows, with `gh auth login` **and `gh auth setup-git`** completed (6.19: the credential must resolve without a prompt). `MAVCI_TOKEN` set as an org-level secret.
 
 ### Part A — greenfield (`~/acceptance-new`)
 
 | # | Action | Assertion |
 |---|---|---|
-| A1 | `claude` in the empty repo, accept the trust dialog, `/plugin marketplace add mavci-ai-devsystem/mavci-ai-devsystem`, `/plugin install mavci-core@mavci` | `/context` lists the three agents. `/help` lists `/mavci-core:new-project` and `/mavci-core:waive`. |
+| A1 | `claude` in the empty repo, accept the trust dialog, `/plugin marketplace add https://github.com/mavci-ai-devsystem/mavci-ai-devsystem.git` (the HTTPS form: `owner/repo` resolves over SSH, 6.18), `/plugin install mavci-core@mavci` | `/context` lists the three agents. `/help` lists `/mavci-core:new-project` and `/mavci-core:waive`. |
 | A2 | `/mavci-core:new-project acceptance-new` — TR+EU, Vercel, tier `standard` | `project.json` validates. `.claude/settings.json` contains every tier-3 deny rule **including `Edit(./.mavci/control/**)`**. The five legal pages exist with real content. `control/baseline.json` exists and is **empty**. |
 | A3 | `node <plugin>/scripts/gate.mjs` | Exit `0`. Verdict written, 12 checks passing. The scaffold is green from commit one. |
 | A4 | `/mavci-core:plan "add a tenant-scoped projects table with RLS and a list page"` | Task spec in `.mavci/tasks/`, control task in `.mavci/control/tasks/`. `state.phase` is `build`. `git status` shows **zero** changes under `app/` or `supabase/`. |
@@ -104,7 +104,7 @@ A repo seeded with realistic pre-existing debt: three routes without `force-dyna
 
 | # | Action | Assertion |
 |---|---|---|
-| C1 | **Machine B (macOS or Linux).** Step one: `gh auth login`. The system repo is private, so without credentials `/plugin marketplace add` fails to clone it. Then clone the project, run `claude`, accept the trust dialog. | **This is one step, not zero.** Machine B needs `gh auth login` once, and the trust dialog once per repo. What is zero is *project* configuration: no file in the project is edited. `gate.mjs` then runs identically on macOS/Linux — no bash, jq or PowerShell dependency. |
+| C1 | **Machine B (macOS or Linux).** Step one: `gh auth login` **then `gh auth setup-git`**. The system repo is private, and Claude Code cannot prompt for a credential while resolving the marketplace — it fails with `unable to get password from user` even where an interactive `git clone` succeeds (6.19, observed Gate 3). Then clone the project, run `claude`, accept the trust dialog. | **This is two steps, not zero.** Machine B needs a non-interactive git credential once, and the trust dialog once per repo. What is zero is *project* configuration: no file in the project is edited. `gate.mjs` then runs identically on macOS/Linux — no bash, jq or PowerShell dependency. |
 | C2 | In the system repo: add rule #13 with fixtures, bump to `0.2.0`, push tag `v0.2.0` | `validate.yml` passes; fixture assertions confirm the rule fails `bad/` and passes `good/`. `release.yml` confirms version and tag agree. |
 | C3 | In a project on either machine: `/plugin marketplace update`, `/plugin update`, `/mavci-core:doctor --sync` | Doctor reports 13 rules and version `0.2.0`, and writes `0.2.0` into `state.json.plugin_version`. **No other project file changed.** Propagation proof. |
 | C4 | Commit and push | CI now clones `v0.2.0`, following the committed field. Local and CI cannot diverge silently (B4). |

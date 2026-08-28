@@ -55,49 +55,178 @@ for (const d of ['agents', 'skills', 'commands', 'hooks', 'scripts']) {
   }
 }
 
-/* --- hooks ------------------------------------------------------------ */
+/* --- hooks ------------------------------------------------------------
+ * hooks.json is validated against the DOCUMENTED SCHEMA, key by key, not just
+ * checked for presence.
+ *
+ * Why this exists: v0.1.2 shipped `"command": ["node", "..."]`. Claude Code's
+ * plugin loader rejects that with `expected "string", received "array"` and
+ * drops EVERY entry in the file. The plugin then installs cleanly, reports no
+ * error, and registers ZERO hooks - no risk guard, no standards gate, no phase
+ * gate. The old version of this block asserted the hooks were PRESENT and that
+ * their scripts existed, both of which were true, so CI stayed green throughout.
+ *
+ * Neither `--plugin-dir` nor doctor's hook self-test goes through the loader's
+ * schema validation, so a real installed plugin was the only thing that could
+ * catch it. That is too late. This validator is the local authority; the
+ * `plugin-validate` job in validate.yml runs Claude Code's own validator as the
+ * upstream authority. Both must pass.
+ */
+
+const HOOK_EVENTS = new Set(['SessionStart', 'Setup', 'UserPromptSubmit', 'UserPromptExpansion', 'PreToolUse',
+  'PermissionRequest', 'PermissionDenied', 'PostToolUse', 'PostToolUseFailure', 'PostToolBatch',
+  'Notification', 'MessageDisplay', 'SubagentStart', 'SubagentStop', 'TaskCreated', 'TaskCompleted',
+  'Stop', 'StopFailure', 'TeammateIdle', 'InstructionsLoaded', 'ConfigChange', 'CwdChanged',
+  'DirectoryAdded', 'FileChanged', 'WorktreeCreate', 'WorktreeRemove', 'PreCompact', 'PostCompact',
+  'Elicitation', 'ElicitationResult', 'SessionEnd']);
+
+// NATIVE-CAPABILITIES 4.10 / 4.12 / 4.19. Unknown keys are rejected rather than
+// ignored: a mistyped key name is exactly the kind of thing that "works" until
+// it silently does nothing. A trailing "!" marks a required field.
+const HOOK_COMMON = { if: 'string', timeout: 'number', statusMessage: 'string', once: 'boolean' };
+const HOOK_TYPES = {
+  command:  { command: 'string!', args: 'string[]', async: 'boolean', asyncRewake: 'boolean', shell: 'string' },
+  http:     { url: 'string!', headers: 'object', allowedEnvVars: 'string[]' },
+  mcp_tool: { server: 'string!', tool: 'string!', input: 'object' },
+  prompt:   { prompt: 'string!', model: 'string' },
+  agent:    { prompt: 'string!' },
+};
+
+/** Validate a parsed hooks.json against the documented schema. Returns error strings. */
+export function validateHooksDoc(doc, where = 'hooks.json') {
+  const errs = [];
+  const at = (p) => where + p;
+  const kindOf = (v) => (Array.isArray(v) ? 'array' : v === null ? 'null' : typeof v);
+
+  if (kindOf(doc) !== 'object') return [where + ': not a JSON object'];
+  for (const k of Object.keys(doc)) {
+    if (k !== 'hooks') errs.push(at('') + ': unknown top-level key "' + k + '" - only "hooks" is read');
+  }
+  const hooks = doc.hooks;
+  if (hooks === undefined) return [where + ': no "hooks" key'];
+  if (kindOf(hooks) !== 'object') return [at('.hooks') + ': must be an object keyed by event name'];
+
+  for (const [event, groups] of Object.entries(hooks)) {
+    const ep = '.hooks.' + event;
+    if (!HOOK_EVENTS.has(event)) errs.push(at(ep) + ': unknown event name');
+    if (!Array.isArray(groups)) { errs.push(at(ep) + ': must be an array of matcher groups'); continue; }
+    if (!groups.length) errs.push(at(ep) + ': empty array registers nothing');
+
+    groups.forEach((g, gi) => {
+      const gp = ep + '[' + gi + ']';
+      if (kindOf(g) !== 'object') { errs.push(at(gp) + ': must be an object'); return; }
+      for (const k of Object.keys(g)) {
+        if (k !== 'matcher' && k !== 'hooks') errs.push(at(gp) + ': unknown key "' + k + '"');
+      }
+      if ('matcher' in g && typeof g.matcher !== 'string') {
+        errs.push(at(gp + '.matcher') + ': expected "string", received "' + kindOf(g.matcher) + '"');
+      }
+      if (!Array.isArray(g.hooks)) { errs.push(at(gp + '.hooks') + ': expected an array of hook handlers'); return; }
+      if (!g.hooks.length) errs.push(at(gp + '.hooks') + ': empty array registers nothing');
+
+      g.hooks.forEach((h, hi) => {
+        const hp = gp + '.hooks[' + hi + ']';
+        if (kindOf(h) !== 'object') { errs.push(at(hp) + ': must be an object'); return; }
+        const spec = HOOK_TYPES[h.type];
+        if (!spec) {
+          errs.push(at(hp + '.type') + ': '
+            + (h.type === undefined ? 'missing' : 'unknown type "' + h.type + '"')
+            + ' - expected one of ' + Object.keys(HOOK_TYPES).join(', '));
+          return;
+        }
+        const allowed = { ...HOOK_COMMON, ...spec };
+        for (const [k, v] of Object.entries(h)) {
+          if (k === 'type') continue;
+          const want = allowed[k];
+          if (!want) { errs.push(at(hp + '.' + k) + ': unknown key for a "' + h.type + '" hook - it would be ignored'); continue; }
+          const base = want.replace('!', '');
+          const got = kindOf(v);
+          if (base === 'string[]') {
+            if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) {
+              errs.push(at(hp + '.' + k) + ': expected an array of strings, received "' + got + '"');
+            }
+          } else if (got !== base) {
+            errs.push(at(hp + '.' + k) + ': expected "' + base + '", received "' + got + '"');
+          }
+        }
+        for (const [k, want] of Object.entries(spec)) {
+          if (want.endsWith('!') && h[k] === undefined) errs.push(at(hp + '.' + k) + ': required for a "' + h.type + '" hook');
+        }
+        if (h.shell !== undefined && h.shell !== 'bash' && h.shell !== 'powershell') {
+          errs.push(at(hp + '.shell') + ': must be "bash" or "powershell"');
+        }
+      });
+    });
+  }
+  return errs;
+}
 
 const hooksPath = path.join(PLUGIN, 'hooks', 'hooks.json');
 if (!exists(hooksPath)) {
   failures.push('hooks/hooks.json missing - no enforcement would run');
 } else {
-  const hooks = JSON.parse(read(hooksPath)).hooks ?? {};
-  const KNOWN = new Set(['SessionStart', 'Setup', 'UserPromptSubmit', 'UserPromptExpansion', 'PreToolUse',
-    'PermissionRequest', 'PermissionDenied', 'PostToolUse', 'PostToolUseFailure', 'PostToolBatch',
-    'Notification', 'MessageDisplay', 'SubagentStart', 'SubagentStop', 'TaskCreated', 'TaskCompleted',
-    'Stop', 'StopFailure', 'TeammateIdle', 'InstructionsLoaded', 'ConfigChange', 'CwdChanged',
-    'DirectoryAdded', 'FileChanged', 'WorktreeCreate', 'WorktreeRemove', 'PreCompact', 'PostCompact',
-    'Elicitation', 'ElicitationResult', 'SessionEnd']);
+  let doc = null;
+  try { doc = JSON.parse(read(hooksPath)); }
+  catch (err) { failures.push('hooks/hooks.json is not valid JSON: ' + err.message); }
 
-  for (const [event, groups] of Object.entries(hooks)) {
-    if (!KNOWN.has(event)) failures.push(`hooks.json declares unknown event "${event}"`);
-    for (const g of groups) {
-      for (const h of g.hooks ?? []) {
-        // Every referenced script must exist. A missing script means the hook
-        // fails, and a failed hook FAILS OPEN (NATIVE-CAPABILITIES 4.18).
-        const cmd = Array.isArray(h.command) ? h.command : [h.command];
-        for (const part of cmd) {
-          if (typeof part !== 'string' || !part.includes('${CLAUDE_PLUGIN_ROOT}')) continue;
-          const rel = part.replace('${CLAUDE_PLUGIN_ROOT}/', '');
-          if (!exists(path.join(PLUGIN, rel))) failures.push(`${event}: hook script ${rel} does not exist`);
-        }
-        if (h.timeout === undefined) {
-          warn.push(`${event}: no explicit timeout; the 600s default hides a hung hook for ten minutes`);
-        }
-        // A gate that runs async cannot render a decision, so it cannot block.
-        if ((event === 'Stop' || event === 'SubagentStop') && h.async) {
-          failures.push(`${event}: async:true on a gate - an async hook renders no decision and cannot block`);
+  if (doc) {
+    for (const e of validateHooksDoc(doc, 'hooks/hooks.json')) {
+      failures.push(e + '\n     Claude Code rejects the whole file on this, and the plugin then '
+        + 'registers ZERO hooks with no visible error.');
+    }
+
+    const hooks = doc.hooks ?? {};
+    for (const [event, groups] of Object.entries(hooks)) {
+      for (const g of Array.isArray(groups) ? groups : []) {
+        for (const h of g?.hooks ?? []) {
+          // Every referenced script must exist. A missing script means the hook
+          // fails, and a failed hook FAILS OPEN (NATIVE-CAPABILITIES 4.18).
+          for (const part of [h.command, ...(Array.isArray(h.args) ? h.args : [])]) {
+            if (typeof part !== 'string' || !part.includes('${CLAUDE_PLUGIN_ROOT}')) continue;
+            const rel = part.replace('${CLAUDE_PLUGIN_ROOT}/', '');
+            if (!exists(path.join(PLUGIN, rel))) failures.push(event + ': hook script ' + rel + ' does not exist');
+          }
+          if (h.timeout === undefined) {
+            warn.push(event + ': no explicit timeout; the 600s default hides a hung hook for ten minutes');
+          }
+          // A gate that runs async cannot render a decision, so it cannot block.
+          if ((event === 'Stop' || event === 'SubagentStop') && h.async) {
+            failures.push(event + ': async:true on a gate - an async hook renders no decision and cannot block');
+          }
         }
       }
     }
-  }
 
-  // `?.length`, not truthiness: `"Stop": []` is an empty array, which is truthy in
-  // JS, so a declared-but-empty event passed as "core enforcement point present"
-  // while registering zero hooks.
-  for (const required of ['PreToolUse', 'Stop', 'SubagentStop']) {
-    if (!hooks[required]?.length) {
-      failures.push(`hooks.json has no ${required} hooks - a core enforcement point registers nothing`);
+    // `?.length`, not truthiness: `"Stop": []` is an empty array, which is truthy in
+    // JS, so a declared-but-empty event passed as "core enforcement point present"
+    // while registering zero hooks.
+    for (const required of ['PreToolUse', 'Stop', 'SubagentStop']) {
+      if (!hooks[required]?.length) {
+        failures.push('hooks.json has no ' + required + ' hooks - a core enforcement point registers nothing');
+      }
+    }
+  }
+}
+
+/* --- negative control: the hooks validator must actually reject --------
+ * A check that has never failed is not evidence of anything. These feed it the
+ * exact shape v0.1.2 shipped, plus the neighbouring mistakes, and assert the
+ * rejection - so the validator cannot decay into a function returning [].
+ */
+{
+  const nc = [
+    [{ hooks: { Stop: [{ hooks: [{ type: 'command', command: ['node', 'x.mjs'], timeout: 30 }] }] } },
+      /\.command: expected "string", received "array"/, 'the v0.1.2 array-form command'],
+    [{ hooks: { Stop: [{ hooks: [{ type: 'command' }] }] } }, /\.command: required/, 'a command hook with no command'],
+    [{ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'node', arg: [] }] }] } }, /unknown key/, 'a mistyped key name'],
+    [{ hooks: { Stopp: [{ hooks: [] }] } }, /unknown event name/, 'a mistyped event name'],
+    [{ hooks: { Stop: [{ hooks: [{ type: 'shell', command: 'x' }] }] } }, /unknown type/, 'an unknown handler type'],
+    [{ hooks: { Stop: [] } }, /empty array registers nothing/, 'an event declared with no groups'],
+  ];
+  for (const [bad, re, label] of nc) {
+    if (!validateHooksDoc(bad, 'nc').some((e) => re.test(e))) {
+      failures.push('NEGATIVE CONTROL FAILED: ' + label + ' was accepted by validateHooksDoc. '
+        + 'The hooks validator does not work, so every hooks assertion above is meaningless.');
     }
   }
 }
