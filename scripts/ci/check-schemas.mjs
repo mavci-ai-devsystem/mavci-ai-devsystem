@@ -13,7 +13,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const DIR = path.join(ROOT, 'templates', 'schemas');
+const DIR = path.join(ROOT, 'plugins/mavci-core/templates', 'schemas');
 const { unsupportedKeywords, validate } = await import(
   pathToFileURL(path.join(ROOT, 'plugins/mavci-core/scripts/lib/schema.mjs')).href);
 

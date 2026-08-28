@@ -52,7 +52,7 @@ const noCommittedSecrets = {
       const base = path.basename(rel);
       if (base === '.env' || base.startsWith('.env.')) continue;      // ignored above
       if (base === 'package-lock.json' || base === 'pnpm-lock.yaml') continue;
-      if (under(rel, 'templates/fixtures')) continue;                  // fixtures carry fake keys on purpose
+      if (under(rel, 'plugins/mavci-core/templates/fixtures')) continue; // fixtures carry fake keys on purpose
       const text = ctx.readOrNull(rel);
       if (text === null) continue;
       // scanRepoText omits the entropy class: lockfile digests and data URIs

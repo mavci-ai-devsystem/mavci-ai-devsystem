@@ -20,7 +20,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SCRIPTS = path.join(ROOT, 'plugins', 'mavci-core', 'scripts');
-const SCAFFOLD = path.join(ROOT, 'templates', 'scaffold');
+const SCAFFOLD = path.join(ROOT, 'plugins/mavci-core/templates', 'scaffold');
 
 const state = await import(pathToFileURL(path.join(SCRIPTS, 'state.mjs')).href);
 const render = await import(pathToFileURL(path.join(SCRIPTS, 'render.mjs')).href);

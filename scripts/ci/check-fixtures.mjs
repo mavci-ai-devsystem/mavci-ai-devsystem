@@ -17,7 +17,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const FX = path.join(ROOT, 'templates', 'fixtures');
+const FX = path.join(ROOT, 'plugins/mavci-core/templates', 'fixtures');
 const SCRIPTS = path.join(ROOT, 'plugins', 'mavci-core', 'scripts');
 
 // pathToFileURL is required: a dynamic import() of a Windows absolute path

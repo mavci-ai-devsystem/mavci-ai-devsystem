@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const FX = path.join(ROOT, 'templates', 'fixtures');
+const FX = path.join(ROOT, 'plugins/mavci-core/templates', 'fixtures');
 
 const KVKK_GOOD = `export default function Kvkk() {
   return (

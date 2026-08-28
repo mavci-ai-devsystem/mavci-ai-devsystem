@@ -12,7 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const OUT = path.join(ROOT, 'templates', 'scaffold');
+const OUT = path.join(ROOT, 'plugins/mavci-core/templates', 'scaffold');
 
 const legalPage = (title, body) => `export const metadata = { title: '${title}' }
 

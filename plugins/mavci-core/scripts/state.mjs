@@ -33,7 +33,7 @@ import { buildRedactor } from './redact.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(HERE, '..');
-const SCHEMA_DIR = path.resolve(PLUGIN_ROOT, '../../templates/schemas');
+const SCHEMA_DIR = path.join(PLUGIN_ROOT, 'templates', 'schemas');
 
 /* ------------------------------------------------------------- plumbing */
 

@@ -31,7 +31,7 @@ const RULES = path.join(SCRIPTS, 'rules', 'index.mjs');
 const state = await import(pathToFileURL(path.join(SCRIPTS, 'state.mjs')).href);
 const { PATHS } = await import(pathToFileURL(path.join(SCRIPTS, 'config.mjs')).href);
 
-const MANIFEST = JSON.parse(fs.readFileSync(path.join(ROOT, 'templates/fixtures/selftest-project.json'), 'utf8'));
+const MANIFEST = JSON.parse(fs.readFileSync(path.join(ROOT, 'plugins/mavci-core/templates/fixtures/selftest-project.json'), 'utf8'));
 const failures = [];
 const ok = (m) => console.log(`  ok   ${m}`);
 const bad = (m) => { failures.push(m); console.log(`  FAIL ${m}`); };
@@ -66,7 +66,7 @@ function makeProject() {
   const kv = path.join(tmp, 'app', '(legal)', 'kvkk');
   fs.mkdirSync(kv, { recursive: true });
   fs.copyFileSync(
-    path.join(ROOT, 'templates/fixtures/legal.kvkk_structure/good/app/(legal)/kvkk/page.tsx'),
+    path.join(ROOT, 'plugins/mavci-core/templates/fixtures/legal.kvkk_structure/good/app/(legal)/kvkk/page.tsx'),
     path.join(kv, 'page.tsx'));
   fs.writeFileSync(path.join(tmp, '.gitignore'), 'node_modules\n.env*\n');
   state.init(tmp, MANIFEST);

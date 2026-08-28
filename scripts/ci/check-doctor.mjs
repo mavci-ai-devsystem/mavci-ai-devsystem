@@ -34,7 +34,7 @@ const state = await import(pathToFileURL(path.join(SCRIPTS, 'state.mjs')).href);
 const { PATHS, MARKETPLACE_NAME, PLUGIN_ID, SYSTEM_REPO } =
   await import(pathToFileURL(path.join(SCRIPTS, 'config.mjs')).href);
 
-const MANIFEST = JSON.parse(fs.readFileSync(path.join(ROOT, 'templates/fixtures/selftest-project.json'), 'utf8'));
+const MANIFEST = JSON.parse(fs.readFileSync(path.join(ROOT, 'plugins/mavci-core/templates/fixtures/selftest-project.json'), 'utf8'));
 const PLUGIN_VERSION = JSON.parse(
   fs.readFileSync(path.join(ROOT, 'plugins/mavci-core/.claude-plugin/plugin.json'), 'utf8')).version;
 
@@ -286,7 +286,7 @@ try {
   // The template every project is written from must be the form doctor accepts.
   // These two drifted apart in 0.1.3 and nothing noticed for two releases.
   {
-    const tmplSrc = JSON.parse(fs.readFileSync(path.join(ROOT, 'templates/project.settings.json'), 'utf8'))
+    const tmplSrc = JSON.parse(fs.readFileSync(path.join(ROOT, 'plugins/mavci-core/templates/project.settings.json'), 'utf8'))
       .extraKnownMarketplaces?.[MARKETPLACE_NAME]?.source;
     const tmp = makeProject(); cleanup.push(tmp);
     writeSettings(tmp, { ...tmplSrc, url: String(tmplSrc?.url ?? '').replace('__SYSTEM_REPO__', SYSTEM_REPO) });

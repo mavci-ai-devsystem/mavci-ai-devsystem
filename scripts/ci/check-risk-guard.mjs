@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const GUARD = path.join(ROOT, 'plugins/mavci-core/scripts/risk-guard.mjs');
-const FIXTURE = path.join(ROOT, 'templates/fixtures/selftest-project.json');
+const FIXTURE = path.join(ROOT, 'plugins/mavci-core/templates/fixtures/selftest-project.json');
 
 const bash = (command) => ({ tool_name: 'Bash', tool_input: { command } });
 const edit = (file_path) => ({ tool_name: 'Edit', tool_input: { file_path } });

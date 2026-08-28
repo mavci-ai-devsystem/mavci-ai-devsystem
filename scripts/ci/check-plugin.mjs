@@ -366,7 +366,7 @@ if (!exists(path.join(agentsDir, 'agent-scopes.json'))) {
  * the reason that cannot recur silently. NATIVE-CAPABILITIES 6.4.
  */
 {
-  const tmplPath = path.join(ROOT, 'templates', 'project.settings.json');
+  const tmplPath = path.join(ROOT, 'plugins/mavci-core/templates', 'project.settings.json');
   if (!exists(tmplPath)) {
     failures.push('templates/project.settings.json missing - no project would get a marketplace registration');
   } else {

@@ -26,8 +26,13 @@ import { SYSTEM_REPO } from './config.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(HERE, '..');
-const REPO_ROOT = path.resolve(PLUGIN_ROOT, '../..');
-const TEMPLATES = path.join(REPO_ROOT, 'templates');
+// Templates are owned by the plugin and resolved from PLUGIN_ROOT, never from the
+// repo above it. Until 0.1.6 this was <plugin>/../../templates, which is correct in
+// a repo checkout and absent in an installed plugin - Claude Code caches only the
+// plugins/mavci-core/ subtree. new-project therefore exited 2 on every real install
+// while passing in CI, and the documented workaround (run from the marketplace
+// checkout) is what rendered gate4 from a stale 0.1.4 template.
+const TEMPLATES = path.join(PLUGIN_ROOT, 'templates');
 
 /** Any `__TOKEN__`. A survivor in generated output is always a bug. */
 export const PLACEHOLDER_RE = /__[A-Z0-9_]+__/g;

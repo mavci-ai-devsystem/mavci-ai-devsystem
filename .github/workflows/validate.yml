@@ -54,6 +54,13 @@ jobs:
       - name: No template placeholder survives a render
         run: node scripts/ci/check-placeholders.mjs
 
+      # Everything above runs from the repo, where <plugin>/../../templates
+      # happens to resolve. An INSTALLED plugin is only the plugins/mavci-core
+      # subtree, so 0.1.3-0.1.5 exited 2 on every real install while CI stayed
+      # green. This renders from an isolated copy of that subtree alone.
+      - name: Plugin is self-contained when installed
+        run: node scripts/ci/check-packaging.mjs
+
   # Claude Code's own validator is the AUTHORITY on plugin and hook schema.
   #
   # v0.1.2 shipped `"command": ["node", "..."]` in hooks.json. Claude Code's

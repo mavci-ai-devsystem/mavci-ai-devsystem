@@ -36,7 +36,7 @@ import {
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(HERE, '..');
 const REPO_ROOT = path.resolve(PLUGIN_ROOT, '../..');
-const TEMPLATE_SETTINGS = path.join(REPO_ROOT, 'templates', 'project.settings.json');
+const TEMPLATE_SETTINGS = path.join(PLUGIN_ROOT, 'templates', 'project.settings.json');
 
 /** Template placeholders look like __SYSTEM_REPO__. Any survivor means an
  *  unfinished connect: the file was copied but never filled in. */
@@ -628,7 +628,7 @@ function selftestHooks(out, registration) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-selftest-'));
   try {
     fs.mkdirSync(path.join(tmp, '.mavci'), { recursive: true });
-    fs.copyFileSync(path.join(REPO_ROOT, 'templates', 'fixtures', 'selftest-project.json'),
+    fs.copyFileSync(path.join(PLUGIN_ROOT, 'templates', 'fixtures', 'selftest-project.json'),
       path.join(tmp, '.mavci', 'project.json'));
 
     const failures = [];
