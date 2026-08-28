@@ -206,6 +206,84 @@ try {
   }
 }
 
+/* --- a command can arm the gate for a turn it writes nothing in -------- */
+{
+  // /mavci-core:verify runs the checker but writes no files and is not in the
+  // build phase, so case 3's fast path would skip its Stop turn entirely - which
+  // left the skill's own inline probe as the only recorder, and an inline probe
+  // has three documented ways of not running (NATIVE-CAPABILITIES 2.11). The
+  // command therefore marks its own turn through the dirty path that already
+  // exists, rather than through an exemption, which would be a second way for
+  // the gate to skip.
+  const tmp = makeProject(); cleanup.push(tmp);
+  const sid = 'sess-armed';
+
+  const armed = runGate(tmp, {}, { args: ['--mark-dirty', `--session=${sid}`] });
+  if (/gate armed/.test(armed.stdout) && armed.status === 0) {
+    ok('--mark-dirty --session announces itself (silence would be indistinguishable from not running)');
+  } else {
+    bad(`--mark-dirty --session: expected "gate armed", got status=${armed.status} stdout=${JSON.stringify(armed.stdout)}`);
+  }
+
+  // The armed turn must NOT take the fast path, even though it wrote nothing.
+  runGate(tmp, { hook_event_name: 'Stop', prompt_id: 'v1', session_id: sid });
+  if (fs.existsSync(path.join(tmp, PATHS.gateRun))) {
+    ok('an armed session runs the checker on a turn that wrote no files');
+  } else {
+    bad('armed session still took the fast path - the verify turn would go unrecorded');
+  }
+
+  // And it is consumed: the NEXT turn in the same session is cheap again, so
+  // arming costs one gate run rather than making the whole session dirty.
+  fs.rmSync(path.join(tmp, PATHS.gateRun), { force: true });
+  const after = runGate(tmp, { hook_event_name: 'Stop', prompt_id: 'v2', session_id: sid });
+  if (!fs.existsSync(path.join(tmp, PATHS.gateRun)) && decision(after.stdout).kind === 'silent') {
+    ok('the session marker is consumed once - a later turn is a no-op again');
+  } else {
+    bad('session marker was not consumed: every later turn in this session would run the checker');
+  }
+}
+
+/* --- abandoned turn markers are swept, live ones are not --------------- */
+{
+  // A marker is consumed by the next Stop, so a surviving one means the session
+  // was interrupted between marking and Stop. It fails safe - one extra checker
+  // run - but it never expired on its own, so an interrupted session left litter
+  // in the OS temp directory permanently. Both directions are asserted: a sweep
+  // that deleted live markers would be far worse than the litter it replaces.
+  const tmpdir = os.tmpdir();
+  const stale = path.join(tmpdir, 'mavci-dirty-session-ci_sweep_stale');
+  const fresh = path.join(tmpdir, 'mavci-dirty-session-ci_sweep_fresh');
+  const oldTurn = path.join(tmpdir, 'mavci-dirty-ci_sweep_old-p1');
+  try {
+    fs.writeFileSync(stale, '1');
+    fs.writeFileSync(oldTurn, '1');
+    fs.writeFileSync(fresh, '1');
+    // Backdate two of them past the 24h TTL.
+    const old = new Date(Date.now() - 36 * 60 * 60 * 1000);
+    fs.utimesSync(stale, old, old);
+    fs.utimesSync(oldTurn, old, old);
+
+    const r = execFileSync(process.execPath, [GATE, '--sweep-markers'],
+      { encoding: 'utf8', timeout: 30_000 });
+
+    const goneStale = !fs.existsSync(stale);
+    const goneTurn = !fs.existsSync(oldTurn);
+    const keptFresh = fs.existsSync(fresh);
+
+    if (goneStale && goneTurn) ok('stale markers of both kinds are swept');
+    else bad(`sweep left litter: session=${goneStale ? 'gone' : 'PRESENT'} turn=${goneTurn ? 'gone' : 'PRESENT'}`);
+
+    if (keptFresh) ok('a live marker is NOT swept (a sweep that ate live markers would disable the gate)');
+    else bad('sweep deleted a fresh marker - the turn that armed it would go unchecked');
+
+    if (/swept \d+ stale turn marker/.test(r)) ok('--sweep-markers reports what it did');
+    else bad(`--sweep-markers said: ${JSON.stringify(r)}`);
+  } finally {
+    for (const f of [stale, fresh, oldTurn]) { try { fs.rmSync(f, { force: true }); } catch { /* best effort */ } }
+  }
+}
+
 } finally {
   for (const d of cleanup) fs.rmSync(d, { recursive: true, force: true });
 }

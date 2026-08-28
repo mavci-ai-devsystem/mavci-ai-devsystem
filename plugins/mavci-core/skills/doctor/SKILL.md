@@ -8,7 +8,24 @@ allowed-tools: Read, Bash(node *), Bash(git *)
 
 # Mavci doctor
 
-!`node "$CLAUDE_PLUGIN_ROOT/scripts/doctor.mjs" $ARGUMENTS`
+!`node "${CLAUDE_PLUGIN_ROOT}/scripts/doctor.mjs" $ARGUMENTS`
+
+## If the block above did not run
+
+It is produced by inline shell substitution, which Claude Code does not execute
+at all under the `disableSkillShellExecution` policy, in a Cowork session, or on
+a read-only skill load on a coordinator — it substitutes a plain string — and
+which leaves an error in place of the output when the command itself fails
+(NATIVE-CAPABILITIES 2.11). Treat it as **absent** if it holds
+`[shell command execution disabled by policy]`, `[shell command not executed:`,
+`Shell command failed for pattern`, `Shell substitution failed for pattern`,
+`Shell command permission check failed for pattern`, or a node error where the
+output should be.
+
+Absent is not a pass. Say in your first line that doctor did not run, and do
+NOT report the project as healthy — in particular you have no hook self-test
+result, so you cannot say enforcement is working. Re-run it yourself with Bash
+before interpreting anything.
 
 ## How to read this
 

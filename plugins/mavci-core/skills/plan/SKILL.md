@@ -10,21 +10,37 @@ allowed-tools: Read, Bash(node *)
 
 Request: `$ARGUMENTS`
 
-State: !`node "$CLAUDE_PLUGIN_ROOT/scripts/state.mjs" --show 2>&1`
+State: !`node "${CLAUDE_PLUGIN_ROOT}/scripts/state.mjs" --show 2>&1`
+
+## If the block above did not run
+
+It is produced by inline shell substitution, which Claude Code does not execute
+at all under the `disableSkillShellExecution` policy, in a Cowork session, or on
+a read-only skill load on a coordinator — it substitutes a plain string — and
+which leaves an error in place of the output when the command itself fails
+(NATIVE-CAPABILITIES 2.11). Treat it as **absent** if it holds
+`[shell command execution disabled by policy]`, `[shell command not executed:`,
+`Shell command failed for pattern`, `Shell substitution failed for pattern`,
+`Shell command permission check failed for pattern`, or a node error where the
+output should be.
+
+Absent is not a pass. Say in your first line that the state probe did not run,
+and read `.mavci/control/state.json` yourself before step 1. Do not assume the
+project is connected, and do not assume a phase.
 
 ## Steps
 
 1. If the project is not connected, stop and point at `/mavci-core:connect`.
 2. Set the phase, so application code is frozen while planning:
-   `node "$CLAUDE_PLUGIN_ROOT/scripts/state.mjs" --set-phase plan`
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/state.mjs" --set-phase plan`
 3. Allocate the task:
-   `node "$CLAUDE_PLUGIN_ROOT/scripts/state.mjs" --new-task "<short title>"`
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/state.mjs" --new-task "<short title>"`
 4. Delegate to `@agent-mavci-architect` with: the task id, the request verbatim,
    and the manifest path. It writes the spec to `.mavci/tasks/<id>-<slug>.md`.
 5. When it returns, show the operator the acceptance criteria and **ask whether
    they are right before building**. A wrong spec is the most expensive thing in
    this system to discover late.
-6. On approval: `node "$CLAUDE_PLUGIN_ROOT/scripts/state.mjs" --set-phase build`
+6. On approval: `node "${CLAUDE_PLUGIN_ROOT}/scripts/state.mjs" --set-phase build`
    and tell them to run `/mavci-core:build <id>`.
 
 If the architect escalates, relay the question rather than deciding for them.

@@ -18,6 +18,8 @@
  * MODES
  *   (stdin hook JSON)        Stop / SubagentStop gate
  *   --mark-dirty             PostToolUse: record that this turn touched files
+ *   --mark-dirty --session=X a command marking its own turn (no hook payload)
+ *   --sweep-markers          delete abandoned turn markers and report the count
  *   --ci                     full scan for GitHub Actions, exit 2 on blockers
  */
 
@@ -63,6 +65,70 @@ function readStdin() {
 function markerPath(sessionId, promptId) {
   const safe = `${sessionId ?? 'nosession'}-${promptId ?? 'noprompt'}`.replace(/[^A-Za-z0-9_-]/g, '_');
   return path.join(os.tmpdir(), `mavci-dirty-${safe}`);
+}
+
+/**
+ * A marker keyed on the SESSION alone, for a command that must be gated on a
+ * turn it does not write files in.
+ *
+ * `/mavci-core:verify` is the case. Its Stop turn is normally clean and outside
+ * the build phase, so the fast path below exits before the checker ever runs -
+ * which left the skill's own inline probe as the only thing recording a verdict,
+ * and an inline probe has three documented ways of not running at all
+ * (NATIVE-CAPABILITIES 2.11). The command therefore marks its own turn, using
+ * the dirty path that already exists and is already tested rather than an
+ * exemption, which would be a second way for the gate to skip.
+ *
+ * Session-scoped because a skill can be given ${CLAUDE_SESSION_ID} but has no
+ * way to learn the prompt id. It is consumed on the next Stop exactly like the
+ * per-turn marker, so it costs one gate run, not a permanently dirty session.
+ */
+function sessionMarkerPath(sessionId) {
+  const safe = `${sessionId ?? 'nosession'}`.replace(/[^A-Za-z0-9_-]/g, '_');
+  return path.join(os.tmpdir(), `mavci-dirty-session-${safe}`);
+}
+
+/**
+ * How long an unconsumed turn marker may live before it is litter.
+ *
+ * Both marker kinds are consumed by the very next Stop, so a surviving one means
+ * the session was interrupted between marking and Stop. A day is far longer than
+ * any real gap between the two and far shorter than "forever", which is what the
+ * markers had before this existed.
+ */
+const MARKER_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Delete abandoned markers from the OS temp directory.
+ *
+ * A stale marker is not dangerous - it fails SAFE, costing one extra checker run
+ * in whatever session next matches it - but it never expires on its own, so an
+ * interrupted session leaves one behind permanently. Only these markers
+ * accumulate: gate-run.json and the continue counter are single files inside
+ * .mavci/control/ that are overwritten in place, so they need no sweep.
+ *
+ * Best effort throughout. A sweep that cannot run must never stop the gate from
+ * running, which is the whole point of this file.
+ *
+ * @returns {number} how many were removed
+ */
+function sweepStaleMarkers(now = Date.now()) {
+  let removed = 0;
+  try {
+    const dir = os.tmpdir();
+    for (const name of fs.readdirSync(dir)) {
+      // Prefix test first: tmpdir can hold thousands of entries and only ours
+      // are worth a stat call.
+      if (!name.startsWith('mavci-dirty-')) continue;
+      const full = path.join(dir, name);
+      try {
+        if (now - fs.statSync(full).mtimeMs <= MARKER_TTL_MS) continue;
+        fs.unlinkSync(full);
+        removed++;
+      } catch { /* raced with another gate, or not ours to delete: leave it */ }
+    }
+  } catch { /* tmpdir unreadable */ }
+  return removed;
 }
 
 /**
@@ -194,7 +260,8 @@ async function gate(input) {
 
   /* ---- fast path (fix 2) ------------------------------------------- */
   const marker = markerPath(sessionId, promptId);
-  const dirty = exists(marker);
+  const sessionMarker = sessionMarkerPath(sessionId);
+  const dirty = exists(marker) || exists(sessionMarker);
   let phase = null;
   try {
     phase = readJsonOrNull(abs(root, PATHS.state))?.phase ?? null;
@@ -205,7 +272,12 @@ async function gate(input) {
   if (!dirty && phase !== 'build') {
     process.exit(0); // ~50ms: a question turn costs nothing
   }
-  if (dirty) { try { fs.unlinkSync(marker); } catch { /* best effort */ } }
+  if (dirty) {
+    // Consume both: a turn that is dirty for either reason must not stay dirty.
+    for (const m of [marker, sessionMarker]) {
+      try { fs.unlinkSync(m); } catch { /* best effort - it may not exist */ }
+    }
+  }
 
   /* ---- run the checker under a real budget -------------------------- */
   // Announce intent BEFORE doing any work. If the hook is cancelled from here
@@ -287,10 +359,36 @@ async function main() {
   const argv = process.argv.slice(2);
   const root = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
+  // Every invocation sweeps. It is a prefix-filtered readdir, it is best effort,
+  // and it runs before the fast path so an abandoned marker cannot outlive the
+  // session that made it by more than a day.
+  const swept = sweepStaleMarkers();
+
+  if (argv.includes('--sweep-markers')) {
+    // Exposed so the sweep is testable at all: an untested sweep is a comment.
+    console.log(`swept ${swept} stale turn marker(s)`);
+    process.exit(0);
+  }
+
   if (argv.includes('--mark-dirty')) {
     // PostToolUse on Edit|Write. Records that this turn touched files, so the
     // Stop gate knows to run. Deliberately in the OS temp dir, not the repo:
     // a per-turn marker must never appear in `git status`.
+    // --session=<id> is the skill-invoked form: no hook payload on stdin, so the
+    // per-turn marker cannot be keyed and a session-scoped one is written instead.
+    const sessionArg = (argv.find((a) => a.startsWith('--session=')) ?? '').split('=').slice(1).join('=');
+    if (sessionArg) {
+      try {
+        fs.writeFileSync(sessionMarkerPath(sessionArg), '1');
+        // Printed, unlike the hook form, because a skill calls this from inline
+        // shell: silence there is indistinguishable from the command not having
+        // run at all, which is the failure mode 2.11 exists to make visible.
+        console.log('gate armed: the standards gate will run at the end of this turn');
+      } catch (err) {
+        console.log(`gate NOT armed: ${err.message}`);
+      }
+      process.exit(0);
+    }
     const { input } = readStdin();
     try { fs.writeFileSync(markerPath(input.session_id, input.prompt_id), '1'); } catch { /* best effort */ }
     process.exit(0);
