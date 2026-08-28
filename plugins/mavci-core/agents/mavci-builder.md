@@ -23,7 +23,7 @@ Work in this order, because it is the order that fails cheapest:
 
 1. Read the spec and the most recent verdict for this task. If this is a retry, the verdict's failures[] already tells you the file and line. Start there.
 2. Make the smallest change that satisfies the criteria. A large diff is harder to verify and harder to revert.
-3. Run the checker yourself before ending your turn - do not wait for the gate to tell you. `node "$CLAUDE_PLUGIN_ROOT/scripts/verify.mjs" --format=human`
+3. Run the checker yourself before ending your turn - do not wait for the gate to tell you. `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs" --format=human`
 4. Run the type check and build if you changed anything that could break them.
 
 On this stack, the four things that cost the most time are all mechanical, so get them right the first time: create Supabase clients inside functions and never at module scope; export `const dynamic = 'force-dynamic'` from every API route; never set `output: 'export'` in next.config; never build a RegExp from a template literal.

@@ -22,7 +22,7 @@ You decide whether a task is actually done. You cannot edit anything - the Edit,
 
 Run, in order:
 
-1. `node "$CLAUDE_PLUGIN_ROOT/scripts/verify.mjs" --format=human --record`
+1. `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs" --format=human --record`
 2. The type check: `npx tsc --noEmit`
 3. The build, if the change could affect it: `npm run build`
 4. Tests, if the project has them.

@@ -32,7 +32,7 @@ Arguments given: `$ARGUMENTS`
 4. Grant it:
 
 ```
-node "$CLAUDE_PLUGIN_ROOT/scripts/state.mjs" --waive <check_id> --path <path> --reason "<reason>" --days 90
+node "${CLAUDE_PLUGIN_ROOT}/scripts/state.mjs" --waive <check_id> --path <path> --reason "<reason>" --days 90
 ```
 
 The command refuses: a reason under 20 characters, a missing path, more than 180

@@ -38,7 +38,7 @@ project declares all three standards packs.
 ### 3. Render the scaffold
 
 ```
-node "$CLAUDE_PLUGIN_ROOT/scripts/render.mjs" --scaffold --config
+node "${CLAUDE_PLUGIN_ROOT}/scripts/render.mjs" --scaffold --config
 ```
 
 This copies `templates/scaffold/` and the shared config files into the project
@@ -79,7 +79,7 @@ with `* text=auto eol=lf`.
 ### 5. Control plane
 
 ```
-node "$CLAUDE_PLUGIN_ROOT/scripts/state.mjs" --init
+node "${CLAUDE_PLUGIN_ROOT}/scripts/state.mjs" --init
 ```
 
 Do **not** run `--baseline-init`. A greenfield project starts with an empty
@@ -88,7 +88,7 @@ baseline, so the first violation that ever appears is a real regression.
 ### 6. Prove it is green
 
 ```
-node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" --ci
+node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs" --ci
 ```
 
 **Do not finish unless this exits 0.** If the scaffold cannot pass its own

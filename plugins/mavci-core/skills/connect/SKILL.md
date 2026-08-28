@@ -58,7 +58,7 @@ difference between a blocked call and a dropped table.
 2. Render the shared config files:
 
    ```
-   node "$CLAUDE_PLUGIN_ROOT/scripts/render.mjs" --config
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/render.mjs" --config
    ```
 
    That writes `.claude/settings.json`, `.claude/CLAUDE.md` and
@@ -80,13 +80,13 @@ difference between a blocked call and a dropped table.
 ### 4. Initialise the control plane
 
 ```
-node "$CLAUDE_PLUGIN_ROOT/scripts/state.mjs" --init
+node "${CLAUDE_PLUGIN_ROOT}/scripts/state.mjs" --init
 ```
 
 ### 5. Record the baseline — the step that makes this usable
 
 ```
-node "$CLAUDE_PLUGIN_ROOT/scripts/state.mjs" --baseline-init
+node "${CLAUDE_PLUGIN_ROOT}/scripts/state.mjs" --baseline-init
 ```
 
 Every violation that exists right now is recorded as pre-existing and stops
@@ -102,7 +102,7 @@ acceptable technical debt, and baselining one would be pretending otherwise.
 ### 6. Confirm the repo is actually usable
 
 ```
-node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" --ci
+node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs" --ci
 ```
 
 This must exit 0. If it does not, the baseline did not cover something — report
@@ -113,7 +113,7 @@ what, and do not proceed.
 Group the baseline entries by `check_id`. For each group, create a task:
 
 ```
-node "$CLAUDE_PLUGIN_ROOT/scripts/state.mjs" --new-task "Fix <check_id> (<n> occurrences)"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/state.mjs" --new-task "Fix <check_id> (<n> occurrences)"
 ```
 
 Then write each task's spec to `.mavci/tasks/<id>-<slug>.md` with the affected
