@@ -26,6 +26,44 @@ import { buildRedactor } from './redact.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(HERE, '..');
 
+/* --------------------------------------------- control-plane targeting */
+
+const CONTROL_PATH_RE = /\.mavci[/\\]control/;
+
+/** Reads. Anchored per SEGMENT, so a read chained after anything still counts. */
+const READ_CMD_RE = /^(sudo\s+)?(cat|head|tail|less|more|type|grep|rg|jq|ls|dir|stat|wc|file|find|cmp|diff|md5sum|sha256sum|git\s+(diff|status|log|show))\b/;
+
+/** The plugin's own entry points, which own the control plane. */
+const PLUGIN_SCRIPT_RE = /scripts[/\\](state|gate|verify|doctor)\.mjs/;
+
+/**
+ * Remove the two text classes that are DATA rather than a command target.
+ *
+ * A heredoc body is content being fed to a program, and a quoted message operand
+ * is a string being recorded. Neither can act on a path. Everything else is left
+ * intact - in particular an ordinary quoted path stays matchable, so
+ * `rm -rf ".mavci/control"` is still caught.
+ *
+ * This runs on the WHOLE command line, before it is split into subcommands: a
+ * heredoc body spans the newlines that subcommands() splits on, so stripping it
+ * afterwards is too late - the body has already become its own "command".
+ *
+ * If a heredoc has no terminator the pattern does not match and the body stays
+ * in the string, so an unparseable command fails CLOSED.
+ */
+function stripDataOperands(cmd) {
+  return cmd
+    .replace(/<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1[\s\S]*?^[\t ]*\2[\t ]*$/gm, '<<DATA')
+    .replace(/(^|\s)(-m|--message)(\s+)(['"])[\s\S]*?\4/g, '$1$2$3DATA');
+}
+
+/** Does this ONE subcommand act on the control plane, other than by reading it? */
+function targetsControlPlane(cmd) {
+  return CONTROL_PATH_RE.test(cmd)
+    && !PLUGIN_SCRIPT_RE.test(cmd)
+    && !READ_CMD_RE.test(cmd);
+}
+
 /* ------------------------------------------------------------ decisions */
 
 /**
@@ -331,7 +369,9 @@ function main() {
   const raw = String(ti.command ?? '');
   if (!raw) allow();
 
-  for (const sub of subcommands(raw)) {
+  // Data operands are stripped from the WHOLE line first: a heredoc body spans
+  // the newlines subcommands() splits on, so it must go before the split, not after.
+  for (const sub of subcommands(stripDataOperands(raw))) {
     const cmd = unwrap(sub);
 
     /* --- state.mjs is the PRIVILEGED CHANNEL, so gate it by caller -----
@@ -385,27 +425,33 @@ function main() {
       }
     }
 
-    /* --- control-plane writes through a subprocess (B1 mitigation 2) --- */
-    if (/\.mavci[/\\]control/.test(cmd)) {
-      const viaPlugin = cmd.includes('scripts/state.mjs') || cmd.includes('scripts\\state.mjs')
-        || cmd.includes('scripts/gate.mjs') || cmd.includes('scripts/verify.mjs')
-        || cmd.includes('scripts/doctor.mjs');
-      const readOnly = /^(cat|head|tail|less|type|grep|rg|jq|ls|dir|stat|wc|git\s+diff|git\s+status|git\s+log)\b/.test(cmd);
-      if (!viaPlugin && !readOnly) {
-        // Says "not recognised as", not "writes to". The readOnly test is anchored
-        // at ^, so a chained or wrapped read - `echo x; cat state.json`, or a
-        // `node -e` that only reads - lands here too. Denying those is correct:
-        // this guard cannot see inside a subprocess, and fail-closed is the point.
-        // Reporting a read as a write is not correct, because it sends the operator
-        // hunting for a write that never happened.
-        deny('this command touches .mavci/control/ and is not recognised as either a plugin '
-          + 'script or a plain read, so it is treated as a write. The control plane holds the '
-          + 'phase, retry ceiling, baseline and waivers; writing it directly bypasses validation, '
-          + 'redaction and the integrity seal. The seal will detect it anyway. Use state.mjs. '
-          + 'If this WAS a read, run it as a single unchained command (cat, head, grep, jq ...): '
-          + 'a read wrapped in `node -e` or chained after another command cannot be told apart '
-          + 'from a write from here.');
-      }
+    /* --- control-plane writes through a subprocess (B1 mitigation 2) ---
+     *
+     * Matched on INTENT, per command, not on the raw string.
+     *
+     * The string test denied any command containing the path anywhere - which
+     * includes a `git commit` whose MESSAGE describes the control plane. That
+     * blocked a commit documenting this very guard. A guard people cannot commit
+     * around is a guard people route around, and routing around is strictly worse
+     * than a guard that is slightly loose: the loose guard still fires on the next
+     * command, the routed-around one is switched off for good.
+     *
+     * Two narrow classes of text are DATA and never a target: heredoc bodies, and
+     * the operand of a message flag. Both are stripped before matching. Everything
+     * else is matched exactly as before, per segment, so `rm -rf` on the control
+     * directory is denied whether or not something is chained in front of it.
+     *
+     * Segmenting also fixes the old anchoring bug in the other direction: a read
+     * chained after another command (`echo x; cat state.json`) is now recognised
+     * as the read it is, instead of being reported as a write.
+     */
+    if (targetsControlPlane(cmd)) {
+      deny(`this command targets .mavci/control/ outside state.mjs (\`${cmd}\`). `
+        + 'The control plane holds the phase, retry ceiling, baseline and waivers; writing it '
+        + 'directly bypasses validation, redaction and the integrity seal. The seal will detect '
+        + 'it anyway. Use state.mjs. A read is allowed - run it as its own command '
+        + '(cat, head, grep, jq ...); a read wrapped in `node -e` cannot be told apart from a '
+        + 'write from here, so it is refused.');
     }
 
     /* --- reading secrets through a subprocess (5.8 mitigation) --------- */

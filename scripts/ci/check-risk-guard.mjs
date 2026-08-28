@@ -53,6 +53,23 @@ const CASES = [
   ['deny', edit('.mavci/control/tasks/0001.json'), 'control-plane edit'],
   ['deny', bash("node -e \"require('fs').writeFileSync('.mavci/control/state.json','{}')\""), 'control-plane write via subprocess'],
 
+  // Control plane matched on INTENT, per segment, not on the raw string.
+  // The deny must survive chaining, quoting and redirection ...
+  ['deny', bash('rm -rf .mavci/control'), 'control-plane recursive delete'],
+  ['deny', bash('echo hi; rm -rf .mavci/control'), 'control-plane delete chained behind a read'],
+  ['deny', bash('rm -rf ".mavci/control"'), 'quoted path is still a target'],
+  ['deny', bash('echo x > .mavci/control/state.json'), 'redirect write'],
+  ['deny', bash('sed -i s/a/b/ .mavci/control/state.json'), 'in-place edit'],
+  ['deny', bash('cat .mavci/control/state.json; rm -rf .mavci/control'), 'a write hidden after a real read'],
+  // ... and must NOT fire on text that only DESCRIBES the control plane.
+  // A commit message mentioning it was denied as a write, which blocked the
+  // commit documenting this guard. People route around a guard like that, and a
+  // routed-around guard is off for good - strictly worse than one slightly loose.
+  ['allow', bash('git commit -m "fix the .mavci/control seal"'), 'commit message naming the path'],
+  ['allow', bash('git commit -F - <<EOF\nrisk-guard: .mavci/control/ wording\nEOF'), 'heredoc body naming the path'],
+  ['allow', bash('echo ===; cat .mavci/control/integrity.json'), 'a read chained after another command'],
+  ['allow', bash('grep -rn phase .mavci/control/'), 'grepping the control plane'],
+
   // MCP
   ['deny', { tool_name: 'mcp__claude_ai_Supabase__execute_sql', tool_input: { project_id: 'selftestprod', query: 'select 1' } }, 'protected env'],
   ['deny', { tool_name: 'mcp__claude_ai_Supabase__execute_sql', tool_input: { project_id: 'other', query: 'DROP TABLE x' } }, 'destructive SQL anywhere'],
