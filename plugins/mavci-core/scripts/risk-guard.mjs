@@ -392,9 +392,19 @@ function main() {
         || cmd.includes('scripts/doctor.mjs');
       const readOnly = /^(cat|head|tail|less|type|grep|rg|jq|ls|dir|stat|wc|git\s+diff|git\s+status|git\s+log)\b/.test(cmd);
       if (!viaPlugin && !readOnly) {
-        deny('this command writes to .mavci/control/ outside state.mjs. The control plane holds the '
+        // Says "not recognised as", not "writes to". The readOnly test is anchored
+        // at ^, so a chained or wrapped read - `echo x; cat state.json`, or a
+        // `node -e` that only reads - lands here too. Denying those is correct:
+        // this guard cannot see inside a subprocess, and fail-closed is the point.
+        // Reporting a read as a write is not correct, because it sends the operator
+        // hunting for a write that never happened.
+        deny('this command touches .mavci/control/ and is not recognised as either a plugin '
+          + 'script or a plain read, so it is treated as a write. The control plane holds the '
           + 'phase, retry ceiling, baseline and waivers; writing it directly bypasses validation, '
-          + 'redaction and the integrity seal. The seal will detect it anyway. Use state.mjs.');
+          + 'redaction and the integrity seal. The seal will detect it anyway. Use state.mjs. '
+          + 'If this WAS a read, run it as a single unchained command (cat, head, grep, jq ...): '
+          + 'a read wrapped in `node -e` or chained after another command cannot be told apart '
+          + 'from a write from here.');
       }
     }
 
