@@ -60,7 +60,7 @@ the risk policy, or the checker.
 
    **Node 22 is the API floor, and CI is the authority — not your local Node.**
    Every workflow pins `node-version: '22'`, `config.mjs` sets
-   `MIN_NODE_MAJOR = 22`, and `templates/mavci-verify.yml` runs the cloned
+   `MIN_NODE_MAJOR = 22`, and `plugins/mavci-core/templates/mavci-verify.yml` runs the cloned
    checker on 22 inside every downstream project. A development machine on a
    newer Node runs a 23+ or 24+ API happily and gives no local signal, and the
    failure then surfaces in a *project's* CI, not this repo's. Before using
@@ -81,7 +81,7 @@ the risk policy, or the checker.
    `grep -r`. Enforced by `check-plugin.mjs`.
 4. **A new standard requires a new check.** A class-A change (missing standard)
    without a class-B check (nothing verifies it) is rejected — that is how the
-   system decays back into prose. Every check needs `templates/fixtures/
+   system decays back into prose. Every check needs `plugins/mavci-core/templates/fixtures/
    <check_id>/{bad,good}/`, asserted in CI.
 5. **A failed probe is never reported as a pass.** In `doctor.mjs` and anywhere
    else, "could not check" is WARN or FAIL, never OK. An unchecked control is
@@ -135,7 +135,7 @@ whole class of fault. Before any release, `claude plugin validate --strict` is
 the authority — not our reading of the docs, and not a local run.
 
 0.1.4 completes it: `control/hook-run.json` now carries `schema_version` and
-`project_id`, has a schema under `templates/schemas/`, and is covered by
+`project_id`, has a schema under `plugins/mavci-core/templates/schemas/`, and is covered by
 `state.schema_valid`. `check-schemas.mjs` asserts its closed enum agrees with
 `config.mjs`, so the duplicated enum cannot drift.
 
@@ -164,7 +164,7 @@ a value that was written down once, wrongly, and then copied everywhere.
    one.** Of the four documented forms only `{"source":"git","url":"https://….git"}`
    resolves. `github` clones over SSH (6.18, known since 0.1.3); `url` fetches a
    remote `marketplace.json` over HTTP and 404s on a `.git` address — and `url`
-   is what 0.1.3 and 0.1.4 shipped in `templates/project.settings.json` *and*
+   is what 0.1.3 and 0.1.4 shipped in `plugins/mavci-core/templates/project.settings.json` *and*
    what `doctor` failed every other form into. A checker that drives every
    project into the broken configuration is worse than no checker. `doctor` now
    fails `github`, `url`, an unsubstituted placeholder, and a `git` form pointing

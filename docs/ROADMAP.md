@@ -39,13 +39,13 @@ Scope grew in revision 2 (baseline, waivers, redaction, control plane, fail-clos
 
 **Wiring**
 16. `hooks/hooks.json` — exactly as in ARCHITECTURE 6.4: PreToolUse guard (20 s), PostToolUse advisory (async) and redaction sweep (sync), Stop and SubagentStop gates (30 s), SessionStart preflight.
-17. `templates/schemas/` — `project`, `state`, `control-task`, `task`, `verdict`, `baseline`, `waivers`, `integrity`, `agent-report`.
-18. `templates/project.settings.json` — the full risk policy including the control-plane deny rule.
-19. `templates/project.CLAUDE.md`, `templates/scaffold/`, `templates/mavci-verify.yml`.
-20. `templates/fixtures/<check_id>/{bad,good}/` for all 12 rules.
+17. `plugins/mavci-core/templates/schemas/` — `project`, `state`, `control-task`, `task`, `verdict`, `baseline`, `waivers`, `integrity`, `agent-report`.
+18. `plugins/mavci-core/templates/project.settings.json` — the full risk policy including the control-plane deny rule.
+19. `plugins/mavci-core/templates/project.CLAUDE.md`, `plugins/mavci-core/templates/scaffold/`, `plugins/mavci-core/templates/mavci-verify.yml`.
+20. `plugins/mavci-core/templates/fixtures/<check_id>/{bad,good}/` for all 13 rules.
 21. `.github/workflows/`: `validate.yml` (plugin validate, schema validate, agent-regen diff, fixture assertions), `selftest.yml` (escape-hatch proof, no Claude Code), `release.yml` (fails if `plugin.json` version and git tag disagree).
 
-### Phase 1 rule set — 12 rules
+### Phase 1 rule set — 13 rules
 
 `secrets.no_committed_secrets` (**critical**, unwaivable, unbaselinable) · `next.supabase_client_in_function` · `next.route_force_dynamic` · `next.no_static_export` · `next.regex_no_template_literal` · `next.no_service_role_client` · `next.env_centralised` · `stripe.webhook_signature` · `supabase.rls_enabled` · `legal.pages_present` · `legal.kvkk_structure` · `state.schema_valid`.
 
@@ -69,7 +69,7 @@ Two repositories, because the two paths have different failure modes and **the e
 |---|---|---|
 | A1 | `claude` in the empty repo, accept the trust dialog, `/plugin marketplace add https://github.com/mavci-ai-devsystem/mavci-ai-devsystem.git` (the HTTPS form: `owner/repo` resolves over SSH, 6.18), `/plugin install mavci-core@mavci` | `/context` lists the three agents. `/help` lists `/mavci-core:new-project` and `/mavci-core:waive`. |
 | A2 | `/mavci-core:new-project acceptance-new` — TR+EU, Vercel, tier `standard` | `project.json` validates. `.claude/settings.json` contains every tier-3 deny rule **including `Edit(./.mavci/control/**)`**. The five legal pages exist with real content. `control/baseline.json` exists and is **empty**. |
-| A3 | `node <plugin>/scripts/gate.mjs` | Exit `0`. Verdict written, 12 checks passing. The scaffold is green from commit one. |
+| A3 | `node <plugin>/scripts/gate.mjs` | Exit `0`. Verdict written, 13 checks passing. The scaffold is green from commit one. |
 | A4 | `/mavci-core:plan "add a tenant-scoped projects table with RLS and a list page"` | Task spec in `.mavci/tasks/`, control task in `.mavci/control/tasks/`. `state.phase` is `build`. `git status` shows **zero** changes under `app/` or `supabase/`. |
 | A5 | Instruct the architect to edit `app/page.tsx` | Blocked by `risk-guard.mjs`, reason names the phase gate and `edit_scope`. |
 | A6 | **Ask any agent to edit `.mavci/control/state.json` to set `attempts: 0`** | **Denied by the permission rule, not the hook.** Re-run with hooks disabled — still denied, proving the control plane survives hook loss (B1). |

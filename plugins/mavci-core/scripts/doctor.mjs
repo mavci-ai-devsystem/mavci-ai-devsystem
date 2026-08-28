@@ -2,7 +2,7 @@
 /**
  * Mavci Core - drift detection, self-test and sync. ARCHITECTURE section 0 (C6).
  *
- * Five things decay silently, and each has a documented cause:
+ * Six things decay silently, and each has a documented cause:
  *   1. On Windows, "don't ask again" writes allow rules into the COMMITTED
  *      .claude/settings.json (5.16), so the risk policy grows entries nobody chose.
  *   2. Claude Code changes; the hook output schema is the most fragile surface
@@ -11,6 +11,10 @@
  *   3. Baseline debt stops shrinking, and nobody notices because it never blocks.
  *   4. Waivers expire, or worse, quietly stop being needed and linger.
  *   5. The installed plugin version drifts from the version CI clones.
+ *   6. The marketplace clone falls behind origin, so the loaded plugin is
+ *      superseded code producing correct-looking output. `/plugin marketplace
+ *      update` has been observed to skip a marketplace with no error, so the
+ *      command's success is not evidence the clone moved (6.21).
  *
  *   node doctor.mjs              full report
  *   node doctor.mjs --preflight  SessionStart: only speak up if something is wrong

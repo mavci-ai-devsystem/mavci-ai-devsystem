@@ -137,8 +137,9 @@ plugins/mavci-core/
   skills/          slash commands and the standards knowledge layer
   hooks/           risk guard, standards gate, redaction sweep
   scripts/         the six custom scripts, Node ESM, zero dependencies
+  templates/       schemas, risk policy, scaffold, fixtures, CI workflow
+                   INSIDE the plugin: only this subtree is installed
 agent-defs/        _contract.md + one JSON per agent  <- edit agents HERE
-templates/         schemas, risk policy, scaffold, fixtures, CI workflow
 scripts/ci/        the checks that run in validate.yml and selftest.yml
 docs/
 ```

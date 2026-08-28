@@ -131,15 +131,15 @@ mavci-ai-devsystem/                      # private GitHub repo (mavci-ai-devsyst
 │   │   ├── release/ retro/ research/                      # Phase 2
 │   │   └── standards-*/                                   # knowledge layer
 │   ├── hooks/hooks.json
-│   └── scripts/                         # C1–C6
+│   ├── scripts/                         # C1–C6
+│   └── templates/                       # INSIDE the plugin: the installer copies
+│       ├── project.settings.json        #   only this subtree, so templates must
+│       ├── project.CLAUDE.md            #   live here to survive installation
+│       ├── schemas/*.json
+│       ├── scaffold/                    # the compliant Next.js skeleton
+│       ├── fixtures/<check_id>/{bad,good}/
+│       └── mavci-verify.yml             # the CI workflow written into each project
 ├── agent-defs/                          # SOURCE: _contract.md + one YAML per agent
-├── templates/
-│   ├── project.settings.json            # canonical risk policy
-│   ├── project.CLAUDE.md
-│   ├── schemas/*.json
-│   ├── scaffold/                        # the compliant Next.js skeleton
-│   ├── fixtures/<check_id>/{bad,good}/
-│   └── mavci-verify.yml                 # the CI workflow written into each project
 ├── docs/
 └── .github/workflows/{validate,selftest,release}.yml
 ```
@@ -301,8 +301,8 @@ The single declaration a project makes about itself.
 
 1. Ask only what is not derivable: display name, jurisdictions, deploy target, risk tier, entity details.
 2. Write and validate `.mavci/project.json`.
-3. Copy `templates/scaffold/` — a Next.js skeleton that already passes every check: `app/(legal)/{privacy,terms,kvkk,cookies}/page.tsx` with real TR/EN content, `app/contact/page.tsx`, `lib/env.ts` (the only place `process.env` is read), `lib/supabase/{server,client}.ts` with factory functions, `app/api/stripe/webhook/route.ts` with signature verification and idempotency, `middleware.ts`, `sitemap.ts`, `robots.ts`.
-4. Write `.claude/settings.json` from `templates/project.settings.json`, substituting protected environment refs into the risk rules.
+3. Copy `plugins/mavci-core/templates/scaffold/` — a Next.js skeleton that already passes every check: `app/(legal)/{privacy,terms,kvkk,cookies}/page.tsx` with real TR/EN content, `app/contact/page.tsx`, `lib/env.ts` (the only place `process.env` is read), `lib/supabase/{server,client}.ts` with factory functions, `app/api/stripe/webhook/route.ts` with signature verification and idempotency, `middleware.ts`, `sitemap.ts`, `robots.ts`.
+4. Write `.claude/settings.json` from `plugins/mavci-core/templates/project.settings.json`, substituting protected environment refs into the risk rules.
 5. Write `.claude/CLAUDE.md`, `.github/workflows/mavci-verify.yml`, and `.gitattributes` (LF, UTF-8).
 6. `state.mjs --init` writes the control plane: `state.json` (phase `plan`), an **empty** `baseline.json`, an empty `waivers.json`.
 7. Run `gate.mjs` and refuse to finish unless it exits 0.
@@ -368,7 +368,7 @@ continuously. They are still inside `control/`, so no agent can write or forge
 one.
 
 `integrity.json` and `hook-run.json` carry `schema_version` and `project_id`,
-have schemas under `templates/schemas/`, and are covered by `state.schema_valid`
+have schemas under `plugins/mavci-core/templates/schemas/`, and are covered by `state.schema_valid`
 like every other state file. `gate-run.json` does **not**: it is a within-turn
 sentinel written and read only by `gate.mjs` and `risk-guard.mjs`, and it never
 outlives the turn that wrote it. That is a real gap, not a design principle —
@@ -537,7 +537,7 @@ A ~30-line project `CLAUDE.md` states only always-true facts and points at the m
 
 `verify.mjs` reads `project.json`, selects rules by declared packs, walks the repo, and emits a verdict.
 
-**Phase 1 rule set — 12 rules.** Changed from revision 1 per fix 3: the four stack-specific rules are added, `supabase.rls_policy_per_table` moves to Phase 2 (it needs real SQL parsing, not regex), and `secrets.no_committed_secrets` is added at critical severity.
+**Phase 1 rule set — 13 rules.** Changed from revision 1 per fix 3: the four stack-specific rules are added, `supabase.rls_policy_per_table` moves to Phase 2 (it needs real SQL parsing, not regex), and `secrets.no_committed_secrets` is added at critical severity.
 
 | check_id | Severity | What it fails on | Technique |
 |---|---|---|---|
@@ -790,7 +790,7 @@ differently:
 
 ### 6.8 Layer 3 — Scaffolding
 
-`/mavci-core:new-project` writes a skeleton that already satisfies every check, so new projects begin green and the first red is always a real regression. `templates/scaffold/` is verified by CI on every push to the system repo — a scaffold that cannot pass its own checker is a build failure.
+`/mavci-core:new-project` writes a skeleton that already satisfies every check, so new projects begin green and the first red is always a real regression. `plugins/mavci-core/templates/scaffold/` is verified by CI on every push to the system repo — a scaffold that cannot pass its own checker is a build failure.
 
 ---
 
@@ -919,7 +919,7 @@ Within one attempt the `Stop` gate can force at most 2 additional in-turn correc
 **In the system repo** (`/mavci-core:retro --apply <path>`, or via `--add-dir`):
 
 5. Apply. **A class-A change with no class-B check is rejected** — a standard nothing verifies is how the system decays back into prose.
-6. Add a fixture under `templates/fixtures/<check_id>/{bad,good}/`. CI asserts the checker fails `bad/` and passes `good/`, so a rule cannot regress silently. **A class-B fix for a false positive adds the false-positive case to `good/`** — the exact code that was wrongly flagged, now asserted to pass.
+6. Add a fixture under `plugins/mavci-core/templates/fixtures/<check_id>/{bad,good}/`. CI asserts the checker fails `bad/` and passes `good/`, so a rule cannot regress silently. **A class-B fix for a false positive adds the false-positive case to `good/`** — the exact code that was wrongly flagged, now asserted to pass.
 7. Bump `plugin.json`, push the matching tag, commit.
 8. Next `/plugin update` carries it to every project, including the five that never hit the bug.
 
@@ -943,7 +943,7 @@ Within one attempt the `Stop` gate can force at most 2 additional in-turn correc
 | The checker | `node verify.mjs`, zero npm dependencies | Runs in CI, a pre-commit hook, or by hand. No knowledge of Claude at all. |
 | Risk policy | JSON in `.claude/settings.json` | Human-readable; section 7 is the source of truth for meaning. |
 
-**What guarantees it, mechanically:** `.github/workflows/selftest.yml` runs on every push in a container with Claude Code **not installed**, executing `gate.mjs --ci`, `state.mjs --validate`, and `redact.mjs --selftest` against `templates/fixtures/`. If any needs Claude Code, the job fails. The escape hatch is a passing test, not a promise.
+**What guarantees it, mechanically:** `.github/workflows/selftest.yml` runs on every push in a container with Claude Code **not installed**, executing `gate.mjs --ci`, `state.mjs --validate`, and `redact.mjs --selftest` against `plugins/mavci-core/templates/fixtures/`. If any needs Claude Code, the job fails. The escape hatch is a passing test, not a promise.
 
 **Explicit non-guarantee:** the *automation* is Claude-Code-specific — hooks, agents, and slash commands do not run elsewhere. What survives is every artifact, every standard, and every check. The work product is portable; the labour-saving is not.
 
@@ -1012,4 +1012,4 @@ Verified (6.17): a `--plugin-dir` plugin of the same name takes precedence over 
 
 ### After every rollback
 
-Write a class-B lesson (section 10) with the false-positive code in `templates/fixtures/<check_id>/good/`. A rollback that produces no fixture will happen again.
+Write a class-B lesson (section 10) with the false-positive code in `plugins/mavci-core/templates/fixtures/<check_id>/good/`. A rollback that produces no fixture will happen again.
