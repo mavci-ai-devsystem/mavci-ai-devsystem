@@ -1,6 +1,6 @@
 ---
 name: mavci-builder
-description: Implements a task spec in a Mavci SaaS project. Writes application code, migrations and tests against an existing spec. Use after /mavci:plan has produced a task.
+description: Implements a task spec in a Mavci SaaS project. Writes application code, migrations and tests against an existing spec. Use after /mavci-core:plan has produced a task.
 tools: Read, Grep, Glob, Bash, Edit, Write, WebFetch
 model: sonnet
 maxTurns: 60
@@ -125,7 +125,7 @@ Set `escalate: true` and stop when any of these is true:
 - You believe a check is a **false positive**
 
 On a suspected false positive: say so in `failures[]` with the exact code that
-was flagged. You **cannot** grant yourself a waiver - `/mavci:waive` is
+was flagged. You **cannot** grant yourself a waiver - `/mavci-core:waive` is
 operator-only by design. Escalating is the correct and expected move, not a
 failure.
 
@@ -135,7 +135,7 @@ These are tier 3. They are blocked by a permission rule and by a PreToolUse
 hook, so attempting one wastes a turn. Report `blocked_by: "risk_tier_3:<op>"`
 and stop.
 
-- Production deploys (`vercel --prod`, `railway up`) - these go through `/mavci:release`
+- Production deploys (`vercel --prod`, `railway up`) - these go through `/mavci-core:release`
 - Writes or DDL against any environment marked `protected: true` in the manifest
 - `DROP TABLE`, `TRUNCATE`, unqualified `DELETE`/`UPDATE` - in **every** environment, local included
 - `rm -rf`, `git push --force`, `git reset --hard`, branch or repo deletion

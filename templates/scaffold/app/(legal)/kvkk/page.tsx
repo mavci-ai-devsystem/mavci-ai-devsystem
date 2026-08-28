@@ -5,7 +5,7 @@ export default function Page() {
     <main className="prose mx-auto p-8">
       <h1>KVKK Aydinlatma Metni</h1>
       {/* REVIEW REQUIRED - draft text. A lawyer must review this before launch.
-          This marker is a warning during development and a blocker at /mavci:release. */}
+          This marker is a warning during development and a blocker at /mavci-core:release. */}
       <h2>Veri sorumlusunun kimligi</h2>
       <p>__LEGAL_NAME__, __ADDRESS__. MERSIS: __MERSIS__.</p>
       <h2>Isleme amaclari</h2>

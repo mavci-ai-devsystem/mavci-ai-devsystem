@@ -53,7 +53,7 @@ The four stack-specific rules from fix 3 are in. `supabase.rls_policy_per_table`
 
 ### Deferred out of Phase 1 on purpose
 
-`mavci-guardian`, `mavci-scribe`; `/mavci:release`, `/mavci:retro`, `/mavci:research`; five standards packs; nine further checker rules. All additive — a YAML file, a `SKILL.md`, or a rule function. None require rework of Phase 1.
+`mavci-guardian`, `mavci-scribe`; `/mavci-core:release`, `/mavci-core:retro`, `/mavci-core:research`; five standards packs; nine further checker rules. All additive — a YAML file, a `SKILL.md`, or a rule function. None require rework of Phase 1.
 
 ---
 
@@ -96,7 +96,7 @@ A repo seeded with realistic pre-existing debt: three routes without `force-dyna
 | B5 | Attempt to add a baseline entry by hand, then run a turn | Denied by the control-plane rule; if forced, the integrity hash fails the gate. There is no add operation in `state.mjs` after init. |
 | B6 | Seed a `sk_live_` key in the repo and run `/mavci-core:connect` on a fresh copy | Connect **refuses**: `critical` findings cannot be baselined. Message says fix it before connecting. |
 | B7 | Trigger a genuine false positive — a health route that must stay cached — then `/mavci-core:waive next.route_force_dynamic app/api/health/route.ts --reason "..." --days 90` | Operator confirmation prompt appears. Waiver written to `control/waivers.json`, committed, visible in `git diff`. Turn now passes. Verdict records `status: "waived"`. |
-| B8 | Ask an **agent** to grant the same waiver | It cannot: `/mavci:waive` is `disable-model-invocation: true`. The agent returns `escalate: true` naming the check (B3). |
+| B8 | Ask an **agent** to grant the same waiver | It cannot: `/mavci-core:waive` is `disable-model-invocation: true`. The agent returns `escalate: true` naming the check (B3). |
 | B9 | Set the waiver's `expires` to yesterday via `state.mjs`, run a turn | The check **blocks again**, and the message names the expiry date. `doctor` lists it as expired. |
 | B10 | `/mavci-core:doctor` | Reports plugin version, settings drift vs. template, hook self-test, **baseline debt count and trend**, expiring waivers, CI token status, 0 pending lessons. |
 
@@ -135,16 +135,16 @@ If any of those eight fails, Phase 1 is not done regardless of the rest.
 ## Phase 2 — Completing the roster (1–2 sessions)
 
 - `mavci-guardian` (opus) and `mavci-scribe` (haiku).
-- `/mavci:release` — the gated release checklist, main-session only.
-- `/mavci:retro` — both halves of the self-improvement loop, reading `waivers.json` for false-positive lessons.
-- `/mavci:research` — forked `Explore`.
+- `/mavci-core:release` — the gated release checklist, main-session only.
+- `/mavci-core:retro` — both halves of the self-improvement loop, reading `waivers.json` for false-positive lessons.
+- `/mavci-core:research` — forked `Explore`.
 - Standards packs: `stripe-billing`, `resend-email`, `anthropic-usage`, `seo-baseline`, `ad-policy`.
 - Nine further checker rules, each with fixtures. **`supabase.rls_policy_per_table` and `supabase.tenant_column` get a real SQL statement parser** rather than regex — this is the specific reason they were deferred.
 - **Exit criterion:** the first real SaaS project connected, its baseline debt reduced by half, and at least one waiver granted, expired, and resolved.
 
 ## Phase 3 — Operating at scale (after 2–3 projects are live)
 
-- `/mavci:status` — read-only aggregation across sibling repos by globbing `.mavci/control/state.json`. No daemon, no index. This is the data source a Command Center would later read.
+- `/mavci-core:status` — read-only aggregation across sibling repos by globbing `.mavci/control/state.json`. No daemon, no index. This is the data source a Command Center would later read.
 - Migration and rollback playbooks as skills.
 - **OS-level sandboxing** to close the subprocess hole (ARCHITECTURE 7.1 item 1) — the one honest gap that cannot be closed with permission rules or hooks.
 - Second stack pack, if ever needed — the trigger for splitting `mavci-core`.
@@ -165,7 +165,7 @@ Not scoped. See below.
 | **Multi-agent parallel workflows** | The roster must be stable and the contract proven serially first. Parallelism multiplies a bad contract. |
 | **Automated production deploys** | Tier 3 by policy. The operator is the approval channel. |
 | **AST-based checking** | Would need a TypeScript parser dependency, breaking the zero-dependency escape-hatch guarantee. Revisit only if regex false positives outlive the waiver mechanism — and the waiver data will say whether they do. |
-| **Cross-project shared lessons database** | `/mavci:retro` promoting into the system repo already gives cross-project reach, with git as the store. |
+| **Cross-project shared lessons database** | `/mavci-core:retro` promoting into the system repo already gives cross-project reach, with git as the store. |
 | **A custom MCP server** | Nothing the system needs is unreachable from Node scripts and native tools. |
 | **Auto memory / subagent `memory`** | Verified machine-local (3.7). Violates the environment constraint. |
 | **Headless / `claude -p` operation** | Verified: project allow rules and `extraKnownMarketplaces` do not apply without an interactive trust dialog (5.14, 6.6). CI uses `node`, not Claude. |
@@ -227,7 +227,7 @@ Ordered by blast radius. Detection is `doctor.mjs` plus `selftest-hooks.mjs`, wh
 2. **Turkish legal content**: does the KVKK aydınlatma metni come from a lawyer, or does the scaffold ship a marked draft? `legal.kvkk_structure` verifies **structure, not legal sufficiency**, and says so in its own description. Recommendation: ship a draft carrying a `REVIEW REQUIRED` marker that `legal.pages_present` treats as a **warning** in `sandbox` and a **blocker** in `standard` and `regulated`.
 3. **Entity details** (legal name, address, MERSIS, KEP) now live in `compliance.entity` in each project's manifest — per-project, so no shared file needs editing when details change. Confirm that is right rather than a shared default.
 4. **R7**: is `redact.mjs` reading `.env.local` acceptable, or should redaction be pattern-only?
-5. **Which of the six repos is connected first.** Recommendation: the least critical one, so the first real contact with `/mavci:connect` and the baseline mechanism is low-stakes.
+5. **Which of the six repos is connected first.** Recommendation: the least critical one, so the first real contact with `/mavci-core:connect` and the baseline mechanism is low-stakes.
 
 ---
 

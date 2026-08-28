@@ -163,7 +163,7 @@ export function writeSurface(root, relPath, doc, schemaName) {
 
 export function readState(root) {
   const s = readJsonOrNull(abs(root, PATHS.state));
-  if (!s) throw new Error(`${PATHS.state} not found. This project is not connected - run /mavci:connect or /mavci:new-project.`);
+  if (!s) throw new Error(`${PATHS.state} not found. This project is not connected - run /mavci-core:connect or /mavci-core:new-project.`);
   return s;
 }
 
@@ -221,7 +221,7 @@ export function incrementAttempt(root, id) {
   const t = readControlTask(root, id);
   if (t.attempts >= t.max_attempts) {
     throw new Error(`task ${id} is at its retry ceiling (${t.attempts}/${t.max_attempts}). `
-      + 'It cannot be retried. Use /mavci:retro, /mavci:waive if the check is wrong, '
+      + 'It cannot be retried. Use /mavci-core:retro, /mavci-core:waive if the check is wrong, '
       + 'or state.mjs --reset-attempts after changing something.');
   }
   const attempts = t.attempts + 1;
@@ -269,7 +269,7 @@ export function baselineInit(root, findings) {
     throw new Error(
       `refusing to baseline ${critical.length} critical finding(s):\n${lines}\n\n`
       + 'A committed secret is not acceptable technical debt. Remove it, rotate the key, '
-      + 'then run /mavci:connect again.');
+      + 'then run /mavci-core:connect again.');
   }
   const s = readJsonOrNull(abs(root, PATHS.state));
   const now = nowIso();
@@ -338,7 +338,7 @@ export function isBaselined(baseline, check_id, filePath) {
 }
 
 /* --------------------------------------------------------------- waivers
- * B3. Granted only via /mavci:waive, which sets disable-model-invocation:true,
+ * B3. Granted only via /mavci-core:waive, which sets disable-model-invocation:true,
  * so an agent cannot reach this at all. It must escalate instead.
  */
 
@@ -636,7 +636,7 @@ async function main() {
         return;
       }
       case '--baseline-init': {
-        // The one moment baseline entries may be created. Runs at /mavci:connect.
+        // The one moment baseline entries may be created. Runs at /mavci-core:connect.
         const { runChecks } = await import('./verify.mjs');
         const { findings } = await runChecks(root, { scope: 'full' });
         const doc = baselineInit(root, findings);

@@ -82,7 +82,7 @@ const MANIFEST = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'fixtures', 'se
     if (surviving.length) {
       for (const h of surviving) bad(`${h.file} still contains ${h.tokens.join(', ')} after a full render`);
     } else {
-      ok('a simulated /mavci:new-project run leaves zero placeholders');
+      ok('a simulated /mavci-core:new-project run leaves zero placeholders');
     }
 
     /* --- 3. the specific acceptance blocker: package.json is installable --- */

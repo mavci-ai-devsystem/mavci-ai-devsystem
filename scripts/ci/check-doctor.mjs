@@ -12,6 +12,12 @@
  * Every case below asserts a FAIL. A probe that cannot fail is not a probe, and
  * that is exactly the class of defect being fixed here - so the assertions are
  * on the failures, not on the happy path alone.
+ *
+ * Section 7 covers the MARKETPLACE SOURCE FORM, which is the same class of bug
+ * one layer up: 0.1.3 and 0.1.4 shipped `{"source":"url"}` in the template and
+ * had doctor demand it, so the checker drove every project into a form that
+ * 404s - installing no plugin, registering zero hooks, and enforcing nothing.
+ * A checker that certifies the broken configuration is worse than no checker.
  */
 
 import fs from 'node:fs';
@@ -25,7 +31,8 @@ const SCRIPTS = path.join(ROOT, 'plugins', 'mavci-core', 'scripts');
 const DOCTOR = path.join(SCRIPTS, 'doctor.mjs');
 
 const state = await import(pathToFileURL(path.join(SCRIPTS, 'state.mjs')).href);
-const { PATHS } = await import(pathToFileURL(path.join(SCRIPTS, 'config.mjs')).href);
+const { PATHS, MARKETPLACE_NAME, PLUGIN_ID, SYSTEM_REPO } =
+  await import(pathToFileURL(path.join(SCRIPTS, 'config.mjs')).href);
 
 const MANIFEST = JSON.parse(fs.readFileSync(path.join(ROOT, 'templates/fixtures/selftest-project.json'), 'utf8'));
 const PLUGIN_VERSION = JSON.parse(
@@ -206,6 +213,90 @@ try {
     ok('stampHookRun refuses to write a receipt that would fail its own schema');
   } else {
     bad('stampHookRun wrote an invalid receipt, which would fail state.schema_valid on the next gate');
+  }
+}
+
+/* --- 7. the marketplace source form ----------------------------------
+ * Exactly one of the four documented forms resolves (NATIVE-CAPABILITIES 6.4).
+ * Each wrong one must FAIL, and each failure must print the form that works -
+ * a FAIL that does not say what to write instead just moves the guessing.
+ */
+{
+  const EXPECTED = `https://github.com/${SYSTEM_REPO}.git`;
+
+  const writeSettings = (dir, source) => {
+    fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.claude', 'settings.json'), JSON.stringify({
+      extraKnownMarketplaces: { [MARKETPLACE_NAME]: { source } },
+      enabledPlugins: { [PLUGIN_ID]: true },
+    }, null, 2));
+  };
+
+  const cases = [
+    [{ source: 'github', repo: SYSTEM_REPO }, /uses the "github" source form/,
+      'the "github" form (resolves over SSH)'],
+    [{ source: 'url', url: EXPECTED }, /uses the "url" source form/,
+      'the "url" form (fetches a remote marketplace.json; 404s on a .git address)'],
+    [{ source: 'url', url: 'https://github.com/__SYSTEM_REPO__.git' }, /template placeholder/,
+      'an unsubstituted __SYSTEM_REPO__ placeholder'],
+    [{ source: 'git', url: 'https://github.com/someone-else/other.git' }, /points at/,
+      'the right form pointing at the wrong repo'],
+    [{ source: 'git' }, /points at/, 'the right form with no url at all'],
+  ];
+
+  for (const [source, re, label] of cases) {
+    const tmp = makeProject(); cleanup.push(tmp);
+    writeSettings(tmp, source);
+    const r = runDoctor(tmp);
+    const hit = re.exec(r.stdout);
+    if (!hit) {
+      bad(`doctor did NOT fail ${label}. A project configured this way installs no plugin, `
+        + 'registers zero hooks and enforces nothing, and doctor would call it green.');
+      continue;
+    }
+    // The FAIL must be a FAIL, not a warning dressed as one.
+    const failLine = r.stdout.split('\n').find((l) => re.test(l));
+    if (!/\[fail\]/i.test(failLine ?? '')) {
+      bad(`doctor reported ${label} but not as a FAIL: ${failLine}`);
+      continue;
+    }
+    // And it must name the form that works.
+    if (!r.stdout.includes(`"source": "git", "url": "${EXPECTED}"`)) {
+      bad(`doctor failed ${label} without printing the working form. `
+        + 'The operator is left to guess, which is how the "url" form got shipped.');
+      continue;
+    }
+    ok(`doctor FAILS ${label}, and prints the "git" form as the fix`);
+  }
+
+  // The happy path: the one form that works must pass, or doctor fails every
+  // correctly configured project - which is the 0.1.4 defect with the sign flipped.
+  {
+    const tmp = makeProject(); cleanup.push(tmp);
+    writeSettings(tmp, { source: 'git', url: EXPECTED });
+    const r = runDoctor(tmp);
+    if (r.stdout.includes(`[ok  ] marketplace ${MARKETPLACE_NAME} -> `)) {
+      ok('doctor accepts the "git" form pointing at the system repo');
+    } else {
+      bad('doctor did not accept the ONLY marketplace source form that works. '
+        + 'Every correctly configured project would be told to change it.');
+    }
+  }
+
+  // The template every project is written from must be the form doctor accepts.
+  // These two drifted apart in 0.1.3 and nothing noticed for two releases.
+  {
+    const tmplSrc = JSON.parse(fs.readFileSync(path.join(ROOT, 'templates/project.settings.json'), 'utf8'))
+      .extraKnownMarketplaces?.[MARKETPLACE_NAME]?.source;
+    const tmp = makeProject(); cleanup.push(tmp);
+    writeSettings(tmp, { ...tmplSrc, url: String(tmplSrc?.url ?? '').replace('__SYSTEM_REPO__', SYSTEM_REPO) });
+    const r = runDoctor(tmp);
+    if (r.stdout.includes(`[ok  ] marketplace ${MARKETPLACE_NAME} -> `)) {
+      ok('templates/project.settings.json writes the form doctor accepts');
+    } else {
+      bad('doctor REJECTS the marketplace source form that templates/project.settings.json writes. '
+        + 'Connect would configure every project into a state doctor calls broken.');
+    }
   }
 }
 

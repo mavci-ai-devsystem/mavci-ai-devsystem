@@ -71,7 +71,7 @@ the risk policy, or the checker.
    runs to 2027-04-30, 24 (Krypton) to 2028-04-30. The cost of moving the floor
    is rewriting the committed workflow in every connected project, which is why
    it was done at zero connected projects rather than after the first
-   `/mavci:connect`. Node 22 has been in maintenance since 2025-10-21, so the
+   `/mavci-core:connect`. Node 22 has been in maintenance since 2025-10-21, so the
    next move — to 24 — should happen well before April 2027.
 2. **`plugins/mavci-core/agents/*.md` are generated.** Source of truth is
    `agent-defs/*.json` plus `agent-defs/_contract.md`. Never hand-edit a
@@ -139,9 +139,45 @@ the authority — not our reading of the docs, and not a local run.
 `state.schema_valid`. `check-schemas.mjs` asserts its closed enum agrees with
 `config.mjs`, so the duplicated enum cannot drift.
 
+**Gate 3 PASSED against v0.1.4** (2026-08-28). With `settings.json` alone and no
+`/plugin install`, `/reload-plugins` reported *2 plugins · 16 skills · 9 agents ·
+8 hooks*, and `/context` listed `mavci-core:mavci-architect`, `-builder`,
+`-verifier` plus the three `standards-*` packs. Eight hooks registered — the
+0.1.2 defect is closed, and the onboarding protocol's core assumption holds.
+
+0.1.5 fixes the two things that pass revealed, both of which are the same shape:
+a value that was written down once, wrongly, and then copied everywhere.
+
+1. **The command namespace was the marketplace name, not the plugin name.**
+   Claude Code namespaces plugin components by the **plugin** (6.11), so every
+   command is `/mavci-core:<skill>` and every agent is `mavci-core:<agent>`.
+   `mavci` is only the marketplace, and appears solely in `enabledPlugins` and
+   `/plugin update`. 105 references across docs, skills, agent contracts, hook
+   messages and schema descriptions named commands nobody could type. No code
+   constructed a name from `MARKETPLACE_NAME` — they were all prose literals,
+   which is why nothing caught them. `config.mjs` now exports `COMMAND_PREFIX`
+   derived from `PLUGIN_NAME`, and `check-plugin.mjs` sweeps the whole tree for
+   the marketplace form and fails on it, with a negative control on both halves
+   of the needle.
+
+2. **The marketplace `source` form was wrong, and `doctor` demanded the wrong
+   one.** Of the four documented forms only `{"source":"git","url":"https://….git"}`
+   resolves. `github` clones over SSH (6.18, known since 0.1.3); `url` fetches a
+   remote `marketplace.json` over HTTP and 404s on a `.git` address — and `url`
+   is what 0.1.3 and 0.1.4 shipped in `templates/project.settings.json` *and*
+   what `doctor` failed every other form into. A checker that drives every
+   project into the broken configuration is worse than no checker. `doctor` now
+   fails `github`, `url`, an unsubstituted placeholder, and a `git` form pointing
+   anywhere else, and every one of those failures prints the working form.
+   `check-doctor.mjs` asserts all four, asserts the good form passes, and asserts
+   the template and `doctor` agree — the drift that went unnoticed for two
+   releases. NATIVE-CAPABILITIES 6.4 carries the full matrix.
+
 Still unproven: version propagation across a bump (`/plugin marketplace update`
-→ `/plugin update`), and hooks actually firing in an installed plugin. Both are
-the next Gate 3 re-run — **against v0.1.4**, not v0.1.3.
+→ `/plugin update`), and hooks actually **firing** — 8 hooks are registered, but
+no `control/hook-run.json` receipt has been checked in a connected project yet.
+Both are Gate 4: the full acceptance test in a real greenfield project,
+**against v0.1.5**.
 
 ---
 

@@ -26,7 +26,7 @@ const state = await import(pathToFileURL(path.join(SCRIPTS, 'state.mjs')).href);
 const render = await import(pathToFileURL(path.join(SCRIPTS, 'render.mjs')).href);
 
 /*
- * Substitution comes from render.mjs - the SAME code /mavci:new-project runs.
+ * Substitution comes from render.mjs - the SAME code /mavci-core:new-project runs.
  * This used to be a hard-coded map of fake values, which meant the test data
  * could not disagree with production data and the check could never fire: nine
  * placeholders shipped unsubstituted while this stayed green. Deriving the

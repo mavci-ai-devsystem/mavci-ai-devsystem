@@ -101,12 +101,12 @@ The previous revision implied all four non-builder agents were natively constrai
 |---|---|---|
 | SEO | Standards skill `seo-baseline` + checker rules + scribe for copy | A checklist belongs in the checker, not an agent. |
 | Documentation | `mavci-scribe` | Not a distinct enough boundary. |
-| Release / deploy | `/mavci:release` in the **main session** | Tier-3 by policy. The operator is the approval channel; inventing one would be the bespoke machinery the brief forbids. |
-| **Waiving a check** | `/mavci:waive`, `disable-model-invocation: true` | An agent that can waive a check has no constraints at all. Native mechanism, verified (2.4). |
-| Market research | `/mavci:research`, `context: fork`, `agent: Explore` | The built-in Explore agent already is this. |
+| Release / deploy | `/mavci-core:release` in the **main session** | Tier-3 by policy. The operator is the approval channel; inventing one would be the bespoke machinery the brief forbids. |
+| **Waiving a check** | `/mavci-core:waive`, `disable-model-invocation: true` | An agent that can waive a check has no constraints at all. Native mechanism, verified (2.4). |
+| Market research | `/mavci-core:research`, `context: fork`, `agent: Explore` | The built-in Explore agent already is this. |
 | Security review | `mavci-guardian` + bundled `/security-review` | Near-total overlap. |
 | Debugging | `mavci-builder` | Implementation with a different starting point. |
-| Migrations | builder writes, checker gates, `/mavci:release` applies | The risk is in *applying* to prod — a risk-tier problem, not an agent problem. |
+| Migrations | builder writes, checker gates, `/mavci-core:release` applies | The risk is in *applying* to prod — a risk-tier problem, not an agent problem. |
 
 **Why boundaries are drawn on tool grants, not topic:** only the builder can write `app/**`. Only `state.mjs` can write `.mavci/control/**`. Those two facts are what make sections 4.2 and 8 mechanisms rather than intentions.
 
@@ -169,17 +169,21 @@ mavci-ai-devsystem/                      # private GitHub repo (mavci-ai-devsyst
 ```json
 {
   "extraKnownMarketplaces": {
-    "mavci": { "source": { "source": "url", "url": "https://github.com/mavci-ai-devsystem/mavci-ai-devsystem.git" } }
+    "mavci": { "source": { "source": "git", "url": "https://github.com/mavci-ai-devsystem/mavci-ai-devsystem.git" } }
   },
   "enabledPlugins": { "mavci-core@mavci": true },
   "permissions": { "...": "risk policy, section 7" }
 }
 ```
 
-The HTTPS `url` form is deliberate. The shorter `{"source":"github","repo":"..."}`
-form resolves over SSH and fails on a machine authenticated by HTTPS token
-(6.18, observed in Gate 3) — and its failure mode is a plugin that never
-installs, so nothing is enforced and nothing says so.
+The `git` source form is deliberate, and it is the only one of the four
+documented sources that works here. `{"source":"github","repo":"..."}` resolves
+over SSH and fails on a machine authenticated by HTTPS token (6.18).
+`{"source":"url","url":"…​.git"}` — the form 0.1.3 and 0.1.4 shipped — fetches a
+remote `marketplace.json` over HTTP rather than cloning a git remote, so it 404s
+on a `.git` address (6.4). Both wrong forms fail the same way: a plugin that
+never installs, so nothing is enforced and nothing says so. `doctor` fails both
+and prints the working form.
 
 ### How a change reaches every project without manual edits
 
@@ -187,7 +191,7 @@ installs, so nothing is enforced and nothing says so.
 2. `node scripts/build-agents.mjs` if an agent changed. CI verifies generated files match.
 3. Bump `version` in `plugin.json` **and push a matching git tag `v<version>`**. `release.yml` fails if version and tag disagree — the tag is what CI in every project clones (section 6.7).
 4. Push.
-5. In any project, any machine: `/plugin marketplace update`, `/plugin update mavci-core@mavci`, then `/mavci:doctor --sync` to record the new version in `state.json.plugin_version` so CI follows.
+5. In any project, any machine: `/plugin marketplace update`, `/plugin update mavci-core@mavci`, then `/mavci-core:doctor --sync` to record the new version in `state.json.plugin_version` so CI follows.
 
 No project file changes except that one recorded version field, which is the point: local and CI can never silently diverge.
 
@@ -203,13 +207,15 @@ sentences below are observed behaviour, not documentation.
    with `unable to get password from user` on a machine where an interactive
    `git clone` of the same repo succeeds (6.19). `gh auth login` alone does not
    always suffice — follow it with `gh auth setup-git`, or set `GH_TOKEN`.
-2. **The HTTPS marketplace form.** `{"source":"github","repo":"owner/repo"}`
+2. **The `git` marketplace source form.** `{"source":"github","repo":"owner/repo"}`
    resolves over **SSH**, so it silently requires an SSH key that a machine
-   authenticated by HTTPS token does not have (6.18). Every project's
-   `settings.json` therefore carries
-   `{"source":"url","url":"https://github.com/<owner>/<repo>.git"}`. This is not
-   a per-machine step — it is a template invariant, listed here because it is
-   what makes step 1 sufficient. `doctor` fails the `github` form.
+   authenticated by HTTPS token does not have (6.18); `{"source":"url",...}`
+   fetches a remote `marketplace.json` over HTTP and 404s on a `.git` address
+   (6.4). Every project's `settings.json` therefore carries
+   `{"source":"git","url":"https://github.com/<owner>/<repo>.git"}`, which clones
+   over HTTPS through the credential from step 1. This is not a per-machine step
+   — it is a template invariant, listed here because it is what makes step 1
+   sufficient. `doctor` fails every other form.
 3. **The workspace trust dialog**, accepted once per clone per machine.
    Repository-supplied `extraKnownMarketplaces` are ignored until then
    (verified 6.6).
@@ -291,7 +297,7 @@ The single declaration a project makes about itself.
 
 `risk_tier` is `sandbox`, `standard`, or `regulated`, selecting which rows of section 7 apply.
 
-### 3.2 `/mavci:new-project <name>` — greenfield
+### 3.2 `/mavci-core:new-project <name>` — greenfield
 
 1. Ask only what is not derivable: display name, jurisdictions, deploy target, risk tier, entity details.
 2. Write and validate `.mavci/project.json`.
@@ -303,7 +309,7 @@ The single declaration a project makes about itself.
 
 A greenfield project has an empty baseline. It is green from commit one, and every future violation is a real regression.
 
-### 3.3 `/mavci:connect` — existing repo (the normal case)
+### 3.3 `/mavci-core:connect` — existing repo (the normal case)
 
 All six real projects are existing repos. This is the primary path, not the exception.
 
@@ -508,7 +514,7 @@ natively enforced boundary in the roster.
 
 5. **Failure report format.** Never report success on a failing check. Never widen scope to fix an unrelated failure — record it as `suggested_next`. Every `failures[]` entry needs a file path, not a description. **Never paste a secret value into `evidence`; name the key instead** — and know that `state.mjs` will redact it regardless (section 4.4).
 6. **Escalation rules.** Return `escalate: true` on any `escalate_when` item, on the second consecutive identical failure, or when a fix requires touching an `edit_scope.deny` path.
-7. **Approval triggers.** The tier-3 table (section 7) verbatim, plus: *you cannot grant yourself a waiver; `/mavci:waive` is operator-only. If you believe a check is a false positive, return `escalate: true` with the check ID and the evidence, and stop.*
+7. **Approval triggers.** The tier-3 table (section 7) verbatim, plus: *you cannot grant yourself a waiver; `/mavci-core:waive` is operator-only. If you believe a check is a false positive, return `escalate: true` with the check ID and the evidence, and stop.*
 8. **Retry discipline.** Read `attempts` from `control/tasks/<id>.json`. If `attempts >= max_attempts`, do not retry — set `status: "blocked"` and stop. **You cannot edit that file.**
 
 Sections 2–8 are identical across all agents and come from the template. Only section 1 and `role` are per-agent. A new agent is about 25 lines of YAML.
@@ -565,7 +571,7 @@ Revision 1 ran a 180-second full checker on every turn in every project, includi
 
 Condition 2 is tracked by a `PostToolUse` hook on `Edit|Write` that touches a marker file keyed on `session_id` + `prompt_id` in the OS temp directory — not in the repo, so it never pollutes a diff. `gate.mjs` reads the marker, then deletes it.
 
-When it does run, it scans **changed files plus their dependents**, not the whole tree. A full scan happens only at `/mavci:verify` and in CI.
+When it does run, it scans **changed files plus their dependents**, not the whole tree. A full scan happens only at `/mavci-core:verify` and in CI.
 
 Practical effect: a question turn costs nothing. A one-file edit costs a few hundred milliseconds. A build-phase turn costs a scoped scan.
 
@@ -577,7 +583,7 @@ Practical effect: a question turn costs nothing. A one-file edit costs a few hun
 
 | Failure | Detection | Result |
 |---|---|---|
-| `verify.mjs` throws | try/catch around the whole run | exit 2, `stopReason`: "standards checker crashed: `<message>`. Enforcement did not run. Run /mavci:doctor." |
+| `verify.mjs` throws | try/catch around the whole run | exit 2, `stopReason`: "standards checker crashed: `<message>`. Enforcement did not run. Run /mavci-core:doctor." |
 | `verify.mjs` exceeds budget | internal 120 s budget, under the hook's 150 s `timeout` | exit 2, "checker exceeded its 120 s budget. Enforcement did not run." |
 | Malformed or missing `project.json` / schema | validation before scanning | exit 2, naming the file |
 | `integrity.json` mismatch | hash recompute (section 4.2) | exit 2, "control plane modified outside state.mjs" |
@@ -681,9 +687,9 @@ The gate as designed would block **every turn** in a connected repo from the mom
 - **A new file is never baselined.** Entries are path-scoped and created only at connect, so new work must be clean. This is the property that matters: the ratchet only turns one way.
 - **`critical` findings are never baselined.** `--baseline-init` refuses to record them and fails the connect with instructions. A repo with a committed live key must be fixed before it is connected, not after.
 
-**Visibility, so debt does not become invisible:** every verdict carries `summary.baselined`; `/mavci:verify` prints "N baselined violations remaining"; `/mavci:doctor` reports the count and its trend since connect; `/mavci:connect` writes one remediation task per `check_id` group.
+**Visibility, so debt does not become invisible:** every verdict carries `summary.baselined`; `/mavci-core:verify` prints "N baselined violations remaining"; `/mavci-core:doctor` reports the count and its trend since connect; `/mavci-core:connect` writes one remediation task per `check_id` group.
 
-`--baseline-prune` runs automatically at the end of every successful `/mavci:verify`, so fixing a violation as a side effect of other work retires its baseline entry without anyone remembering to.
+`--baseline-prune` runs automatically at the end of every successful `/mavci-core:verify`, so fixing a violation as a side effect of other work retires its baseline entry without anyone remembering to.
 
 ### 6.6 Waivers — Phase 1, not Phase 2 (B3)
 
@@ -707,7 +713,7 @@ Twelve blocking checks written as regex rather than AST **will** produce a false
 
 | Control | Mechanism |
 |---|---|
-| An agent cannot grant itself a waiver | `/mavci:waive` sets `disable-model-invocation: true` (verified 2.4). Only a human typing the command can reach it. An agent that believes a check is wrong must `escalate` (contract section 7). |
+| An agent cannot grant itself a waiver | `/mavci-core:waive` sets `disable-model-invocation: true` (verified 2.4). Only a human typing the command can reach it. An agent that believes a check is wrong must `escalate` (contract section 7). |
 | A waiver is a deliberate act | The command is tier-2: `risk-guard.mjs` returns `deferToUser`, so the operator confirms the exact check, path, and reason. |
 | No empty justifications | `state.mjs` rejects a `reason` shorter than 20 characters. |
 | No permanent waivers | `--days` defaults to 90, hard cap 180. An expired waiver stops applying and the check blocks again. |
@@ -716,7 +722,7 @@ Twelve blocking checks written as regex rather than AST **will** produce a false
 | Critical is never waivable | `state.mjs` refuses a waiver for a `critical` check. |
 | Waivers are reviewable | `waivers.json` is committed. Every waiver is visible in `git diff` and in code review. |
 
-A waiver is also the correct **input to the self-improvement loop**: a waiver granted for a false positive is a class-B lesson (the check is wrong), and `/mavci:retro` reads `waivers.json` to find them.
+A waiver is also the correct **input to the self-improvement loop**: a waiver granted for a false positive is a class-B lesson (the check is wrong), and `/mavci-core:retro` reads `waivers.json` to find them.
 
 ### 6.7 Layer 2 — the second enforcement point (B4)
 
@@ -764,7 +770,7 @@ missing token reads as *"MAVCI_TOKEN is not set"* rather than as GitHub's
 "repository not found", which is what an unauthenticated private clone actually
 produces and which costs an afternoon to diagnose.
 
-`/mavci:doctor` reports two separate things about it, because they fail
+`/mavci-core:doctor` reports two separate things about it, because they fail
 differently:
 
 - **Presence** is checkable. Doctor asks `gh api repos/<slug>/actions/secrets`
@@ -780,11 +786,11 @@ differently:
 
 **The pin.** CI clones the tag `v<state.json.plugin_version>` — the same version the local hook runs. The two cannot silently diverge, because the version is a committed field. The release procedure in section 2 requires the tag; `release.yml` in the system repo fails if `plugin.json` version and git tag disagree.
 
-**Skew detection, both directions.** `gate.mjs` writes its own plugin version into every verdict. If the running plugin version differs from `state.json.plugin_version`, `doctor` reports the skew and `/mavci:doctor --sync` resolves it by recording the installed version. On a **major** version difference the gate fails closed rather than guessing.
+**Skew detection, both directions.** `gate.mjs` writes its own plugin version into every verdict. If the running plugin version differs from `state.json.plugin_version`, `doctor` reports the skew and `/mavci-core:doctor --sync` resolves it by recording the installed version. On a **major** version difference the gate fails closed rather than guessing.
 
 ### 6.8 Layer 3 — Scaffolding
 
-`/mavci:new-project` writes a skeleton that already satisfies every check, so new projects begin green and the first red is always a real regression. `templates/scaffold/` is verified by CI on every push to the system repo — a scaffold that cannot pass its own checker is a build failure.
+`/mavci-core:new-project` writes a skeleton that already satisfies every check, so new projects begin green and the first red is always a real regression. `templates/scaffold/` is verified by CI on every push to the system repo — a scaffold that cannot pass its own checker is a build failure.
 
 ---
 
@@ -812,14 +818,14 @@ Three tiers. Every tier-3 operation is enforced **twice**: a `permissions.deny` 
 | Edit `.claude/settings.json` | 2 | confirm | `ask` + hook |
 | Add an npm dependency | 2 | confirm | `ask: ["Bash(npm install *)", "Bash(npm i *)"]` |
 | Migration touching an existing table | 2 | confirm | hook parses SQL for `ALTER` / `DROP COLUMN` against a tracked table |
-| **Granting a waiver** | 2 | confirm | `/mavci:waive` is `disable-model-invocation: true`; hook returns `deferToUser` |
+| **Granting a waiver** | 2 | confirm | `/mavci-core:waive` is `disable-model-invocation: true`; hook returns `deferToUser` |
 | `git push --force`, `reset --hard`, branch delete | 3 | **hard-block** | `deny: ["Bash(git push --force*)", "Bash(git push -f*)", "Bash(git reset --hard*)", "Bash(git branch -D*)", "Bash(git push origin --delete*)"]` + hook |
 | `rm -rf`, recursive delete outside `node_modules`/`.next` | 3 | **hard-block** | `deny: ["Bash(rm -rf *)", "Bash(rm -r *)"]` + hook path allowlist |
 | Repo delete or visibility change | 3 | **hard-block** | `deny: ["Bash(gh repo delete*)", "Bash(gh repo edit*)"]` + hook |
 | **Prod DB write or DDL** | 3 | **hard-block** | `deny: ["mcp__claude_ai_Supabase__execute_sql", "mcp__claude_ai_Supabase__apply_migration"]` + hook comparing the call's project ref against every `environments.*.protected: true` ref. **The hook is the real control** — MCP rules cannot carry parameters in a settings file (5.9). |
 | `DROP TABLE`, `TRUNCATE`, `DELETE` with no `WHERE` | 3 | **hard-block** | hook regex over Bash `psql`/`supabase db` payloads and MCP SQL arguments, **in every environment including local** — a destructive migration written locally reaches prod later |
 | Supabase project pause / restore / delete / create | 3 | **hard-block** | `deny: ["mcp__claude_ai_Supabase__pause_project", "..__restore_project", "..__create_project", "..__delete_branch"]` |
-| **Prod deploy** | 3 | **hard-block for agents** | `deny: ["Bash(vercel --prod*)", "Bash(vercel deploy --prod*)", "Bash(railway up*)", "mcp__claude_ai_Vercel__deploy_to_vercel"]` + hook. Reached only through `/mavci:release`, operator present. |
+| **Prod deploy** | 3 | **hard-block for agents** | `deny: ["Bash(vercel --prod*)", "Bash(vercel deploy --prod*)", "Bash(railway up*)", "mcp__claude_ai_Vercel__deploy_to_vercel"]` + hook. Reached only through `/mavci-core:release`, operator present. |
 | Vercel/Railway project or protection changes | 3 | **hard-block** | `deny: ["mcp__claude_ai_Vercel__update_project_deployment_protection", "..__pause_project", "..__create_git_project"]` |
 | **Money** — domain purchase, plan upgrade, credits | 3 | **hard-block** | `deny: ["mcp__claude_ai_Vercel__buy_domain", "..__buy_pro", "..__buy_credits", "..__buy_addon"]` |
 | Stripe live-mode keys | 3 | **hard-block** | hook rejects any command or content containing `sk_live_`; `deny: ["Read(./.env.production*)"]` |
@@ -850,16 +856,16 @@ Four phases: `plan`, `build`, `verify`, `release`. Three independent mechanisms.
 **3. Explicit transitions**, written by `state.mjs` — never by an agent, because `state.json` is control plane:
 
 ```
-/mavci:plan "<request>"   →  architect  →  phase plan   →  writes spec, sets phase build
-/mavci:build <task-id>    →  builder    →  phase build  →  implements, sets phase verify
-/mavci:verify <task-id>   →  verifier   →  phase verify →  verdict; pass → phase release + baseline-prune
+/mavci-core:plan "<request>"   →  architect  →  phase plan   →  writes spec, sets phase build
+/mavci-core:build <task-id>    →  builder    →  phase build  →  implements, sets phase verify
+/mavci-core:verify <task-id>   →  verifier   →  phase verify →  verdict; pass → phase release + baseline-prune
                                                             fail → phase build, attempts++
-/mavci:release            →  main session, operator present, guardian pass required
+/mavci-core:release            →  main session, operator present, guardian pass required
 ```
 
 The verifier refuses to start while phase is `build`; the builder cannot resume after a pass. The gate is a file readable with `cat`, changeable by the operator through `state.mjs --set-phase`, and **not** editable by the agent it governs — which is the whole point of B1.
 
-`/mavci:release` runs a checklist in the main session — guardian pass, verifier pass, zero unbaselined blockers, migrations reviewed, env keys present in the deploy target, changelog written — then prints the deploy command for the operator to run. It never deploys, because deploy is tier-3.
+`/mavci-core:release` runs a checklist in the main session — guardian pass, verifier pass, zero unbaselined blockers, migrations reviewed, env keys present in the deploy target, changelog written — then prints the deploy command for the operator to run. It never deploys, because deploy is tier-3.
 
 ---
 
@@ -885,7 +891,7 @@ Within one attempt the `Stop` gate can force at most 2 additional in-turn correc
 1. Status → `"blocked"`, `blocked_by` set to the dominant `check_id` or error class.
 2. Phase → `"plan"`. A blocked task is a planning problem; a fourth build attempt is how loops start.
 3. `state.mjs` writes a lesson stub at `.mavci/lessons/<date>-<task-id>-<check-id>.md`, pre-filled with all three verdicts and the attempted diffs.
-4. `/mavci:build <id>` refuses to run on a blocked task, printing the three verdicts, the stub path, and the three available moves: `/mavci:retro <id>`, `/mavci:waive <check_id> <path>` if it is a false positive, or `state.mjs --reset-attempts <id>` after the operator has changed something.
+4. `/mavci-core:build <id>` refuses to run on a blocked task, printing the three verdicts, the stub path, and the three available moves: `/mavci-core:retro <id>`, `/mavci-core:waive <check_id> <path>` if it is a false positive, or `state.mjs --reset-attempts <id>` after the operator has changed something.
 
 **Never retried, escalated immediately:** anything with `blocked_by: "risk_tier_3:*"`, any schema-invalid state file, any integrity-hash mismatch, any missing input, and any `critical` finding. Retrying these is pure waste.
 
@@ -893,7 +899,7 @@ Within one attempt the `Stop` gate can force at most 2 additional in-turn correc
 
 ## 10. Self-improvement loop
 
-`/mavci:retro [<task-id>]`.
+`/mavci-core:retro [<task-id>]`.
 
 **In the project:**
 
@@ -910,7 +916,7 @@ Within one attempt the `Stop` gate can force at most 2 additional in-turn correc
 3. Write `.mavci/lessons/<date>-<slug>.md` — committed to the project repo, the permanent local record.
 4. For A, B, or C, write `.mavci/lessons/pending-system-change.md` with the exact target path and proposed diff.
 
-**In the system repo** (`/mavci:retro --apply <path>`, or via `--add-dir`):
+**In the system repo** (`/mavci-core:retro --apply <path>`, or via `--add-dir`):
 
 5. Apply. **A class-A change with no class-B check is rejected** — a standard nothing verifies is how the system decays back into prose.
 6. Add a fixture under `templates/fixtures/<check_id>/{bad,good}/`. CI asserts the checker fails `bad/` and passes `good/`, so a rule cannot regress silently. **A class-B fix for a false positive adds the false-positive case to `good/`** — the exact code that was wrongly flagged, now asserted to pass.
@@ -970,7 +976,7 @@ A bad release reaches every project at once. That is the cost of the propagation
 1. In the system repo: `git revert <bad-commit>`.
 2. Bump `plugin.json` to the next patch (`0.3.1`), whose content equals the last-good release.
 3. Push, with tag `v0.3.1`. `release.yml` verifies version and tag agree.
-4. In each project: `/plugin marketplace update`, `/plugin update mavci-core@mavci`, `/mavci:doctor --sync`.
+4. In each project: `/plugin marketplace update`, `/plugin update mavci-core@mavci`, `/mavci-core:doctor --sync`.
 
 Roll-forward is primary because every step is a verified mechanism and it leaves a linear, auditable history. Time to recover: about two minutes plus one command per project.
 
@@ -1002,7 +1008,7 @@ Verified (6.17): a `--plugin-dir` plugin of the same name takes precedence over 
 | Bad rule affecting one project's legitimate pattern | **Waiver** (6.6), not a rollback — narrower, time-boxed, auditable |
 | Release breaks the checker itself, so nothing runs | 1, and note the gate fails closed (6.4), so work is blocked rather than silently unverified — which is the correct failure |
 | Need to work *right now* while fixing | 3, then 1 |
-| Suspect skew between local and CI | `/mavci:doctor` reports it; `--sync` resolves it |
+| Suspect skew between local and CI | `/mavci-core:doctor` reports it; `--sync` resolves it |
 
 ### After every rollback
 

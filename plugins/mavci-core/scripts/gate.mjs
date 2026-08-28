@@ -221,13 +221,13 @@ async function gate(input) {
       closeGateRun(root, 'budget_exceeded');
       return failClosed(event,
         `The standards checker exceeded its ${GATE_BUDGET_MS / 1000}s budget and was stopped, so nothing was verified. `
-        + 'Run /mavci:doctor to diagnose, or verify by hand with `node <plugin>/scripts/verify.mjs`.');
+        + 'Run /mavci-core:doctor to diagnose, or verify by hand with `node <plugin>/scripts/verify.mjs`.');
     }
     if (r.kind === 'crash') {
       closeGateRun(root, 'crashed');
       return failClosed(event,
         `The standards checker crashed: ${r.message}. Nothing was verified. `
-        + 'This is a bug in the checker, not in your code. Run /mavci:doctor, and /mavci:retro to file it.');
+        + 'This is a bug in the checker, not in your code. Run /mavci-core:doctor, and /mavci-core:retro to file it.');
     }
     verdict = r.verdict;
   }
@@ -246,7 +246,7 @@ async function gate(input) {
       // Keep debt visible. Invisible debt is debt that never gets paid.
       emitMessage(event,
         `mavci: standards pass. ${s.baselined} baselined violation(s) and ${s.waived} waived remain - `
-        + 'see /mavci:doctor.');
+        + 'see /mavci-core:doctor.');
     }
     process.exit(0);
   }
@@ -272,8 +272,8 @@ async function gate(input) {
     emitMessage(event,
       `${detail}\n\nThis is attempt ${continues} on the same prompt and the gate is still failing, `
       + 'so it will not block again. The verdict is recorded under .mavci/control/verdicts/. '
-      + 'Options: fix it, `/mavci:waive <check_id> --path <file> --reason "..."` if the check is wrong, '
-      + 'or /mavci:retro to turn this into a system fix.');
+      + 'Options: fix it, `/mavci-core:waive <check_id> --path <file> --reason "..."` if the check is wrong, '
+      + 'or /mavci-core:retro to turn this into a system fix.');
     process.exit(0);
   }
 
@@ -321,7 +321,7 @@ async function main() {
     // directory. Fail closed and say why.
     return failClosed('Stop',
       `The hook payload was not valid JSON (${parseError}), so the gate could not tell which `
-      + 'project or turn it was checking. Nothing was verified. Run /mavci:doctor.');
+      + 'project or turn it was checking. Nothing was verified. Run /mavci-core:doctor.');
   }
   await gate(input);
 }
@@ -331,7 +331,7 @@ main().catch((err) => {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'Stop', continue: true,
-      stopReason: `mavci: ENFORCEMENT DID NOT RUN. The gate itself failed: ${err.message}. Run /mavci:doctor.`,
+      stopReason: `mavci: ENFORCEMENT DID NOT RUN. The gate itself failed: ${err.message}. Run /mavci-core:doctor.`,
     },
   }));
   process.exit(2);

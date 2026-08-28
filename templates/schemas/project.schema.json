@@ -156,7 +156,7 @@
     "ci": {
       "type": "object",
       "additionalProperties": false,
-      "description": "GitHub Actions needs a token to clone the private system repo. GitHub exposes no API for a secret's expiry, so the date recorded here is the only thing /mavci:doctor can warn on. It is a date, not a secret - never put the token itself in this file.",
+      "description": "GitHub Actions needs a token to clone the private system repo. GitHub exposes no API for a secret's expiry, so the date recorded here is the only thing /mavci-core:doctor can warn on. It is a date, not a secret - never put the token itself in this file.",
       "properties": {
         "token_secret": {
           "type": "string",

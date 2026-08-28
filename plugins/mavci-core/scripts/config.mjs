@@ -21,6 +21,26 @@ export const PLUGIN_NAME = 'mavci-core';
 export const PLUGIN_ID = `${PLUGIN_NAME}@${MARKETPLACE_NAME}`;
 
 /**
+ * The namespace every skill and agent this plugin ships is addressed by.
+ *
+ * It is derived from PLUGIN_NAME, NOT from MARKETPLACE_NAME. Claude Code
+ * namespaces plugin components by the PLUGIN name (NATIVE-CAPABILITIES 6.11):
+ * a skill is `/<plugin>:<skill>` and an agent is `<plugin>:<agent>`. The
+ * marketplace name appears only in `enabledPlugins` and `/plugin update`, never
+ * in a command.
+ *
+ * Because the two names differ here - marketplace `mavci`, plugin `mavci-core` -
+ * the wrong one is a plausible mistake that produces a command nobody can type.
+ * Gate 3 found that form in 105 places across docs, skills and agent contracts.
+ * `check-plugin.mjs` now sweeps the whole tree for `/<marketplace>:` and fails
+ * on it, so the two names cannot drift back together.
+ */
+export const COMMAND_PREFIX = `/${PLUGIN_NAME}:`;
+
+/** The wrong form, spelled once so the sweep in check-plugin.mjs has an authority. */
+export const BAD_COMMAND_PREFIX = `/${MARKETPLACE_NAME}:`;
+
+/**
  * The GitHub Actions secret each project needs to clone this private repo.
  * Fine-grained PAT, Contents: read-only, scoped to SYSTEM_REPO alone.
  */

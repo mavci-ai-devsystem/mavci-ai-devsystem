@@ -1,5 +1,5 @@
 # Mavci standards verification.
-# Written into every project by /mavci:new-project and /mavci:connect.
+# Written into every project by /mavci-core:new-project and /mavci-core:connect.
 #
 # Two defects this file exists to avoid (blocker B4):
 #   1. The system repo is PRIVATE, so a bare `git clone` fails. It needs a token.
@@ -24,7 +24,7 @@
 #      account, not a GitHub organisation, and `gh secret set --org` only works
 #      against an organisation. Every project repo needs the secret set on it.
 #
-#   3. Record the expiry in .mavci/project.json so /mavci:doctor can warn you
+#   3. Record the expiry in .mavci/project.json so /mavci-core:doctor can warn you
 #      before it lapses. GitHub does not expose a secret's expiry through any
 #      API, so this date is the only thing that can be checked:
 #        "ci": { "token_secret": "MAVCI_TOKEN", "token_expires": "2027-08-28" }
@@ -50,7 +50,7 @@ jobs:
         id: mavci
         run: |
           if [ ! -f .mavci/control/state.json ]; then
-            echo "::error::.mavci/control/state.json is missing. Run /mavci:connect and commit .mavci/."
+            echo "::error::.mavci/control/state.json is missing. Run /mavci-core:connect and commit .mavci/."
             exit 1
           fi
           v=$(node -p "require('./.mavci/control/state.json').plugin_version")

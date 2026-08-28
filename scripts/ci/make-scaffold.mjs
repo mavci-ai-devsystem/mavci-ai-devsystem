@@ -21,7 +21,7 @@ export default function Page() {
     <main className="prose mx-auto p-8">
       <h1>${title}</h1>
       {/* REVIEW REQUIRED - draft text. A lawyer must review this before launch.
-          This marker is a warning during development and a blocker at /mavci:release. */}
+          This marker is a warning during development and a blocker at /mavci-core:release. */}
 ${body}
     </main>
   )

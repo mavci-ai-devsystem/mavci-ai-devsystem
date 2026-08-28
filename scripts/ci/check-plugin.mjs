@@ -12,6 +12,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  MARKETPLACE_NAME, PLUGIN_NAME, PLUGIN_ID, COMMAND_PREFIX, BAD_COMMAND_PREFIX,
+} from '../../plugins/mavci-core/scripts/config.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PLUGIN = path.join(ROOT, 'plugins', 'mavci-core');
@@ -20,6 +23,11 @@ const warn = [];
 
 const read = (p) => fs.readFileSync(p, 'utf8');
 const exists = (p) => fs.existsSync(p);
+
+// Declared up here because two separate scans below need them, and the first of
+// those runs before the point where they used to be declared.
+const NUL = 0x00;
+const NL = String.fromCharCode(10);
 
 /* --- manifests ------------------------------------------------------- */
 
@@ -271,6 +279,122 @@ if (!exists(path.join(agentsDir, 'agent-scopes.json'))) {
   failures.push('agents/agent-scopes.json missing - risk-guard cannot enforce per-agent edit scope');
 }
 
+/* --- the command namespace -------------------------------------------
+ *
+ * Plugin components are namespaced by the PLUGIN name, not the MARKETPLACE name
+ * (NATIVE-CAPABILITIES 6.11): a skill is `/<plugin>:<skill>`, an agent is
+ * `<plugin>:<agent>`. The marketplace name appears only in `enabledPlugins` and
+ * `/plugin update`.
+ *
+ * Here the two differ - marketplace `mavci`, plugin `mavci-core` - so the wrong
+ * one is a plausible slip that yields a command nobody can type. It is also
+ * invisible to every other check in this repo: docs, skill bodies and agent
+ * contracts are prose, so a wrong command name parses, validates, ships, and is
+ * only found when an operator types it. Gate 3 found 105 of them.
+ *
+ * This sweep is over the WHOLE tree, not just plugins/, because the wrong form
+ * lived mostly in docs/ and agent-defs/. The needle is built from config.mjs
+ * rather than written out, so this file does not trip its own check and the two
+ * names cannot be redefined apart from the assertion that binds them.
+ */
+{
+  const hits = [];
+  const SKIP_DIRS = new Set(['.git', 'node_modules', '.next', 'dist', 'build', 'coverage']);
+
+  function sweep(dir) {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+    catch { failures.push(`cannot read ${rel(dir)} to sweep it for command-namespace errors`); return; }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name)) sweep(full); continue; }
+      if (!e.isFile()) continue;
+      let text;
+      try { text = fs.readFileSync(full, 'utf8'); }
+      catch { failures.push(`cannot read ${rel(full)} to sweep it for command-namespace errors`); continue; }
+      if (!text.includes(BAD_COMMAND_PREFIX)) continue;
+      text.split(NL).forEach((lineText, i) => {
+        if (lineText.includes(BAD_COMMAND_PREFIX)) hits.push(`${rel(full)}:${i + 1}: ${lineText.trim().slice(0, 120)}`);
+      });
+    }
+  }
+  sweep(ROOT);
+
+  if (hits.length) {
+    failures.push(`${hits.length} reference(s) use the marketplace name as the command namespace `
+      + `("${BAD_COMMAND_PREFIX}") instead of the plugin name ("${COMMAND_PREFIX}"). `
+      + `Those commands do not exist and cannot be typed:` + NL + '      - '
+      + hits.slice(0, 20).join(NL + '      - ')
+      + (hits.length > 20 ? NL + `      ... and ${hits.length - 20} more` : ''));
+  }
+
+  // Negative control. Both halves matter: a needle that failed to match the wrong
+  // form would make this sweep a function returning [], and a needle that ALSO
+  // matched the right form would flag every correct reference in the tree and
+  // get the sweep switched off within a day.
+  const probeBad = `see ${BAD_COMMAND_PREFIX}doctor`;
+  const probeGood = `see ${COMMAND_PREFIX}doctor`;
+  if (!probeBad.includes(BAD_COMMAND_PREFIX)) {
+    failures.push('NEGATIVE CONTROL FAILED: the command-namespace needle does not match the wrong '
+      + 'form it exists to catch. The sweep above asserts nothing.');
+  }
+  if (probeGood.includes(BAD_COMMAND_PREFIX)) {
+    failures.push(`NEGATIVE CONTROL FAILED: the needle "${BAD_COMMAND_PREFIX}" also matches the CORRECT `
+      + `form "${COMMAND_PREFIX}". The sweep would flag every valid reference in the tree.`);
+  }
+
+  // Every skill this plugin ships must be reachable under the prefix asserted
+  // above, and the agents must carry the plugin name. Binding the two here means
+  // a rename of either name breaks CI rather than the operator's muscle memory.
+  if (plugin && plugin.name !== PLUGIN_NAME) {
+    failures.push(`plugin.json name "${plugin.name}" != config PLUGIN_NAME "${PLUGIN_NAME}" - `
+      + `every ${COMMAND_PREFIX}* command in the docs would be wrong`);
+  }
+}
+
+/* --- the marketplace source form the template ships -------------------
+ *
+ * Gate 3: three of the four documented `source` forms fail, all of them
+ * silently and identically - the marketplace never resolves, the plugin never
+ * installs, zero hooks register, nothing is enforced, and Claude Code reports a
+ * clean start. `github` clones over SSH; `url` fetches a remote marketplace.json
+ * over HTTP and 404s on a .git address. Only `git` clones over HTTPS through the
+ * machine's ordinary credential helper.
+ *
+ * 0.1.3 and 0.1.4 shipped the `url` form here AND had doctor demand it, so the
+ * checker actively drove every project into the broken form. This assertion is
+ * the reason that cannot recur silently. NATIVE-CAPABILITIES 6.4.
+ */
+{
+  const tmplPath = path.join(ROOT, 'templates', 'project.settings.json');
+  if (!exists(tmplPath)) {
+    failures.push('templates/project.settings.json missing - no project would get a marketplace registration');
+  } else {
+    let t = null;
+    try { t = JSON.parse(read(tmplPath)); }
+    catch (err) { failures.push('templates/project.settings.json is not valid JSON: ' + err.message); }
+    if (t) {
+      const src = t.extraKnownMarketplaces?.[MARKETPLACE_NAME]?.source;
+      if (!src) {
+        failures.push(`templates/project.settings.json has no extraKnownMarketplaces.${MARKETPLACE_NAME}.source`);
+      } else if (src.source !== 'git') {
+        failures.push(`templates/project.settings.json uses the "${src.source}" marketplace source form. `
+          + 'Only "git" resolves (NATIVE-CAPABILITIES 6.4); "github" clones over SSH and "url" '
+          + 'expects a remote marketplace.json, so it 404s on a .git address. Every wrong form '
+          + 'installs no plugin, registers ZERO hooks, and reports a clean start.');
+      } else if (src.url !== 'https://github.com/__SYSTEM_REPO__.git') {
+        failures.push('templates/project.settings.json marketplace url is '
+          + `"${src.url}", expected "https://github.com/__SYSTEM_REPO__.git" - `
+          + 'render.mjs substitutes __SYSTEM_REPO__ from config.mjs at write time');
+      }
+      if (t.enabledPlugins?.[PLUGIN_ID] !== true) {
+        failures.push(`templates/project.settings.json does not set enabledPlugins["${PLUGIN_ID}"] = true, `
+          + 'so the marketplace resolves and the plugin still never enables');
+      }
+    }
+  }
+}
+
 /* --- text-only source tree -------------------------------------------- */
 /*
  * No file under plugins/ or scripts/ may contain a NUL byte.
@@ -286,8 +410,6 @@ if (!exists(path.join(agentsDir, 'agent-scopes.json'))) {
  * It regressed once already: state.mjs used a literal NUL as the delimiter in
  * a composite key, which silently defeated a `grep -r` audit of this repo.
  */
-const NUL = 0x00;
-const NL = String.fromCharCode(10);
 const nulFiles = [];
 
 function scanForNul(dir) {

@@ -401,7 +401,7 @@ const legalPagesPresent = {
       // worth stating: blocking every build turn on "a lawyer has not read this
       // yet" is the wrong gate in the wrong place. The scaffold ships real draft
       // text, so a new project is green from commit one and the first red is a
-      // real regression. Unreviewed legal text is a RELEASE gate - /mavci:release
+      // real regression. Unreviewed legal text is a RELEASE gate - /mavci-core:release
       // treats this warning as a blocker - and `regulated` projects promote it
       // here too, because there the review must precede the work, not the ship.
       if (REVIEW_MARKER.test(text)) {
@@ -411,7 +411,7 @@ const legalPagesPresent = {
           line: lineOf(text, text.search(REVIEW_MARKER)),
           evidence: `"${slug}" page is still marked REVIEW REQUIRED - no lawyer has reviewed this text`,
           remedy: 'Have the text reviewed, then delete the REVIEW REQUIRED marker. '
-            + 'This blocks /mavci:release until it is done.',
+            + 'This blocks /mavci-core:release until it is done.',
         });
       }
     }

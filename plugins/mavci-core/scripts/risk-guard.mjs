@@ -77,7 +77,7 @@ function readStdin() {
     return JSON.parse(raw);
   } catch (err) {
     confirm(`the tool call could not be read (${err.message}), so the risk policy could not be `
-      + 'applied to it. Approve only if you know what this call does. Run /mavci:doctor.');
+      + 'applied to it. Approve only if you know what this call does. Run /mavci-core:doctor.');
   }
 }
 
@@ -204,7 +204,7 @@ function main() {
     // Money and account-shape changes are never an agent's call.
     if (/__buy_|__create_project|__delete_branch|__pause_project|__restore_project|update_project_deployment_protection|deploy_to_vercel/.test(tool)) {
       deny(`${tool} changes an external account, spends money or deploys. Tier 3: operator only. `
-        + 'Ask the operator to do this, or use /mavci:release for a deploy.');
+        + 'Ask the operator to do this, or use /mavci-core:release for a deploy.');
     }
 
     if (/Supabase__(execute_sql|apply_migration)/.test(tool)) {
@@ -212,13 +212,13 @@ function main() {
         if (typeof sql !== 'string') continue;
         for (const d of DESTRUCTIVE_SQL) {
           if (d.re.test(sql)) deny(`${d.why} is tier 3 and is blocked in every environment, including local. `
-            + 'Write a reversible migration instead, and have the operator apply it through /mavci:release.');
+            + 'Write a reversible migration instead, and have the operator apply it through /mavci-core:release.');
         }
       }
       const ref = ti.project_id ?? ti.project_ref ?? null;
       if (ref && protectedRefs.has(ref)) {
         deny(`this call targets Supabase project "${ref}", which .mavci/project.json marks as protected. `
-          + 'Writing to a protected environment is tier 3: operator only, via /mavci:release.');
+          + 'Writing to a protected environment is tier 3: operator only, via /mavci-core:release.');
       }
       if (!ref && protectedRefs.size) {
         confirm('this SQL call does not name a project ref, and this project has a protected environment. '
@@ -316,7 +316,7 @@ function main() {
           }
           if (state.phase !== 'build') {
             deny(`the project is in the "${state.phase}" phase, so application code is frozen. `
-              + 'Move to the build phase with /mavci:build before changing app code. '
+              + 'Move to the build phase with /mavci-core:build before changing app code. '
               + 'Planning and verification do not edit code - that separation is what keeps a verifier honest.');
           }
         }
@@ -431,7 +431,7 @@ function main() {
       }
       deny(`${h.why} is tier 3: hard-blocked for agents. `
         + (/(--prod|railway up|deploy)/.test(cmd)
-          ? 'Deploys go through /mavci:release, which prints the command for the operator to run.'
+          ? 'Deploys go through /mavci-core:release, which prints the command for the operator to run.'
           : 'If this is genuinely needed, the operator must run it.'));
     }
 
@@ -459,7 +459,7 @@ try {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       systemMessage: `mavci risk guard failed to run (${err.message}). Tier-3 permission deny rules in `
-        + '.claude/settings.json still apply, but the hook layer is down. Run /mavci:doctor.',
+        + '.claude/settings.json still apply, but the hook layer is down. Run /mavci-core:doctor.',
     },
   }));
   process.exit(0);

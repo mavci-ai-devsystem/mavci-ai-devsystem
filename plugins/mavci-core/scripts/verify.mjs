@@ -127,8 +127,8 @@ export async function runChecks(root = projectRoot(), { scope = 'full' } = {}) {
       findings.push({
         check_id: rule.id, severity: 'blocker', path: null, line: null,
         evidence: `check crashed: ${err.message}`,
-        remedy: 'This is a bug in the checker, not in your code. Run /mavci:retro to file it, '
-          + 'or /mavci:waive if you need to proceed now.',
+        remedy: 'This is a bug in the checker, not in your code. Run /mavci-core:retro to file it, '
+          + 'or /mavci-core:waive if you need to proceed now.',
         errored: true,
       });
     }
@@ -270,7 +270,7 @@ async function main() {
 
   if (!exists(abs(root, PATHS.manifest))) {
     if (advisory) return;                       // not a mavci project: stay silent
-    console.error('not a Mavci project: .mavci/project.json not found. Run /mavci:connect first.');
+    console.error('not a Mavci project: .mavci/project.json not found. Run /mavci-core:connect first.');
     process.exit(ci ? 1 : 0);
   }
 

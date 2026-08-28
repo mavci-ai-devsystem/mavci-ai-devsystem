@@ -9,7 +9,7 @@
   "max_turns": 60,
   "_note_max_turns": "60, double the architect. Implementation legitimately needs more turns than planning, and maxTurns is the outer hard cap against a runaway loop - the retry ceiling in control/tasks/<id>.json is the one that carries policy.",
   "native_constraint": false,
-  "description": "Implements a task spec in a Mavci SaaS project. Writes application code, migrations and tests against an existing spec. Use after /mavci:plan has produced a task.",
+  "description": "Implements a task spec in a Mavci SaaS project. Writes application code, migrations and tests against an existing spec. Use after /mavci-core:plan has produced a task.",
   "tools": [
     "Read",
     "Grep",

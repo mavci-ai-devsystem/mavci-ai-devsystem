@@ -5,7 +5,7 @@ export default function Page() {
     <main className="prose mx-auto p-8">
       <h1>Cerez Politikasi</h1>
       {/* REVIEW REQUIRED - draft text. A lawyer must review this before launch.
-          This marker is a warning during development and a blocker at /mavci:release. */}
+          This marker is a warning during development and a blocker at /mavci-core:release. */}
       <h2>Cerez nedir</h2>
       <p>Cerezler, ziyaret ettiginiz siteler tarafindan cihaziniza kaydedilen
       kucuk metin dosyalaridir.</p>

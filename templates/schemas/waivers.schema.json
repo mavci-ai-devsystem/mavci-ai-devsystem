@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "waivers.schema.json",
   "title": "Mavci waivers",
-  "description": "Time-boxed exceptions. Granted only by the operator via /mavci:waive, which sets disable-model-invocation:true so an agent cannot reach it. Critical checks are never waivable.",
+  "description": "Time-boxed exceptions. Granted only by the operator via /mavci-core:waive, which sets disable-model-invocation:true so an agent cannot reach it. Critical checks are never waivable.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "project_id", "waivers"],

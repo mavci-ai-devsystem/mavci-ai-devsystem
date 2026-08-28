@@ -8,7 +8,7 @@
   "color": "cyan",
   "max_turns": 25,
   "native_constraint": true,
-  "description": "Verifies a completed task against its acceptance criteria and the standards checker. Reads and runs, never edits. Use after /mavci:build reports done.",
+  "description": "Verifies a completed task against its acceptance criteria and the standards checker. Reads and runs, never edits. Use after /mavci-core:build reports done.",
   "tools": [
     "Read",
     "Grep",

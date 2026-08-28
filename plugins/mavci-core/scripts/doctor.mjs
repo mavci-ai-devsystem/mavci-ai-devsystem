@@ -25,7 +25,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   PATHS, MIN_NODE_MAJOR, WAIVER_EXPIRY_WARN_DAYS, SYSTEM_REPO, PLUGIN_ID, MARKETPLACE_NAME,
-  CI_TOKEN_SECRET, CI_TOKEN_EXPIRY_WARN_DAYS,
+  CI_TOKEN_SECRET, CI_TOKEN_EXPIRY_WARN_DAYS, COMMAND_PREFIX,
 } from './config.mjs';
 import { abs, exists, readJson, readJsonOrNull, readTextOrNull, todayIso } from './lib/fsx.mjs';
 import {
@@ -63,7 +63,7 @@ function checkNode(out) {
 
 function checkConnected(root, out) {
   if (!exists(abs(root, PATHS.manifest))) {
-    out.push({ status: WARN, text: line(WARN, 'not a Mavci project', 'No .mavci/project.json. Run /mavci:connect for an existing repo, or /mavci:new-project.') });
+    out.push({ status: WARN, text: line(WARN, 'not a Mavci project', 'No .mavci/project.json. Run /mavci-core:connect for an existing repo, or /mavci-core:new-project.') });
     return false;
   }
   out.push({ status: OK, text: line(OK, 'project connected') });
@@ -121,7 +121,7 @@ function checkVersionSkew(root, out, { sync = false } = {}) {
     // version-skew line from the report, and an absent line reads as a pass.
     out.push({ status: WARN, text: line(WARN, 'version skew NOT CHECKED',
       `${PATHS.state} is missing or unreadable, so the installed plugin version cannot be`
-      + ' compared with the tag CI clones.' + '\n         This is unknown, not passing. Run /mavci:connect, then re-run doctor.') });
+      + ' compared with the tag CI clones.' + '\n         This is unknown, not passing. Run /mavci-core:connect, then re-run doctor.') });
     return;
   }
   const recorded = state.plugin_version;
@@ -142,7 +142,7 @@ function checkVersionSkew(root, out, { sync = false } = {}) {
   out.push({
     status: major ? FAIL : WARN,
     text: line(major ? FAIL : WARN, `version skew: installed ${installed}, CI pinned to v${recorded}`,
-      'Local hooks and CI are running different rule sets. Run /mavci:doctor --sync, then commit .mavci/control/state.json.'
+      'Local hooks and CI are running different rule sets. Run /mavci-core:doctor --sync, then commit .mavci/control/state.json.'
       + (major ? ' This is a MAJOR difference, so the gate fails closed until it is resolved.' : '')),
   });
 }
@@ -151,7 +151,7 @@ function checkVersionSkew(root, out, { sync = false } = {}) {
 function checkSettingsDrift(root, out) {
   const projSettings = readJsonOrNull(abs(root, '.claude/settings.json'));
   if (!projSettings) {
-    out.push({ status: WARN, text: line(WARN, 'no .claude/settings.json', 'The tier-3 deny rules are missing. Re-run /mavci:connect.') });
+    out.push({ status: WARN, text: line(WARN, 'no .claude/settings.json', 'The tier-3 deny rules are missing. Re-run /mavci-core:connect.') });
     return;
   }
   const tpl = readJsonOrNull(TEMPLATE_SETTINGS);
@@ -203,20 +203,34 @@ function checkMarketplace(root, out) {
     return;
   }
 
-  // The source must match SYSTEM_REPO EXACTLY, in the HTTPS form. Printing
+  // The source must be the `git` form pointing at SYSTEM_REPO EXACTLY. Printing
   // whatever is there and calling it ok is a fail-open: a marketplace Claude Code
   // cannot resolve means the plugin never installs, so no hook is registered and
   // NOTHING is enforced - the total-enforcement-failure case, reported green.
   //
-  // Two ways to get there, and each names its own fix:
-  //   1. A settings file copied from the template but never filled in, leaving
-  //      the literal __SYSTEM_REPO__ placeholder in the marketplace source.
-  //   2. The `github` source form. It resolves over SSH (Gate 3, 6.18), so it
-  //      works on the machine that wrote it and fails on any machine without an
-  //      SSH key - the worst kind of defect, because it is invisible where it
-  //      was authored.
+  // THREE source forms look plausible and only one works (Gate 3, 6.4):
+  //
+  //   {"source":"git","url":"https://github.com/owner/repo.git"}   <- WORKS
+  //     Cloned over HTTPS through the machine's ordinary git credential helper,
+  //     which is the credential the onboarding protocol already requires.
+  //
+  //   {"source":"github","repo":"owner/repo"}                       <- SSH
+  //     Resolves over SSH. It works on the machine that wrote it and fails on
+  //     any machine with no SSH key loaded - the worst kind of defect, because
+  //     it is invisible where it was authored.
+  //
+  //   {"source":"url","url":"https://github.com/owner/repo.git"}    <- 404
+  //     `url` means "fetch a remote marketplace.json over HTTP", not "clone this
+  //     git remote". Pointed at a .git address it 404s. This one is especially
+  //     dangerous because it is what 0.1.3 and 0.1.4 shipped in the template and
+  //     what doctor itself demanded: a checker that fails every project into the
+  //     broken form is worse than no checker.
+  //
+  // A fourth way in is a settings file copied from the template but never filled
+  // in, leaving the literal __SYSTEM_REPO__ placeholder in the source.
   const src = mk.source ?? {};
   const expected = `https://github.com/${SYSTEM_REPO}.git`;
+  const fix = `Fix: "source": { "source": "git", "url": "${expected}" }  (or re-run ${COMMAND_PREFIX}connect)`;
   const shown = src.url ?? src.repo;
 
   if (typeof shown === 'string' && PLACEHOLDER_RE.test(shown)) {
@@ -225,7 +239,7 @@ function checkMarketplace(root, out) {
       text: line(FAIL, `marketplace ${MARKETPLACE_NAME} still contains a template placeholder: "${shown}"`,
         'Settings were copied but never filled in. Claude Code cannot resolve this marketplace,'
         + '\n         so the plugin never installs, no hook is registered, and nothing is enforced.'
-        + '\n         Re-run /mavci:connect.'),
+        + `\n         ${fix}`),
     });
     return;
   }
@@ -237,28 +251,42 @@ function checkMarketplace(root, out) {
         'That form resolves over SSH. On any machine without an SSH key loaded the clone'
         + '\n         fails, the plugin never installs, and nothing is enforced there - while it keeps'
         + '\n         working on the machine that wrote it.'
-        + `\n         Fix: "source": { "source": "url", "url": "${expected}" }  (or re-run /mavci:connect)`),
+        + `\n         ${fix}`),
     });
     return;
   }
 
-  if (src.source !== 'url' || src.url !== expected) {
+  if (src.source === 'url') {
     out.push({
       status: FAIL,
-      text: line(FAIL, `marketplace ${MARKETPLACE_NAME} points at ${shown === undefined ? '(no source url)' : `"${shown}"`}, not ${expected}`,
-        'Claude Code cannot resolve this marketplace, so the plugin never installs,'
-        + '\n         no hook is registered, and nothing is enforced at all. Re-run /mavci:connect.'),
+      text: line(FAIL, `marketplace ${MARKETPLACE_NAME} uses the "url" source form`,
+        '"url" means "fetch a remote marketplace.json over HTTP", not "clone this git remote".'
+        + '\n         Against a .git address it 404s, so the marketplace never resolves, the plugin never'
+        + '\n         installs, no hook is registered, and nothing is enforced.'
+        + `\n         ${fix}`),
     });
     return;
   }
 
-  out.push({ status: OK, text: line(OK, `marketplace ${MARKETPLACE_NAME} -> ${expected}`) });
+  if (src.source !== 'git' || src.url !== expected) {
+    out.push({
+      status: FAIL,
+      text: line(FAIL, `marketplace ${MARKETPLACE_NAME} points at ${shown === undefined ? '(no source url)' : `"${shown}"`}`
+        + `${src.source === undefined ? ' with no source form' : ` via source form "${src.source}"`}, not ${expected} via "git"`,
+        'Claude Code cannot resolve this marketplace, so the plugin never installs,'
+        + '\n         no hook is registered, and nothing is enforced at all.'
+        + `\n         ${fix}`),
+    });
+    return;
+  }
+
+  out.push({ status: OK, text: line(OK, `marketplace ${MARKETPLACE_NAME} -> ${expected} (source form "git")`) });
 }
 
 function checkBaseline(root, out) {
   const b = readJsonOrNull(abs(root, PATHS.baseline));
   if (!b) {
-    out.push({ status: WARN, text: line(WARN, 'no baseline', 'A greenfield project has an empty baseline; a connected repo should have one. Run /mavci:connect.') });
+    out.push({ status: WARN, text: line(WARN, 'no baseline', 'A greenfield project has an empty baseline; a connected repo should have one. Run /mavci-core:connect.') });
     return;
   }
   const n = b.entries.length;
@@ -269,7 +297,7 @@ function checkBaseline(root, out) {
   out.push({
     status: WARN,
     text: line(WARN, `baseline debt: ${n} pre-existing violation(s)`,
-      top.join('\n         ') + '\n         These never block. They shrink when you fix them: /mavci:verify prunes automatically.'),
+      top.join('\n         ') + '\n         These never block. They shrink when you fix them: /mavci-core:verify prunes automatically.'),
   });
 }
 
@@ -467,7 +495,7 @@ function checkLegalWatermarks(root, out) {
       + '\n         These carry a REVIEW REQUIRED watermark. The checker verifies the required'
       + '\n         sections are present; it cannot judge legal sufficiency and does not claim to.'
       + '\n         DO NOT SHIP TO PRODUCTION until a lawyer has reviewed the text and the'
-      + '\n         watermark is removed. /mavci:release treats this as a blocker.'),
+      + '\n         watermark is removed. /mavci-core:release treats this as a blocker.'),
   });
 }
 
@@ -491,7 +519,7 @@ function findFile(root, re) {
 function checkLessons(root, out) {
   const p = abs(root, `${PATHS.lessons}/pending-system-change.md`);
   if (exists(p)) {
-    out.push({ status: WARN, text: line(WARN, 'a system change is queued and unapplied', `${PATHS.lessons}/pending-system-change.md — apply it in the system repo with /mavci:retro --apply, or delete it.`) });
+    out.push({ status: WARN, text: line(WARN, 'a system change is queued and unapplied', `${PATHS.lessons}/pending-system-change.md — apply it in the system repo with /mavci-core:retro --apply, or delete it.`) });
   }
 }
 
