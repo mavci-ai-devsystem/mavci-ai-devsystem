@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "verdict.schema.json",
+  "title": "Mavci verification verdict",
+  "description": "Write-once, never deleted. The audit trail. Every string passes through redact.mjs before it is written.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "project_id", "run_at", "verdict", "plugin_version", "checks", "summary"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "project_id": { "type": "string" },
+    "task_id": { "type": ["string", "null"], "pattern": "^[0-9]{4}$" },
+    "attempt": { "type": ["integer", "null"], "minimum": 1 },
+    "run_at": { "type": "string", "format": "date-time" },
+    "verdict": { "type": "string", "enum": ["pass", "fail"] },
+    "plugin_version": { "type": "string" },
+    "scope": { "type": "string", "enum": ["full", "changed"] },
+    "checks": { "type": "array", "items": { "$ref": "#/$defs/check" } },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pass", "fail", "waived", "baselined", "error", "blockers"],
+      "properties": {
+        "pass": { "type": "integer", "minimum": 0 },
+        "fail": { "type": "integer", "minimum": 0 },
+        "waived": { "type": "integer", "minimum": 0 },
+        "baselined": { "type": "integer", "minimum": 0 },
+        "error": { "type": "integer", "minimum": 0 },
+        "blockers": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "$defs": {
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check_id", "status", "severity"],
+      "properties": {
+        "check_id": { "type": "string", "pattern": "^[a-z0-9]+([.][a-z0-9_]+)+$" },
+        "status": { "type": "string", "enum": ["pass", "fail", "waived", "baselined", "error"] },
+        "severity": { "type": "string", "enum": ["critical", "blocker", "warning", "info"] },
+        "path": { "type": ["string", "null"] },
+        "line": { "type": ["integer", "null"], "minimum": 1 },
+        "evidence": { "type": ["string", "null"], "maxLength": 500 },
+        "remedy": { "type": ["string", "null"], "maxLength": 300 }
+      }
+    }
+  }
+}

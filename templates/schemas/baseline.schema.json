@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "baseline.schema.json",
+  "title": "Mavci baseline",
+  "description": "Pre-existing violations recorded at /mavci:connect. Entries may be REMOVED (baseline-prune) but never ADDED after baseline-init. New files are never baselined, so the ratchet turns one way only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "project_id", "created", "created_by_plugin_version", "entries"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "project_id": { "type": "string" },
+    "created": { "type": "string", "format": "date-time" },
+    "created_by_plugin_version": { "type": "string" },
+    "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check_id", "path", "first_seen"],
+      "properties": {
+        "check_id": { "type": "string", "pattern": "^[a-z0-9]+([.][a-z0-9_]+)+$" },
+        "path": { "type": "string", "pattern": "^[^/].*$" },
+        "first_seen": { "type": "string", "format": "date-time" },
+        "note": { "type": "string", "maxLength": 300 }
+      }
+    }
+  }
+}

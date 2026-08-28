@@ -1,0 +1,49 @@
+name: validate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Generated agent files must match a fresh render. This is what stops a
+      # hand-edit to agents/*.md from surviving, which is the whole point of the
+      # generator (ARCHITECTURE section 5).
+      - name: Agents are up to date
+        run: node plugins/mavci-core/scripts/build-agents.mjs --check
+
+      - name: Schemas parse and use only supported keywords
+        run: node scripts/ci/check-schemas.mjs
+
+      - name: Redaction self-test
+        run: node plugins/mavci-core/scripts/redact.mjs --selftest
+
+      # Every rule must fail its bad/ fixture and pass its good/ fixture.
+      # A rule with no fixture pair fails this job: an unfixtured rule can
+      # regress silently, and regressing silently is how enforcement decays.
+      - name: Rule fixtures
+        run: node scripts/ci/check-fixtures.mjs
+
+      - name: Risk guard behaves
+        run: node scripts/ci/check-risk-guard.mjs
+
+      # Every case here was once a SILENT bug. Fail-closed paths, the fast path,
+      # the loop ceiling and the timeout sentinel are all unobservable in normal
+      # use, so they are only ever as good as this job.
+      - name: Gate fails closed
+        run: node scripts/ci/check-gate.mjs
+
+      - name: Plugin structure
+        run: node scripts/ci/check-plugin.mjs
+
+      # A __TOKEN__ reaching a generated project is a build failure: __PROJECT_ID__
+      # in package.json makes `npm ci` fail, so a fresh scaffold is not green.
+      - name: No template placeholder survives a render
+        run: node scripts/ci/check-placeholders.mjs

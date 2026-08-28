@@ -1,0 +1,50 @@
+# THE ESCAPE-HATCH PROOF (ARCHITECTURE section 11).
+#
+# Everything this system produces must remain usable without the system.
+# This job runs the checker, the state validator and the redactor in a container
+# where Claude Code is NOT installed. If any of them needs Claude Code, or an npm
+# dependency, the job fails.
+#
+# The escape hatch is a passing test, not a promise.
+
+name: selftest
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  no-claude-code:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Prove Claude Code is absent
+        run: |
+          if command -v claude >/dev/null 2>&1; then
+            echo "::error::claude is on PATH; this job must prove the tooling runs without it"
+            exit 1
+          fi
+          echo "claude is not installed - good"
+
+      - name: Prove there are no npm dependencies
+        run: |
+          if [ -f package.json ] || [ -f package-lock.json ] || [ -d node_modules ]; then
+            echo "::error::the system repo must have no npm dependency surface"
+            exit 1
+          fi
+          echo "no package.json, no lockfile, no node_modules - good"
+
+      - name: Scaffold a project and verify it, using nothing but node
+        run: node scripts/ci/check-escape-hatch.mjs
+
+      - name: Agent definitions are plain markdown usable without the plugin
+        run: |
+          for f in plugins/mavci-core/agents/*.md; do
+            head -1 "$f" | grep -q -- '---' || { echo "::error::$f has no YAML frontmatter"; exit 1; }
+            grep -q '^name:' "$f" || { echo "::error::$f has no name field"; exit 1; }
+          done
+          echo "agent definitions are portable: cp -r agents .claude/agents works"

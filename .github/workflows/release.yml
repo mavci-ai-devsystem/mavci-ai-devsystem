@@ -1,0 +1,46 @@
+# Release gate.
+#
+# Every project's CI clones the system at tag `v<state.json.plugin_version>`
+# (blocker B4). That only works if the tag and the manifest version agree, so
+# this job refuses a tag that does not match plugin.json.
+#
+# A mismatch here would mean projects silently pin to a tag that does not exist,
+# and their CI would fail with a confusing checkout error rather than a clear one.
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  tag-matches-manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Tag must equal plugin.json version
+        run: |
+          manifest=$(node -p "require('./plugins/mavci-core/.claude-plugin/plugin.json').version")
+          tag="${GITHUB_REF_NAME#v}"
+          echo "plugin.json: $manifest"
+          echo "git tag:     $tag"
+          if [ "$manifest" != "$tag" ]; then
+            echo "::error::tag v$tag does not match plugin.json version $manifest."
+            echo "::error::Projects pin CI to the tag, so a mismatch breaks their builds. Fix one and re-tag."
+            exit 1
+          fi
+
+      - name: Full validation must pass before a release exists
+        run: |
+          node plugins/mavci-core/scripts/build-agents.mjs --check
+          node plugins/mavci-core/scripts/redact.mjs --selftest
+          node scripts/ci/check-schemas.mjs
+          node scripts/ci/check-fixtures.mjs
+          node scripts/ci/check-risk-guard.mjs
+          node scripts/ci/check-gate.mjs
+          node scripts/ci/check-escape-hatch.mjs

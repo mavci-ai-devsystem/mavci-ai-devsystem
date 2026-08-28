@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-report.schema.json",
+  "title": "Mavci agent final report",
+  "description": "Every agent ends its turn with exactly this object in a fenced JSON block. Contract section 4.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["agent", "status"],
+  "properties": {
+    "agent": { "type": "string" },
+    "task_id": { "type": ["string", "null"], "pattern": "^[0-9]{4}$" },
+    "status": { "type": "string", "enum": ["done", "failed", "blocked", "escalated"] },
+    "attempt": { "type": ["integer", "null"], "minimum": 1 },
+    "artifacts": { "type": "array", "items": { "type": "string" } },
+    "checks_run": { "type": "array", "items": { "type": "string" } },
+    "failures": { "type": "array", "items": { "$ref": "#/$defs/failure" } },
+    "blocked_by": { "type": ["string", "null"] },
+    "suggested_next": { "type": ["string", "null"], "maxLength": 500 },
+    "escalate": { "type": "boolean" }
+  },
+  "$defs": {
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check_id", "evidence"],
+      "properties": {
+        "check_id": { "type": "string" },
+        "evidence": { "type": "string", "maxLength": 500 },
+        "attempted_fix": { "type": ["string", "null"], "maxLength": 300 },
+        "result": { "type": ["string", "null"], "maxLength": 300 }
+      }
+    }
+  }
+}

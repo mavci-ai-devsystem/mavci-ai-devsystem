@@ -1,0 +1,92 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell|Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/risk-guard.mjs"],
+            "timeout": 20,
+            "statusMessage": "mavci: risk policy"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__claude_ai_Supabase__.*|mcp__claude_ai_Vercel__.*|mcp__.*Supabase.*|mcp__.*Vercel.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/risk-guard.mjs"],
+            "timeout": 20,
+            "statusMessage": "mavci: risk policy"
+          }
+        ]
+      }
+    ],
+
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs", "--mark-dirty"],
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs", "--changed", "--advisory"],
+            "async": true,
+            "timeout": 60,
+            "statusMessage": "mavci: checking standards"
+          },
+          {
+            "type": "command",
+            "if": "Edit(./.mavci/**)",
+            "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/redact.mjs", "--sweep"],
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"],
+            "timeout": 30,
+            "statusMessage": "mavci: standards gate"
+          }
+        ]
+      }
+    ],
+
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"],
+            "timeout": 30,
+            "statusMessage": "mavci: standards gate"
+          }
+        ]
+      }
+    ],
+
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/doctor.mjs", "--preflight"],
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

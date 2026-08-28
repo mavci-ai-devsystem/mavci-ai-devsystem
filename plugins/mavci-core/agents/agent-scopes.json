@@ -1,0 +1,55 @@
+{
+  "mavci-architect": {
+    "phase": "plan",
+    "allow": [
+      ".mavci/tasks/**",
+      ".mavci/decisions/**"
+    ],
+    "deny": [
+      "app/**",
+      "src/**",
+      "lib/**",
+      "components/**",
+      "supabase/**",
+      ".env*",
+      ".claude/**",
+      ".mavci/control/**",
+      ".mavci/project.json"
+    ],
+    "native_constraint": false
+  },
+  "mavci-builder": {
+    "phase": "build",
+    "allow": [
+      "app/**",
+      "src/**",
+      "lib/**",
+      "components/**",
+      "supabase/**",
+      "public/**",
+      "tests/**",
+      "*.ts",
+      "*.tsx",
+      "*.json",
+      "*.md",
+      ".mavci/tasks/**",
+      ".mavci/lessons/**"
+    ],
+    "deny": [
+      ".mavci/control/**",
+      ".mavci/project.json",
+      ".env*",
+      ".claude/**",
+      ".github/workflows/**"
+    ],
+    "native_constraint": false
+  },
+  "mavci-verifier": {
+    "phase": "verify",
+    "allow": [],
+    "deny": [
+      "**"
+    ],
+    "native_constraint": true
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "task.schema.json",
+  "title": "Mavci task (agent-writable surface)",
+  "description": "Descriptive only. Agents may write this. Nothing here governs an agent - when it disagrees with the control copy, the control copy wins and doctor reports the divergence.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "project_id", "title", "spec"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "id": { "type": "string", "pattern": "^[0-9]{4}$" },
+    "project_id": { "type": "string" },
+    "title": { "type": "string", "minLength": 3, "maxLength": 200 },
+    "spec": { "type": "string" },
+    "artifacts": { "type": "array", "items": { "type": "string" } },
+    "notes": { "type": "array", "items": { "type": "string", "maxLength": 500 } }
+  }
+}

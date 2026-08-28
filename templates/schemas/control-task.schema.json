@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "control-task.schema.json",
+  "title": "Mavci control task record",
+  "description": "CONTROL PLANE. The authoritative half of a task: phase, status, attempts, ceiling. The agent this governs cannot edit it - that is blocker B1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "project_id", "phase", "status", "attempts", "max_attempts", "created", "updated"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "id": { "type": "string", "pattern": "^[0-9]{4}$" },
+    "project_id": { "type": "string" },
+    "phase": { "type": "string", "enum": ["plan", "build", "verify", "release"] },
+    "status": { "type": "string", "enum": ["pending", "in_progress", "done", "failed", "blocked"] },
+    "attempts": { "type": "integer", "minimum": 0 },
+    "max_attempts": { "type": "integer", "minimum": 1, "maximum": 10 },
+    "owner_agent": { "type": ["string", "null"] },
+    "blocked_by": { "type": ["string", "null"], "maxLength": 200 },
+    "verdicts": { "type": "array", "items": { "type": "string" } },
+    "created": { "type": "string", "format": "date-time" },
+    "updated": { "type": "string", "format": "date-time" }
+  }
+}

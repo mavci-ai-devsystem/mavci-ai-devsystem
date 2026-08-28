@@ -1,0 +1,97 @@
+# Mavci standards verification.
+# Written into every project by /mavci:new-project and /mavci:connect.
+#
+# Two defects this file exists to avoid (blocker B4):
+#   1. The system repo is PRIVATE, so a bare `git clone` fails. It needs a token.
+#   2. Cloning `main` would pin CI to whatever HEAD happens to be, while the local
+#      hook runs the INSTALLED plugin version - so CI and local could apply
+#      different rule sets with no visible cause. CI clones the exact tag recorded
+#      in .mavci/control/state.json, which is a committed field.
+#
+# ONE-TIME SETUP PER REPOSITORY (or once at the organisation level):
+#
+#   1. Create a fine-grained personal access token at
+#      https://github.com/settings/personal-access-tokens/new
+#        Resource owner:      mavci-ai-devsystem
+#        Repository access:   Only select repositories -> mavci-ai-devsystem
+#        Repository permissions: Contents -> Read-only        (nothing else)
+#        Expiration:          set one, and record the date - see step 3
+#
+#   2. Add it as a secret named MAVCI_TOKEN, once per project repository:
+#        gh secret set MAVCI_TOKEN --body "<token>"
+#
+#      There is no organisation-wide shortcut: mavci-ai-devsystem is a USER
+#      account, not a GitHub organisation, and `gh secret set --org` only works
+#      against an organisation. Every project repo needs the secret set on it.
+#
+#   3. Record the expiry in .mavci/project.json so /mavci:doctor can warn you
+#      before it lapses. GitHub does not expose a secret's expiry through any
+#      API, so this date is the only thing that can be checked:
+#        "ci": { "token_secret": "MAVCI_TOKEN", "token_expires": "2027-08-28" }
+#
+# A missing or expired token fails at the checkout step below, which reads as a
+# confusing "repository not found" rather than "your PAT lapsed". The named step
+# and the doctor warning exist so that does not cost you an afternoon.
+
+name: mavci-verify
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Resolve the pinned system version
+        id: mavci
+        run: |
+          if [ ! -f .mavci/control/state.json ]; then
+            echo "::error::.mavci/control/state.json is missing. Run /mavci:connect and commit .mavci/."
+            exit 1
+          fi
+          v=$(node -p "require('./.mavci/control/state.json').plugin_version")
+          echo "ref=v$v" >> "$GITHUB_OUTPUT"
+          echo "Mavci system pinned to v$v"
+
+      - name: Check the system token is present
+        run: |
+          if [ -z "${{ secrets.MAVCI_TOKEN }}" ]; then
+            echo "::error::MAVCI_TOKEN is not set for this repository."
+            echo "::error::It is a fine-grained PAT with Contents:read-only on"
+            echo "::error::mavci-ai-devsystem/mavci-ai-devsystem, and CI cannot fetch the"
+            echo "::error::standards checker without it. See the header of this workflow file."
+            exit 1
+          fi
+
+      # Pinned to the tag, never main HEAD, so CI and the local Stop hook always
+      # run the identical rule set (blocker B4).
+      - name: Fetch the Mavci system at the pinned tag
+        uses: actions/checkout@v4
+        with:
+          repository: mavci-ai-devsystem/mavci-ai-devsystem
+          ref: ${{ steps.mavci.outputs.ref }}
+          token: ${{ secrets.MAVCI_TOKEN }}
+          path: .mavci-system
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # The same checker the local Stop hook runs, at the same version.
+      # No Claude Code involved - this is the escape hatch working for real.
+      - name: Standards
+        run: node .mavci-system/plugins/mavci-core/scripts/gate.mjs --ci
+
+      - name: Install
+        run: npm ci
+
+      - name: Types
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "integrity.schema.json",
+  "title": "Mavci control-plane integrity and gate heartbeat",
+  "description": "control_hash detects control-plane mutation through ANY channel, including a subprocess the Edit deny rule cannot stop. last_gate is the heartbeat that detects a Stop hook which is not running at all.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "control_hash", "sealed_at", "files"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "control_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "sealed_at": { "type": "string", "format": "date-time" },
+    "sealed_by_plugin_version": { "type": "string" },
+    "files": { "type": "array", "items": { "type": "string" } },
+    "last_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prompt_id": { "type": ["string", "null"] },
+        "session_id": { "type": ["string", "null"] },
+        "at": { "type": "string", "format": "date-time" },
+        "verdict": { "type": "string", "enum": ["pass", "fail"] },
+        "continues": { "type": "integer", "minimum": 0 },
+        "plugin_version": { "type": "string" }
+      }
+    }
+  }
+}

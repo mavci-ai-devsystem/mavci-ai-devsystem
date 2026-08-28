@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "waivers.schema.json",
+  "title": "Mavci waivers",
+  "description": "Time-boxed exceptions. Granted only by the operator via /mavci:waive, which sets disable-model-invocation:true so an agent cannot reach it. Critical checks are never waivable.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "project_id", "waivers"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "project_id": { "type": "string" },
+    "waivers": { "type": "array", "items": { "$ref": "#/$defs/waiver" } }
+  },
+  "$defs": {
+    "waiver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check_id", "path", "reason", "approved_by", "approved", "expires", "created_by_plugin_version"],
+      "properties": {
+        "check_id": { "type": "string", "pattern": "^[a-z0-9]+([.][a-z0-9_]+)+$" },
+        "path": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 20, "maxLength": 500 },
+        "approved_by": { "type": "string", "minLength": 1 },
+        "approved": { "type": "string", "format": "date" },
+        "expires": { "type": "string", "format": "date" },
+        "created_by_plugin_version": { "type": "string" }
+      }
+    }
+  }
+}

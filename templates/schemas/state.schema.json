@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "state.schema.json",
+  "title": "Mavci control state",
+  "description": "CONTROL PLANE. Written only by state.mjs. Agents are denied Edit on .mavci/control/**.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "project_id", "phase", "next_task_id", "updated", "plugin_version"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "project_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,63}$" },
+    "phase": { "type": "string", "enum": ["plan", "build", "verify", "release"] },
+    "active_task": { "type": ["string", "null"], "pattern": "^[0-9]{4}$" },
+    "next_task_id": { "type": "integer", "minimum": 1 },
+    "baseline_debt": { "type": "integer", "minimum": 0 },
+    "updated": { "type": "string", "format": "date-time" },
+    "plugin_version": { "type": "string", "pattern": "^[0-9]+[.][0-9]+[.][0-9]+$" }
+  }
+}

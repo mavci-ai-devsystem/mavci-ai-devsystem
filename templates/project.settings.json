@@ -1,0 +1,109 @@
+{
+  "$comment": "CANONICAL RISK POLICY - see ARCHITECTURE.md section 7 for what each group means and why. Written into every project by /mavci:new-project and /mavci:connect; __SYSTEM_REPO__ is substituted at write time from scripts/config.mjs. /mavci:doctor diffs a project's copy against this file: a missing deny rule is a FAIL, an extra allow rule is a WARNING (on Windows, 'Yes, and don't ask again' writes into this committed file rather than settings.local.json). Rule arrays contain ONLY rules - a comment string inside them would be parsed as a permission rule and rejected at startup.",
+
+  "extraKnownMarketplaces": {
+    "mavci": {
+      "source": { "source": "github", "repo": "__SYSTEM_REPO__" }
+    }
+  },
+  "enabledPlugins": {
+    "mavci-core@mavci": true
+  },
+
+  "permissions": {
+    "disableBypassPermissionsMode": "disable",
+
+    "allow": [
+      "Read(./**)",
+      "Edit(./app/**)",
+      "Edit(./src/**)",
+      "Edit(./lib/**)",
+      "Edit(./components/**)",
+      "Edit(./public/**)",
+      "Edit(./tests/**)",
+      "Edit(./supabase/migrations/**)",
+      "Edit(./.mavci/tasks/**)",
+      "Edit(./.mavci/decisions/**)",
+      "Edit(./.mavci/lessons/**)",
+      "Bash(npm run *)",
+      "Bash(npm test *)",
+      "Bash(npx tsc *)",
+      "Bash(npx next *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git switch -c *)",
+      "Bash(git checkout -b *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git status *)",
+      "Bash(supabase start*)",
+      "Bash(supabase stop*)",
+      "Bash(supabase status*)",
+      "Bash(supabase migration new *)",
+      "Bash(supabase db reset*)",
+      "Bash(supabase gen types *)"
+    ],
+
+    "ask": [
+      "Edit(./.env)",
+      "Edit(./.env.*)",
+      "Edit(./.claude/settings.json)",
+      "Edit(./.claude/settings.local.json)",
+      "Edit(./.mavci/project.json)",
+      "Edit(./.github/workflows/**)",
+      "Edit(./next.config.js)",
+      "Edit(./next.config.mjs)",
+      "Edit(./next.config.ts)",
+      "Bash(npm install *)",
+      "Bash(npm i *)",
+      "Bash(npm uninstall *)",
+      "Bash(pnpm add *)",
+      "Bash(yarn add *)",
+      "Bash(git push *)",
+      "Bash(gh pr *)",
+      "Bash(gh release *)"
+    ],
+
+    "deny": [
+      "Edit(./.mavci/control/**)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./**/*.pem)",
+      "Read(./**/*.key)",
+      "Read(./**/id_rsa*)",
+      "Read(./**/.npmrc)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git reset --hard*)",
+      "Bash(git branch -D*)",
+      "Bash(git push origin --delete*)",
+      "Bash(git clean -f*)",
+      "Bash(git clean -d*)",
+      "Bash(rm -rf *)",
+      "Bash(rm -r *)",
+      "Bash(rm -fr *)",
+      "Bash(gh repo delete*)",
+      "Bash(gh repo edit*)",
+      "Bash(vercel --prod*)",
+      "Bash(vercel deploy --prod*)",
+      "Bash(railway up*)",
+      "Bash(npm publish*)",
+      "Bash(supabase db push*)",
+      "mcp__claude_ai_Supabase__execute_sql",
+      "mcp__claude_ai_Supabase__apply_migration",
+      "mcp__claude_ai_Supabase__create_project",
+      "mcp__claude_ai_Supabase__pause_project",
+      "mcp__claude_ai_Supabase__restore_project",
+      "mcp__claude_ai_Supabase__delete_branch",
+      "mcp__claude_ai_Supabase__merge_branch",
+      "mcp__claude_ai_Vercel__deploy_to_vercel",
+      "mcp__claude_ai_Vercel__create_git_project",
+      "mcp__claude_ai_Vercel__pause_project",
+      "mcp__claude_ai_Vercel__update_project_deployment_protection",
+      "mcp__claude_ai_Vercel__buy_domain",
+      "mcp__claude_ai_Vercel__buy_pro",
+      "mcp__claude_ai_Vercel__buy_credits",
+      "mcp__claude_ai_Vercel__buy_addon"
+    ]
+  }
+}

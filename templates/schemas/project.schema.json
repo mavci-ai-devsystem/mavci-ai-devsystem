@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "project.schema.json",
+  "title": "Mavci project manifest",
+  "description": "The single declaration a project makes about itself. Everything else in the system reads it. Operator surface: tier-2 confirm for a human, denied to agents. Waivers deliberately do NOT live here - they are control plane (ARCHITECTURE 3.1).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "project_id", "display_name", "created",
+    "stack", "tenancy", "deploy", "environments", "env_sources",
+    "risk_tier", "compliance", "agents", "standards"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schema_version": { "type": "integer", "const": 1 },
+    "project_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,63}$" },
+    "display_name": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "created": { "type": "string", "format": "date-time" },
+
+    "stack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["framework", "language", "db", "package_manager"],
+      "properties": {
+        "framework": { "type": "string", "enum": ["nextjs-14-app-router", "nextjs-15-app-router"] },
+        "language": { "type": "string", "enum": ["typescript", "javascript"] },
+        "db": { "type": "string", "enum": ["supabase-postgres", "none"] },
+        "auth": { "type": "string", "enum": ["supabase-auth", "none"] },
+        "payments": { "type": "string", "enum": ["stripe", "none"] },
+        "email": { "type": "string", "enum": ["resend", "none"] },
+        "ai": { "type": "string", "enum": ["anthropic", "none"] },
+        "package_manager": { "type": "string", "enum": ["npm", "pnpm", "yarn", "bun"] }
+      }
+    },
+
+    "tenancy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model"],
+      "properties": {
+        "model": { "type": "string", "enum": ["shared-schema-rls", "schema-per-tenant", "single-tenant"] },
+        "tenant_column": { "type": "string", "pattern": "^[a-z_][a-z0-9_]*$" }
+      }
+    },
+
+    "deploy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "prod_branch", "site_url"],
+      "properties": {
+        "target": { "type": "string", "enum": ["vercel", "railway", "none"] },
+        "prod_branch": { "type": "string", "minLength": 1 },
+        "preview_branch_pattern": { "type": "string" },
+        "site_url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://",
+          "description": "Public origin of the deployed site, no trailing slash. Substituted into app/robots.ts and app/sitemap.ts by render.mjs; without it those files ship a literal __SITE_URL__."
+        }
+      }
+    },
+
+    "environments": {
+      "type": "object",
+      "description": "Keys are environment names. `protected: true` is what risk-guard.mjs compares an MCP call's project ref against before hard-blocking a prod DB write.",
+      "properties": {
+        "prod": { "$ref": "#/$defs/environment" },
+        "staging": { "$ref": "#/$defs/environment" },
+        "local": { "$ref": "#/$defs/environment" }
+      }
+    },
+
+    "env_sources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required_keys", "never_read_by_agents"],
+      "properties": {
+        "runtime": { "type": "string", "enum": ["vercel-project-env", "railway-env", "dotenv"] },
+        "local_file": { "type": "string" },
+        "required_keys": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+          "description": "Read by redact.mjs to build the class-3 redaction value set (ARCHITECTURE 4.4). This is not decorative."
+        },
+        "never_read_by_agents": { "type": "boolean", "const": true }
+      }
+    },
+
+    "risk_tier": { "type": "string", "enum": ["sandbox", "standard", "regulated"] },
+
+    "compliance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["jurisdictions", "required_pages", "locales", "entity"],
+      "properties": {
+        "jurisdictions": { "type": "array", "items": { "type": "string", "pattern": "^[A-Z]{2}$" } },
+        "required_pages": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["privacy", "terms", "kvkk", "cookies", "contact"] }
+        },
+        "locales": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[a-z]{2}$" } },
+        "entity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["legal_name", "address", "email", "mersis", "kep"],
+          "description": "Per-project so no shared file needs editing when trade details change. Required: render.mjs substitutes these into the scaffolded legal and contact pages, and a missing one would publish an empty field on a page that makes a legal claim.",
+          "properties": {
+            "legal_name": { "type": "string" },
+            "address": { "type": "string" },
+            "email": { "type": "string" },
+            "mersis": { "type": "string" },
+            "kep": { "type": "string" }
+          }
+        },
+        "ads": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "networks": { "type": "array", "items": { "type": "string" } },
+            "policy_check": { "type": "boolean" }
+          }
+        }
+      }
+    },
+
+    "agents": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "array", "items": { "type": "string", "pattern": "^mavci-[a-z]+$" } },
+        "overrides": { "type": "object" }
+      }
+    },
+
+    "standards": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["packs"],
+      "properties": {
+        "packs": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+      }
+    },
+
+    "ci": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "GitHub Actions needs a token to clone the private system repo. GitHub exposes no API for a secret's expiry, so the date recorded here is the only thing /mavci:doctor can warn on. It is a date, not a secret - never put the token itself in this file.",
+      "properties": {
+        "token_secret": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "description": "Name of the Actions secret holding the fine-grained PAT. Defaults to MAVCI_TOKEN."
+        },
+        "token_expires": {
+          "type": "string",
+          "format": "date",
+          "description": "Expiry date of that PAT, YYYY-MM-DD. doctor warns 30 days out."
+        },
+        "token_scope": {
+          "type": "string",
+          "enum": ["repository", "organization"],
+          "description": "Where the secret lives, so doctor looks in the right place."
+        }
+      }
+    },
+
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "exclude_paths": { "type": "array", "items": { "type": "string" } },
+        "public_routes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "API routes intentionally reachable without auth."
+        }
+      }
+    }
+  },
+
+  "$defs": {
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protected"],
+      "properties": {
+        "supabase_ref": { "type": "string" },
+        "vercel_project": { "type": "string" },
+        "railway_project": { "type": "string" },
+        "protected": { "type": "boolean" }
+      }
+    }
+  }
+}

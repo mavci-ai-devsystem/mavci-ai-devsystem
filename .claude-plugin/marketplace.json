@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "mavci",
+  "description": "Mavci AI Development System - reusable agents, standards enforcement and risk policy for multi-tenant SaaS on Next.js + Supabase + Stripe.",
+  "owner": {
+    "name": "Mehmet Avci"
+  },
+  "plugins": [
+    {
+      "name": "mavci-core",
+      "source": "./plugins/mavci-core",
+      "description": "Agents, standards checker, risk guard and project scaffolding for Mavci SaaS projects."
+    }
+  ]
+}
