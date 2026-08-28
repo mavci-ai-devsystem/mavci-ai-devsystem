@@ -191,9 +191,36 @@ and prints the working form.
 2. `node scripts/build-agents.mjs` if an agent changed. CI verifies generated files match.
 3. Bump `version` in `plugin.json` **and push a matching git tag `v<version>`**. `release.yml` fails if version and tag disagree — the tag is what CI in every project clones (section 6.7).
 4. Push.
-5. In any project, any machine: `/plugin marketplace update`, `/plugin update mavci-core@mavci`, then `/mavci-core:doctor --sync` to record the new version in `state.json.plugin_version` so CI follows.
+5. In any project, any machine: `/plugin marketplace update`, `/plugin update mavci-core@mavci`, **restart the session**, then `/mavci-core:doctor --sync` to record the new version in `state.json.plugin_version` so CI follows.
 
 No project file changes except that one recorded version field, which is the point: local and CI can never silently diverge.
+
+**Evidence status of step 5, stated exactly.** Gate 4 (2026-08-28) verified the
+first half and inferred the second, and the difference matters because the whole
+propagation story rests on it.
+
+- **Verified.** The update genuinely fetches, including into a shallow depth-1
+  clone. The clone reflog shows `fetch --depth 1 origin main: forced-update`
+  followed by `branch: Reset to FETCH_HEAD` — an ancestry-independent path with
+  no fast-forward to refuse, so a shallow clone is not stranded at its clone
+  depth. Registration from `settings.json` alone, with no `/plugin install`,
+  is verified end to end (6.20).
+- **Inferred, NOT verified.** That the session must be **restarted** before the
+  new version is loaded. Plugins appear to resolve at session start, so a running
+  session keeps the version it already loaded. This is inferred from the Gate 4
+  cache timeline (0.1.4 unpacked 19:13, 0.1.5 at 19:16, 0.1.6 at 19:19) and was
+  never tested directly. **It is verified during the Gate 4 re-run**, which
+  starts from a fresh session with a correct source form — until that run
+  passes, treat the restart as a precaution of unknown necessity rather than an
+  established requirement.
+
+**Do not verify propagation by inspecting the filesystem.** Gate 4 established
+that a marketplace whose `source` form never resolves leaves a complete set of
+success-shaped artifacts behind — clone current with origin, payload on disk
+under the right version number, a plugin data directory, and no error at any
+layer. Nothing short of invoking a plugin command distinguishes that state from
+a working install (6.21). Step 5 is confirmed by running a `/mavci-core:` command,
+not by reading `installed_plugins.json`, the cache, or the clone HEAD.
 
 ### Three prerequisites per machine, stated honestly
 

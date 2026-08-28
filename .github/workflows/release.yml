@@ -18,7 +18,12 @@ jobs:
   tag-matches-manifest:
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 because check-tags.mjs runs `git describe` against the
+      # mainline and peels every tag. The default single-ref shallow checkout
+      # fetches neither, and the check fails closed rather than pass blind.
       - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v7.0.0
         with:
           node-version: '22'
@@ -34,6 +39,13 @@ jobs:
             echo "::error::Projects pin CI to the tag, so a mismatch breaks their builds. Fix one and re-tag."
             exit 1
           fi
+
+      # "Tag equals plugin.json version" passes happily while the tag trails
+      # main - the manifest and the tag can agree on a tree that is not the
+      # tree that was tested. This step is the one that compares trees, and it
+      # peels annotated tags rather than comparing a tag object to a commit.
+      - name: Tag is the mainline, and every tag is annotated
+        run: node scripts/ci/check-tags.mjs
 
       - name: Full validation must pass before a release exists
         run: |
