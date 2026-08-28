@@ -1,0 +1,18 @@
+{
+  "$comment": "The only form that resolves: `git` clones over HTTPS through the machine's ordinary git credential helper, which is the credential the onboarding protocol already requires.",
+
+  "extraKnownMarketplaces": {
+    "mavci": {
+      "source": { "source": "git", "url": "https://github.com/mavci-ai-devsystem/mavci-ai-devsystem.git" }
+    }
+  },
+  "enabledPlugins": {
+    "mavci-core@mavci": true
+  },
+
+  "permissions": {
+    "deny": [
+      "Edit(./.mavci/control/**)"
+    ]
+  }
+}

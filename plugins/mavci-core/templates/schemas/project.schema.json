@@ -147,7 +147,7 @@
           "type": "array",
           "uniqueItems": true,
           "minItems": 1,
-          "description": "minItems: with an empty list only the 2 `always` rules of 12 run, and verify still reports pass. An empty pack list disables the checker silently.",
+          "description": "minItems: with an empty list only the 3 `always` rules of 13 run, and verify still reports pass. An empty pack list disables the checker silently.",
           "items": { "type": "string" }
         }
       }

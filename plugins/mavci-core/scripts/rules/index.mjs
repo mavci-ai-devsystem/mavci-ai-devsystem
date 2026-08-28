@@ -1,5 +1,5 @@
 /**
- * Mavci Core - the Phase 1 rule set. 12 checks.
+ * Mavci Core - the Phase 1 rule set. 13 checks.
  *
  * Every rule is a plain object with a `run(ctx)` returning findings. Adding a
  * rule is one entry plus a fixture pair; nothing else changes. That is the
@@ -15,6 +15,7 @@
 import path from 'node:path';
 import { blankSource, blankComments, depthMap, matchAll } from '../lib/jsscan.mjs';
 import { lineOf } from '../lib/fsx.mjs';
+import { MARKETPLACE_NAME, PLUGIN_ID, SYSTEM_REPO } from '../config.mjs';
 
 const isCode = (p) => /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(p);
 const under = (p, dir) => p === dir || p.startsWith(dir + '/');
@@ -480,6 +481,100 @@ const stateSchemaValid = {
   },
 };
 
+/* =================================================================== 13 */
+
+/**
+ * The registration that decides whether ANY of the other twelve rules ever run.
+ *
+ * .claude/settings.json names the marketplace and enables the plugin. Get the
+ * source form wrong and Claude Code cannot resolve the marketplace: the plugin
+ * never installs, zero hooks register, and nothing is enforced - reported as a
+ * clean start, on a project that looks correctly configured.
+ *
+ * 0.1.3 and 0.1.4 shipped `{"source":"url"}` in the template AND had doctor
+ * demand that exact value, so the checker drove every project into the broken
+ * form and then certified it. Nothing could catch that, because
+ * .claude/settings.json is opened by nothing else in verify.mjs - `.claude` is
+ * in DEFAULT_EXCLUDE_DIRS, so it is not even in ctx.files. This rule reads it
+ * directly, which is what makes the defect catchable in CI rather than in an
+ * operator's hands.
+ *
+ * `always: true`: a project that disables enforcement is not a pack opt-in.
+ */
+const marketplaceForm = {
+  id: 'settings.marketplace_form',
+  severity: 'blocker',
+  always: true,
+  description: 'The marketplace is registered in the one source form that resolves, and the plugin is enabled.',
+  remedy: `Set extraKnownMarketplaces.${MARKETPLACE_NAME}.source to `
+    + `{"source": "git", "url": "https://github.com/${SYSTEM_REPO}.git"} and `
+    + `enabledPlugins["${PLUGIN_ID}"] to true, or re-run /mavci-core:connect.`,
+  run(ctx) {
+    const REL = '.claude/settings.json';
+    const raw = ctx.readOrNull(REL);
+    // An ABSENT file means "not connected yet", which doctor already reports and
+    // which is a legitimate mid-connect state. This rule is about a file that
+    // EXISTS and silently switches enforcement off.
+    if (raw === null) return [];
+
+    const at = (needle) => {
+      const i = raw.indexOf(needle);
+      return i < 0 ? null : lineOf(raw, i);
+    };
+    const finding = (evidence, line = null) => [{
+      check_id: this.id, severity: this.severity, path: REL, line, evidence, remedy: this.remedy,
+    }];
+
+    let s;
+    try {
+      s = JSON.parse(raw);
+    } catch (err) {
+      return finding(`not valid JSON (${err.message}). Claude Code rejects the whole `
+        + 'file, so every deny rule and the marketplace registration are absent.', 1);
+    }
+
+    const expected = `https://github.com/${SYSTEM_REPO}.git`;
+    const mk = s?.extraKnownMarketplaces?.[MARKETPLACE_NAME];
+    if (!mk?.source) {
+      return finding(`no extraKnownMarketplaces.${MARKETPLACE_NAME}.source. The marketplace is `
+        + 'never resolved, so the plugin does not install and no hook registers.',
+      at('extraKnownMarketplaces') ?? 1);
+    }
+
+    const line = at('extraKnownMarketplaces');
+    const src = mk.source;
+
+    if (typeof src.url === 'string' && /__[A-Z0-9_]+__/.test(src.url)) {
+      return finding(`marketplace url still carries the template placeholder "${src.url}". `
+        + 'The file was copied but never rendered.', line);
+    }
+    if (src.source === 'github') {
+      return finding('uses the "github" source form, which resolves over SSH. On any machine '
+        + 'with no SSH key loaded the clone fails and nothing is enforced there, while it '
+        + 'keeps working on the machine that wrote it.', line);
+    }
+    if (src.source === 'url') {
+      return finding('uses the "url" source form, which means "fetch a remote marketplace.json '
+        + 'over HTTP", not "clone this git remote". Against a .git address it 404s, so the '
+        + 'plugin never installs. 0.1.3 and 0.1.4 shipped this.', line);
+    }
+    if (src.source !== 'git') {
+      return finding(`uses the "${src.source}" source form. Only "git" clones over HTTPS `
+        + "through the machine's ordinary git credential helper.", line);
+    }
+    if (src.url !== expected) {
+      return finding(`marketplace url is "${src.url}", not ${expected}. A marketplace that does `
+        + 'not resolve installs no plugin and registers no hook.', line);
+    }
+    if (s?.enabledPlugins?.[PLUGIN_ID] !== true) {
+      return finding(`the marketplace resolves but enabledPlugins["${PLUGIN_ID}"] is not true, `
+        + 'so the plugin is never loaded and nothing is enforced.',
+      at('enabledPlugins') ?? line);
+    }
+    return [];
+  },
+};
+
 /* ------------------------------------------------------------------ export */
 
 export const RULES = [
@@ -495,6 +590,7 @@ export const RULES = [
   legalPagesPresent,
   kvkkStructure,
   stateSchemaValid,
+  marketplaceForm,
 ];
 
 export function rulesFor(manifest) {
