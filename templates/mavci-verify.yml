@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout project
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7.0.1
 
       - name: Resolve the pinned system version
         id: mavci
@@ -70,7 +70,7 @@ jobs:
       # Pinned to the tag, never main HEAD, so CI and the local Stop hook always
       # run the identical rule set (blocker B4).
       - name: Fetch the Mavci system at the pinned tag
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7.0.1
         with:
           repository: mavci-ai-devsystem/mavci-ai-devsystem
           ref: ${{ steps.mavci.outputs.ref }}
@@ -78,7 +78,7 @@ jobs:
           path: .mavci-system
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7.0.0
         with:
           node-version: '22'
 
