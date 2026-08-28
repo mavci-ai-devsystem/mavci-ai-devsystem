@@ -283,6 +283,64 @@ function checkMarketplace(root, out) {
   out.push({ status: OK, text: line(OK, `marketplace ${MARKETPLACE_NAME} -> ${expected} (source form "git")`) });
 }
 
+/**
+ * A protected environment with nothing to identify it protects nothing.
+ *
+ * risk-guard builds its protected set from the supabase_ref of every
+ * environment marked `protected: true`, then drops the falsy ones:
+ *
+ *   protectedRefs = Object.values(environments).filter(e => e?.protected)
+ *                     .map(e => e.supabase_ref).filter(Boolean)
+ *
+ * With no supabase_ref the set is EMPTY, and both arms that use it go inert -
+ * the deny for a call naming a protected ref, and the confirm for a SQL call
+ * naming no ref at all (`protectedRefs.size` is 0). So a manifest reading
+ * `prod: { protected: true }` displays as protected, is described as protected
+ * in the schema, and stops nothing: a write to the production database is
+ * allowed without even a confirm.
+ *
+ * That is the fail-open shape this system exists to prevent, so it is a FAIL,
+ * not a warning. Only meaningful when the project actually uses Supabase;
+ * with `db: none` there is no ref to match and nothing to say.
+ */
+function checkProtectedEnvironments(root, out) {
+  const manifest = readJsonOrNull(abs(root, PATHS.manifest));
+  if (!manifest) {
+    out.push({ status: WARN, text: line(WARN, 'protected environments NOT CHECKED',
+      `${PATHS.manifest} is missing or unreadable. This is unknown, not passing.`) });
+    return;
+  }
+  if (manifest.stack?.db !== 'supabase-postgres') {
+    out.push({ status: OK, text: line(OK, 'protected environments n/a (project declares no Supabase database)') });
+    return;
+  }
+
+  const envs = Object.entries(manifest.environments ?? {});
+  const protectedEnvs = envs.filter(([, e]) => e?.protected === true);
+  if (!protectedEnvs.length) {
+    out.push({ status: WARN, text: line(WARN, 'no environment is marked protected',
+      'risk-guard has nothing to hard-block, so an agent may write to any environment it can'
+      + ' reach. Set `"protected": true` on prod in .mavci/project.json.') });
+    return;
+  }
+
+  const blind = protectedEnvs.filter(([, e]) => !e.supabase_ref);
+  if (blind.length) {
+    const names = blind.map(([n]) => n).join(', ');
+    out.push({ status: FAIL, text: line(FAIL,
+      `${blind.length} protected environment(s) with no supabase_ref: ${names}`,
+      'risk-guard matches an MCP call against the supabase_ref of each protected environment.'
+      + '\n         With none recorded that set is empty, so BOTH guards are inert: a call naming'
+      + '\n         the production project is allowed, and a SQL call naming no project is not even'
+      + '\n         confirmed. This environment reads as protected and is not.'
+      + `\n         Fix: add "supabase_ref" to environments.${blind[0][0]} in ${PATHS.manifest}.`) });
+    return;
+  }
+
+  out.push({ status: OK, text: line(OK,
+    `${protectedEnvs.length} protected environment(s) carry a supabase_ref`) });
+}
+
 function checkBaseline(root, out) {
   const b = readJsonOrNull(abs(root, PATHS.baseline));
   if (!b) {
@@ -714,6 +772,7 @@ function main() {
       checkVersionSkew(root, out, { sync });
       checkSettingsDrift(root, out);
       checkMarketplace(root, out);
+      checkProtectedEnvironments(root, out);
       checkCiToken(root, out);
       checkBaseline(root, out);
       checkWaivers(root, out);
