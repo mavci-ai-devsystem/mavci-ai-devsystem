@@ -71,35 +71,53 @@ lapses silently and CI fails with "repository not found".
 ```bash
 gh auth login          # required: the system repo is private
 gh auth setup-git      # required: the credential must resolve WITHOUT a prompt
+
+claude plugin install mavci-core@mavci --scope user
 ```
 
-This is **two steps, not zero**. The system repo is private, so the marketplace
-is cloned with the machine's git credentials — and it is not enough for them to
-exist. Claude Code cannot prompt while resolving `extraKnownMarketplaces`: it
-fails with `unable to get password from user` on a machine where an interactive
+This is **three steps, not zero**, and each one is paid once on the machine and
+never again.
+
+The system repo is private, so the marketplace is cloned with the machine's git
+credentials — and it is not enough for them to exist. Claude Code cannot prompt
+while resolving `extraKnownMarketplaces`: it fails with
+`unable to get password from user` on a machine where an interactive
 `git clone` of the same repo works fine. `setup-git` (or `GH_TOKEN`) is what
-makes the credential non-interactive. What needs no setup is the project itself.
+makes the credential non-interactive.
+
+The install is what anchors the plugin to the **machine** rather than to one
+directory. `--scope user` is not optional and the in-session `/plugin install`
+is not a substitute: it takes no scope argument, so run in a project whose
+settings enable the plugin it records
+`{"scope":"project","projectPath":"<that one directory>"}` — and a pin with no
+user-scope record behind it is the only answer the resolver has for every
+*other* project on the machine. Observed: a second project with identical
+settings and trust accepted then loaded no agents and no hooks, silently.
+`/mavci-core:doctor` FAILs that state and prints the way out.
 
 Then in any project, on first launch, accept the workspace trust dialog. Without
 it, repository-supplied `extraKnownMarketplaces` entries are ignored — this is
-documented Claude Code behaviour, not a bug.
+documented Claude Code behaviour, not a bug. That dialog is the **whole**
+per-repo cost; the project itself needs no setup.
 
 ---
 
 ## Using it
 
 ```bash
-# in a project repo
-claude
-# only for the FIRST project on a machine - after /mavci-core:connect writes
-# settings.json, every later launch installs the plugin on its own.
+# once per machine, from a terminal - see "Per machine, once" above.
 # The https:// URL is required: the shorter owner/repo form resolves over SSH.
-/plugin marketplace add https://github.com/mavci-ai-devsystem/mavci-ai-devsystem.git
-/plugin install mavci-core@mavci
+claude plugin marketplace add https://github.com/mavci-ai-devsystem/mavci-ai-devsystem.git
+claude plugin install mavci-core@mavci --scope user
 
+# then, in each project repo - accept the trust dialog on first launch
+claude
 /mavci-core:connect        # existing repo  (the normal case)
 /mavci-core:new-project    # greenfield
 ```
+
+Never `/plugin install` from inside a session: it has no `--scope` argument and
+pins the plugin to whichever directory you happened to be in.
 
 Then: `/mavci-core:plan` → `/mavci-core:build` → `/mavci-core:verify`.
 

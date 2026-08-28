@@ -117,9 +117,16 @@ Phase 1 built: `architect`, `builder`, `verifier`; 8+4 checker rules; the five
 scripts; hooks; scaffold; CI. Not yet built, per plan: `guardian`, `scribe`,
 `/release`, `/retro`, `/research`, five standards packs, nine further rules.
 
-Distribution is **partly proven.** Gate 3 (2026-08-28) ran the real GitHub path:
-the marketplace cloned and `mavci-core@mavci` installed from `settings.json`
-alone, with no `/plugin install`. The auto-load path works (6.20).
+Distribution is **partly proven.** Gate 4's re-run (2026-08-28) settled the
+shape of it: the plugin is installed **once per machine** with
+`claude plugin install mavci-core@mavci --scope user`, and after that a project's
+committed `settings.json` loads it with no per-project install — verified by a
+brand-new session in a project carrying only that settings block answering
+`/context` with three agents and 32 skills. The state that breaks it is a
+**project-scoped** install record with no user-scope anchor: it pins the plugin
+to one directory and answers for that directory everywhere else, silently
+(6.20). Never `/plugin install` from inside a session — it has no scope
+argument. `doctor` FAILs the anchorless state and names the pinned repo.
 
 It also found the defect that mattered. v0.1.2 put the argv array in `command`
 in `hooks.json`; Claude Code rejected all eight entries and installed the plugin
@@ -144,6 +151,10 @@ the authority — not our reading of the docs, and not a local run.
 8 hooks*, and `/context` listed `mavci-core:mavci-architect`, `-builder`,
 `-verifier` plus the three `standards-*` packs. Eight hooks registered — the
 0.1.2 defect is closed, and the onboarding protocol's core assumption holds.
+(That run happened on a machine with an **empty plugin registry**. It is the one
+observation of the anchorless path working, and it is recorded as unspecified
+behaviour rather than the supported route — the supported route is the
+per-machine `--scope user` install. See 6.20 and its session table.)
 
 0.1.5 fixes the two things that pass revealed, both of which are the same shape:
 a value that was written down once, wrongly, and then copied everywhere.
@@ -173,11 +184,36 @@ a value that was written down once, wrongly, and then copied everywhere.
    the template and `doctor` agree — the drift that went unnoticed for two
    releases. NATIVE-CAPABILITIES 6.4 carries the full matrix.
 
+0.1.7 is the Gate 4 re-run's finding, and it is about the **machine**, not the
+project. The plugin is installed once per machine with
+`claude plugin install mavci-core@mavci --scope user`; after that a project's
+committed `settings.json` loads it with no per-project step. Never
+`/plugin install` from inside a session: it has no `--scope` argument, so it
+records `{"scope":"project","projectPath":"<one directory>"}`, and a pin with no
+user-scope anchor behind it is the only answer the resolver has for every other
+project on the machine — silently (6.20). Two consequences are now enforced,
+because both were invisible:
+
+1. `doctor` reports which record holds the plugin up, **FAILs** the anchorless
+   state, names every pinned directory, and prints the scoped uninstall before
+   the user-scope install (`plugin uninstall` defaults to `--scope user`, so the
+   obvious command leaves the pin in place). A project pin *alongside* the
+   anchor is written automatically by Claude Code at session start (6.22) and is
+   reported as an OK detail — failing on it would fail on every healthy machine.
+2. User scope means the plugin resolves in **every repository on the machine**,
+   so all eight hooks run in repos that have nothing to do with Mavci. Seven
+   were already silent without `.mavci/project.json`; the SessionStart preflight
+   was not, and was reporting into unrelated repositories (6.23).
+   `check-hooks-quiet.mjs` asserts all eight, both directions, and counts the
+   entries in `hooks.json` so a ninth hook fails the test until it is covered.
+
 Still unproven: version propagation across a bump (`/plugin marketplace update`
 → `/plugin update`), and hooks actually **firing** — 8 hooks are registered, but
 no `control/hook-run.json` receipt has been checked in a connected project yet.
-Both are Gate 4: the full acceptance test in a real greenfield project,
-**against v0.1.5**.
+Both are Gate 4, restarting from step 3 in a clean project **against v0.1.7**.
+`gate4` and `gate4-verify` are contaminated — an emptied `enabledPlugins` in one,
+an auto-recorded project pin and an untracked settings file in the other — and
+are not valid starting states.
 
 ---
 

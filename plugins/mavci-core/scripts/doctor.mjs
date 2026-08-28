@@ -46,6 +46,9 @@ const TEMPLATE_SETTINGS = path.join(PLUGIN_ROOT, 'templates', 'project.settings.
  *  unfinished connect: the file was copied but never filled in. */
 const PLACEHOLDER_RE = /__[A-Z0-9_]+__/;
 
+/** The per-machine bootstrap step (ARCHITECTURE section 2), spelled once. */
+const INSTALL_USER = `claude plugin install ${PLUGIN_ID} --scope user`;
+
 const OK = 'ok  ';
 const WARN = 'WARN';
 const FAIL = 'FAIL';
@@ -173,9 +176,13 @@ function checkVersionSkew(root, out, { sync = false } = {}) {
  * configuration is broken. But it is never silent: an unknown answer is
  * reported as unknown, which is the invariant the rest of this file follows.
  */
+/** ~/.claude, or wherever CLAUDE_CONFIG_DIR points. */
+function configDir() {
+  return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+}
+
 function clonePath() {
-  const cfg = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-  return path.join(cfg, 'plugins', 'marketplaces', MARKETPLACE_NAME);
+  return path.join(configDir(), 'plugins', 'marketplaces', MARKETPLACE_NAME);
 }
 
 function git(cwd, args) {
@@ -251,6 +258,106 @@ function checkDistribution(out, { network = true } = {}) {
     return;
   }
   out.push({ status: OK, text: line(OK, `marketplace clone current with origin/${branch} (${head.slice(0, 7)})`) });
+}
+
+/**
+ * INSTALL SCOPE. Which record in the registry is holding this plugin up.
+ *
+ * The bootstrap installs mavci-core ONCE PER MACHINE at user scope
+ * (ARCHITECTURE section 2). That single record is what makes a project's
+ * committed settings.json sufficient in every repo afterwards. The state this
+ * check exists for is the one where that anchor is missing and the only record
+ * left is PINNED to one directory:
+ *
+ *   { "scope": "project", "projectPath": "C:\\Projelerim\\gate4" }
+ *
+ * Observed 2026-08-28: with exactly that record and nothing else, a second
+ * project carrying byte-equivalent settings, trust accepted, loaded no agents
+ * and no hooks (6.20). The resolver answered for a different directory, and
+ * every observable an operator would reach for still read as success.
+ *
+ * A pinned record ALONGSIDE a user-scope one is normal and harmless: Claude
+ * Code writes it automatically at session start, because `fromOwnConfig` is
+ * OR-ed across settings sources while scope is taken from the LAST source that
+ * enabled the plugin - so a user-scope install plus a project's own settings
+ * yields {scope: project, projectPath: cwd, fromOwnConfig: true} and the
+ * auto-record fires (6.22). Failing on that would fail on every correctly
+ * bootstrapped machine, in every project, immediately. So the FAIL is on the
+ * ABSENCE OF AN ANCHOR, never on the presence of a pin.
+ *
+ * Read from the registry FILE, never from `claude plugin list`: section 11
+ * requires this toolchain to run where Claude Code is not installed at all.
+ */
+function checkInstallScope(out) {
+  const cfg = configDir();
+  const registry = path.join(cfg, 'plugins', 'installed_plugins.json');
+  // The registry is Claude Code's file, not ours. A malformed one is a
+  // could-not-check, never a crash that takes the rest of the report with it.
+  let db = null;
+  try { db = readJsonOrNull(registry); } catch { db = null; }
+  if (!db) {
+    out.push({ status: WARN, text: line(WARN, 'install scope NOT CHECKED',
+      `No readable plugin registry at ${registry}.`
+      + '\n         Whether this machine ever ran the per-machine install is unknown, not passing.') });
+    return;
+  }
+
+  const records = Array.isArray(db.plugins?.[PLUGIN_ID]) ? db.plugins[PLUGIN_ID] : [];
+  const userSettings = readJsonOrNull(path.join(cfg, 'settings.json'));
+  const enabledForUser = userSettings?.enabledPlugins?.[PLUGIN_ID] === true;
+
+  // 'managed' is an administrator-deployed record. It anchors the machine the
+  // same way a user record does, and it is not ours to tell anyone to remove.
+  const anchors = records.filter((r) => r.scope === 'user' || r.scope === 'managed');
+  const pins = records.filter((r) => r.scope === 'project' || r.scope === 'local');
+
+  const pinLines = pins
+    .map((r) => `           ${r.scope}: ${r.projectPath ?? '(no path recorded)'}`).join('\n');
+  const removal = pins
+    .map((r) => `           cd "${r.projectPath ?? '<that project>'}" && claude plugin uninstall ${PLUGIN_ID} --scope ${r.scope}`)
+    .join('\n');
+
+  if (!records.length) {
+    out.push({ status: WARN, text: line(WARN, `${PLUGIN_ID} has no install record on this machine`,
+      'This session loaded the plugin regardless - settings-alone resolution has been observed to\n'
+      + '         work with an empty registry (6.20) - but that is not the path the bootstrap specifies,\n'
+      + '         and it did not reproduce once a foreign project-scoped record existed. Run the\n'
+      + '         per-machine step once, from anywhere:\n'
+      + `           ${INSTALL_USER}`) });
+    return;
+  }
+
+  if (!anchors.length) {
+    out.push({ status: FAIL, text: line(FAIL,
+      `${PLUGIN_ID} is registered ONLY at ${pins[0]?.scope ?? 'project'} scope`,
+      'Every record for this plugin names one directory, so in EVERY OTHER PROJECT on this machine\n'
+      + '         the resolver answers for a directory that is not the one being opened: no agents, no\n'
+      + '         skills, NO HOOKS, nothing enforced, and no error at any layer. Pinned to:\n'
+      + `${pinLines}\n`
+      + '         Fix, in this order. Remove the pin AT ITS OWN SCOPE - uninstall defaults to\n'
+      + '         --scope user, so the obvious command leaves a project record untouched - then\n'
+      + '         install once for the machine:\n'
+      + `${removal}\n`
+      + `           ${INSTALL_USER}\n`
+      + '         Then restart the session and confirm the agents are listed.') });
+    return;
+  }
+
+  const anchor = anchors[0];
+  const detail = pins.length
+    ? `Plus ${pins.length} auto-recorded project pin(s), harmless while the anchor stands:\n${pinLines}`
+    : '';
+  out.push({ status: OK, text: line(OK,
+    `${PLUGIN_ID} anchored at ${anchor.scope} scope (${anchor.version ?? 'unknown version'})`, detail) });
+
+  if (anchor.scope === 'user' && !enabledForUser) {
+    out.push({ status: WARN, text: line(WARN,
+      `${PLUGIN_ID} has a user record but is not enabled in user settings`,
+      `${path.join(cfg, 'settings.json')} has no enabledPlugins["${PLUGIN_ID}"] = true.\n`
+      + '         The record and the enablement are written together by the install command, so one\n'
+      + '         without the other means something edited settings afterwards. The anchor is only as\n'
+      + `         good as the enablement. Re-run: ${INSTALL_USER}`) });
+  }
 }
 
 /** The Windows drift documented at 5.16. */
@@ -866,6 +973,19 @@ function main() {
   if (preflight) {
     try { stampHookRun(root, { event: 'SessionStart', session_id: readHookStdin().session_id }); }
     catch { /* never let bookkeeping break a session */ }
+
+    // The per-machine install is at USER scope, so this plugin resolves in
+    // every repository on the machine and this hook now runs in repositories
+    // that have nothing to do with Mavci. There is nothing to enforce there and
+    // nothing to report - not even the toolchain warnings, because a stale
+    // marketplace clone is not that repository's business. A standards plugin
+    // that speaks up in someone's unrelated project is a standards plugin that
+    // gets uninstalled.
+    //
+    // Scoped to the hook. The operator-invoked `/mavci-core:doctor` still
+    // reports everything here, including "not a Mavci project".
+    // check-hooks-quiet.mjs asserts both halves.
+    if (!exists(abs(root, PATHS.manifest))) process.exit(0);
   }
 
   try {
@@ -874,6 +994,10 @@ function main() {
     // Not gated on `connected`: a stale plugin is a toolchain fault, and it is most
     // dangerous in exactly the directory that is about to be scaffolded.
     checkDistribution(out, { network: !preflight });
+    // Also not gated on `connected`: a machine with no anchor is broken for
+    // every project on it, and the directory about to be scaffolded is exactly
+    // where that needs saying.
+    checkInstallScope(out);
     const connected = checkConnected(root, out);
     if (connected) {
       checkIntegrity(root, out);

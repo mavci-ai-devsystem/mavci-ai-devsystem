@@ -348,6 +348,109 @@ try {
   }
 }
 
+/* --- 9. install scope: which record is holding the plugin up ----------
+ *
+ * The state this exists for. An in-session `/plugin install` takes no scope
+ * argument, so run in a project whose settings enable the plugin it writes
+ * `{"scope":"project","projectPath":"<that directory>"}` - and that record is
+ * then the only answer the resolver has for every OTHER project on the machine.
+ * Observed 2026-08-28: a second project with byte-equivalent settings and trust
+ * accepted loaded no agents and no hooks, and said nothing about it (6.20).
+ *
+ * The opposite error is just as bad and much easier to make. Claude Code writes
+ * a project record AUTOMATICALLY at session start on any correctly bootstrapped
+ * machine (6.22), so a check that FAILs on the presence of a project record
+ * would FAIL in every project, on every healthy machine, permanently - and a
+ * checker that cries wolf everywhere is a checker nobody reads. Both directions
+ * are asserted here.
+ */
+{
+  const tmp = makeProject(); cleanup.push(tmp);
+
+  /** A fake CLAUDE_CONFIG_DIR holding just a plugin registry and user settings. */
+  const registry = (records, userEnabled) => {
+    const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-registry-'));
+    cleanup.push(cfg);
+    fs.mkdirSync(path.join(cfg, 'plugins'), { recursive: true });
+    fs.writeFileSync(path.join(cfg, 'plugins', 'installed_plugins.json'),
+      JSON.stringify({ version: 2, plugins: { [PLUGIN_ID]: records } }, null, 2));
+    fs.writeFileSync(path.join(cfg, 'settings.json'),
+      JSON.stringify({ enabledPlugins: userEnabled ? { [PLUGIN_ID]: true } : {} }, null, 2));
+    return cfg;
+  };
+
+  const PIN = { scope: 'project', installPath: 'x', version: PLUGIN_VERSION, projectPath: 'C:\\Projelerim\\gate4' };
+  const ANCHOR = { scope: 'user', installPath: 'x', version: PLUGIN_VERSION };
+
+  // 9a. a pin and nothing else: the state that breaks every other project.
+  {
+    const r = runDoctor(tmp, { env: { CLAUDE_CONFIG_DIR: registry([PIN], false) } });
+    const failed = r.status === 1;
+    const named = /registered ONLY at project scope/.test(r.stdout)
+      && r.stdout.includes('C:\\Projelerim\\gate4');
+    const remedy = /claude plugin uninstall .*--scope project/.test(r.stdout)
+      && /claude plugin install .*--scope user/.test(r.stdout);
+    if (failed && named) {
+      ok('a project-scoped record with no user anchor FAILS doctor, and the pinned repo is named');
+    } else {
+      bad(`project-only registry: expected exit 1 naming the pinned repo, got status=${r.status}`);
+    }
+    if (remedy) {
+      ok('the failure prints both the scoped uninstall and the user-scope install');
+    } else {
+      bad('the failure does not tell the operator how to fix it: uninstall defaults to --scope user, '
+        + 'so without the exact command the pin survives the obvious attempt');
+    }
+  }
+
+  // 9b. anchor plus the auto-recorded pin: the NORMAL state. Must not fail.
+  {
+    const r = runDoctor(tmp, { env: { CLAUDE_CONFIG_DIR: registry([ANCHOR, PIN], true) } });
+    if (!/registered ONLY at/.test(r.stdout) && /anchored at user scope/.test(r.stdout)) {
+      ok('a user anchor alongside an auto-recorded project pin is reported as OK, not as a fault');
+    } else {
+      bad('doctor treats the auto-recorded project pin as a fault. Claude Code writes that record '
+        + 'itself at session start (6.22), so this FAILs on every healthy machine in every project.');
+    }
+    if (r.stdout.includes('C:\\Projelerim\\gate4')) {
+      ok('the pin is still listed, so an operator can see what would be left if the anchor went');
+    } else {
+      bad('the pin is invisible in the healthy case; removing the anchor would then be a silent cliff');
+    }
+  }
+
+  // 9c. an empty registry. Observed to load anyway (6.20, gate3-b), so it is
+  //     unknown territory rather than a defect - but it is never silence.
+  {
+    const r = runDoctor(tmp, { env: { CLAUDE_CONFIG_DIR: registry([], false) } });
+    // The exit code belongs to the whole report - this fixture has other
+    // failures - so assert on the scope lines themselves.
+    const warned = /\[WARN\] mavci-core@mavci has no install record on this machine/.test(r.stdout)
+      && /claude plugin install mavci-core@mavci --scope user/.test(r.stdout);
+    const notFailed = !/\[FAIL\] mavci-core@mavci is registered ONLY/.test(r.stdout);
+    if (warned && notFailed) {
+      ok('an empty registry is reported as a WARN with the install command, not as a FAIL');
+    } else {
+      bad(`empty registry: expected a WARN naming the per-machine install, warned=${warned} notFailed=${notFailed}`);
+    }
+  }
+
+  // 9d. an unreadable registry is a could-not-check, and must not take the
+  //     rest of the report down with it.
+  {
+    const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-registry-bad-'));
+    cleanup.push(cfg);
+    fs.mkdirSync(path.join(cfg, 'plugins'), { recursive: true });
+    fs.writeFileSync(path.join(cfg, 'plugins', 'installed_plugins.json'), '{ not json');
+    const r = runDoctor(tmp, { env: { CLAUDE_CONFIG_DIR: cfg } });
+    if (/install scope NOT CHECKED/.test(r.stdout) && !/doctor crashed/.test(r.stdout)) {
+      ok('a malformed registry is reported as unknown, and doctor still finishes its report');
+    } else {
+      bad('a malformed registry crashed doctor or was passed over silently');
+    }
+  }
+}
+
 } finally {
   for (const d of cleanup) fs.rmSync(d, { recursive: true, force: true });
 }

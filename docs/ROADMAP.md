@@ -61,13 +61,15 @@ The four stack-specific rules from fix 3 are in. `supabase.rls_policy_per_table`
 
 Two repositories, because the two paths have different failure modes and **the existing-repo path is the one that matters for all six real projects**.
 
-**Setup:** system repo pushed to `github.com/mavci-ai-devsystem/mavci-ai-devsystem` with tag `v0.1.0`. Machine A = Windows, with `gh auth login` **and `gh auth setup-git`** completed (6.19: the credential must resolve without a prompt). `MAVCI_TOKEN` set as an org-level secret.
+**Setup:** system repo pushed to `github.com/mavci-ai-devsystem/mavci-ai-devsystem` with tag `v0.1.0`. Machine A = Windows, with the three per-machine prerequisites done (ARCHITECTURE section 2): `gh auth login` **and `gh auth setup-git`** (6.19: the credential must resolve without a prompt), and **one** `claude plugin marketplace add https://github.com/mavci-ai-devsystem/mavci-ai-devsystem.git` followed by `claude plugin install mavci-core@mavci --scope user` — from a terminal, not from inside a session. `MAVCI_TOKEN` set as an org-level secret.
+
+**Before starting, assert the machine is clean.** `claude plugin list --json` must show `mavci-core@mavci` at `"scope": "user"` and must **not** show a `"scope": "project"` record left over from an earlier run: a pin with no user-scope anchor loads nothing in any other directory and reports no error (6.20), which would make every assertion below untrustworthy. Remove one with `claude plugin uninstall mavci-core@mavci --scope project` run from the directory it names. Gate repos are single-use for the same reason — a repo that has hosted a run carries an auto-recorded pin (6.22) and an untracked settings file, and is not a clean starting state.
 
 ### Part A — greenfield (`~/acceptance-new`)
 
 | # | Action | Assertion |
 |---|---|---|
-| A1 | `claude` in the empty repo, accept the trust dialog, `/plugin marketplace add https://github.com/mavci-ai-devsystem/mavci-ai-devsystem.git` (the HTTPS form: `owner/repo` resolves over SSH, 6.18), `/plugin install mavci-core@mavci` | `/context` lists the three agents. `/help` lists `/mavci-core:new-project` and `/mavci-core:waive`. |
+| A1 | `claude` in the empty repo, accept the trust dialog. **No `/plugin` command of any kind** — the marketplace and the user-scope install were done once per machine in Setup, and the in-session `/plugin install` takes no `--scope` argument, so it would pin the plugin to this directory (6.20). | `/context`, as the session's first command, lists the three agents. `/help` lists `/mavci-core:new-project` and `/mavci-core:waive`. |
 | A2 | `/mavci-core:new-project acceptance-new` — TR+EU, Vercel, tier `standard` | `project.json` validates. `.claude/settings.json` contains every tier-3 deny rule **including `Edit(./.mavci/control/**)`**. The five legal pages exist with real content. `control/baseline.json` exists and is **empty**. |
 | A3 | `node <plugin>/scripts/gate.mjs` | Exit `0`. Verdict written, 13 checks passing. The scaffold is green from commit one. |
 | A4 | `/mavci-core:plan "add a tenant-scoped projects table with RLS and a list page"` | Task spec in `.mavci/tasks/`, control task in `.mavci/control/tasks/`. `state.phase` is `build`. `git status` shows **zero** changes under `app/` or `supabase/`. |
@@ -120,9 +122,17 @@ A repo seeded with realistic pre-existing debt: three routes without `force-dyna
 Everything in Parts A and B was developed and tested with `--plugin-dir`, which
 takes precedence over an installed marketplace plugin (6.9). That means **the
 GitHub route has never executed**: marketplace resolution against a private repo,
-the trust dialog gating `extraKnownMarketplaces` (6.6), `/plugin install`,
-version-bump propagation, and the rollback levers are all untested.
-C1–C8b are not a formality; they are the part most likely to fail.
+the trust dialog gating `extraKnownMarketplaces` (6.6), the per-machine
+user-scope install, version-bump propagation, and the rollback levers are all
+untested. C1–C8b are not a formality; they are the part most likely to fail.
+
+Gate 4 (2026-08-28) closed part of this and found the failure mode that makes
+the rest hard to trust: every layer between the settings file and the loaded
+plugin reports success whether or not the plugin loaded (6.21), and a
+project-scoped install record silently answers for the wrong directory (6.20).
+So every distribution assertion below is confirmed by **running a
+`/mavci-core:` command or reading `/context` in a fresh session** — never by
+inspecting `installed_plugins.json`, the cache, or the clone HEAD.
 
 ### The eight steps that decide it
 

@@ -185,6 +185,88 @@ on a `.git` address (6.4). Both wrong forms fail the same way: a plugin that
 never installs, so nothing is enforced and nothing says so. `doctor` fails both
 and prints the working form.
 
+### The installation rule: once per machine, at user scope, never at project scope
+
+The settings block above is the whole of a **project's** installation. It is not
+the whole of a **machine's**. `mavci-core` is installed once per machine, from
+the CLI, at user scope:
+
+```bash
+claude plugin marketplace add https://github.com/mavci-ai-devsystem/mavci-ai-devsystem.git
+claude plugin install mavci-core@mavci --scope user
+```
+
+After those two commands, a repo's committed `.claude/settings.json` is
+sufficient and no install is ever run again — not per project, not per clone,
+not per session. Verified `2026-08-28`: with the user-scope record in place, a
+brand-new session in a project carrying nothing but the settings block above
+answered `/context` as its first command with *Custom agents · 3 agents* —
+`mavci-core:mavci-architect`, `-builder`, `-verifier` — and the three
+`standards-*` skills, with no `/plugin`, no `/reload-plugins` and no
+per-project install (6.20).
+
+**The rule with teeth is about scope, not about installing.** Never install at
+**project** scope, and never install from inside a session, because the
+in-session command has no way to avoid it.
+
+Claude Code *derives* the scope; nobody picks it. For each enabled plugin the
+resolver walks the settings sources and records
+`{scope: <the settings source that enabled it>, projectPath: cwd}`, where
+`fromOwnConfig` — the flag that decides whether a record gets written at all —
+is true only for `userSettings` or an **untracked** `settings.local.json`, never
+for `projectSettings`. On a machine with no user-scope enablement, a plugin
+turned on by a repo's own settings is skipped with
+`Skipped auto-recording <id> for project (<cwd>) — enabled only by repo-authored settings`.
+So `/plugin install mavci-core@mavci`, typed in a session, takes no scope
+argument and stamps whatever the enabling source implies: run in a project whose
+`.claude/settings.json` enables the plugin, it writes
+`"scope": "project", "projectPath": "<that one directory>"`.
+
+Only the CLI can override it. `claude plugin install <plugin> -s|--scope user|project|local`
+defaults to the literal string `user`
+(`.option("-s, --scope <scope>","Installation scope: user, project, or local","user")`,
+extracted from the 2.1.250 binary and unchanged in 2.1.251). `plugin enable` and
+`plugin disable` document their default as `auto-detect`. `plugin uninstall`
+defaults to `user`, which is why a project-scoped record survives the obvious
+removal command.
+
+**Why project scope is the state to fear.** A record that names one directory is
+the only answer the resolver has for every other directory. Observed
+`2026-08-28`: an in-session `/plugin install` in `C:\Projelerim\gate4` at
+`16:56:56.677Z` wrote the machine's first `mavci-core@mavci` record as
+`"scope": "project", "projectPath": "C:\\Projelerim\\gate4"`. A second project
+with a byte-equivalent `settings.json`, trust accepted, settings in place 29 s
+before launch, then loaded **no agents and no hooks** — and said nothing about
+it (6.20). Run from that second project, `claude plugin list --json` returned
+gate4's record verbatim: the resolver answering for a directory that was not the
+one being opened.
+
+Consequences for the topology:
+
+- **Per project, the committed `settings.json` is still the whole story.** Do
+  not add an install step to onboarding, to `/mavci-core:connect`, or to any
+  runbook. The install belongs to the machine, once, before any of that.
+- **A project-scoped record *alongside* the user-scope one is normal.** Claude
+  Code writes it automatically at session start: `fromOwnConfig` is OR-ed across
+  settings sources while `scope` is taken from the last source that enabled the
+  plugin, so a user-scope install plus a project's own settings yields
+  `{scope: project, projectPath: cwd, fromOwnConfig: true}` and the auto-record
+  fires (6.22). It is harmless while the anchor stands, and it is not worth
+  cleaning up. What is fatal is the pin **without** the anchor.
+- **Remove a pin at its own scope.** `claude plugin uninstall mavci-core@mavci --scope project`,
+  run **from that project's directory**. Then confirm the project's
+  `enabledPlugins` block is still intact: the uninstall empties it.
+- **`doctor` FAILs the anchorless state**, names every directory the plugin is
+  pinned to, and prints both commands in order (its `install scope` check).
+  None of it is visible in the cache or the clone HEAD (6.21), and a session
+  that is running the plugin cannot conclude the machine is healthy — it can
+  only conclude that *this* directory resolved.
+- **User scope means every repo on the machine.** The plugin now resolves in
+  scratch clones and other people's libraries too, and all eight hooks run
+  there. Every one of them is gated on `.mavci/project.json` and is silent
+  without it — asserted, for all eight, by `scripts/ci/check-hooks-quiet.mjs`.
+  That test is the price of user scope and is not optional.
+
 ### How a change reaches every project without manual edits
 
 1. Edit the system repo.
@@ -203,16 +285,23 @@ propagation story rests on it.
   clone. The clone reflog shows `fetch --depth 1 origin main: forced-update`
   followed by `branch: Reset to FETCH_HEAD` — an ancestry-independent path with
   no fast-forward to refuse, so a shallow clone is not stranded at its clone
-  depth. Registration from `settings.json` alone, with no `/plugin install`,
-  is verified end to end (6.20).
-- **Inferred, NOT verified.** That the session must be **restarted** before the
-  new version is loaded. Plugins appear to resolve at session start, so a running
-  session keeps the version it already loaded. This is inferred from the Gate 4
-  cache timeline (0.1.4 unpacked 19:13, 0.1.5 at 19:16, 0.1.6 at 19:19) and was
-  never tested directly. **It is verified during the Gate 4 re-run**, which
-  starts from a fresh session with a correct source form — until that run
-  passes, treat the restart as a precaution of unknown necessity rather than an
-  established requirement.
+  depth. Registration from a project's `settings.json` alone, with no
+  `/plugin install` in that project, is verified end to end on a machine holding
+  the user-scope anchor (6.20) — **but on evidence Gate 3 did not have.** Gate 3
+  cited the marketplace clone and an unpacked cache payload, neither of which is
+  evidence of registration (6.21). The sound evidence is the harness's own
+  listing: gate3-b session `bf805673` at `2026-08-28T15:28Z` naming the three
+  agents, and the re-run's `/context` at `2026-08-28T17:22Z` showing *3 agents*
+  as a new session's first command.
+- **Verified since the re-run.** Plugin resolution is a **session-start**
+  activity. The registry sync that reconciles `installed_plugins.json` against
+  every settings source runs at startup, and it is what stamped a project record
+  27 s after the user-scope install (6.22). A session therefore keeps the
+  version it loaded.
+- **Still inferred, NOT verified.** That a `/plugin update` inside a running
+  session cannot be made to take effect by any means short of restarting. The
+  restart is known to be *sufficient*; that nothing else is, has never been
+  tested. Treat it as the reliable path rather than the only one.
 
 **Do not verify propagation by inspecting the filesystem.** Gate 4 established
 that a marketplace whose `source` form never resolves leaves a complete set of
@@ -222,10 +311,13 @@ layer. Nothing short of invoking a plugin command distinguishes that state from
 a working install (6.21). Step 5 is confirmed by running a `/mavci-core:` command,
 not by reading `installed_plugins.json`, the cache, or the clone HEAD.
 
-### Three prerequisites per machine, stated honestly
+### The bootstrap: three prerequisites, and where each one is paid
 
-Gate 3 (2026-08-28) turned the first of these from one step into two. Both new
-sentences below are observed behaviour, not documentation.
+Gate 3 (2026-08-28) turned the first of these from one step into two. The Gate 4
+re-run added the second. Everything below is observed behaviour, not
+documentation.
+
+**Paid once per machine, ever:**
 
 1. **A git credential that resolves WITHOUT A PROMPT, configured before Claude
    Code launches.** The repo is private, so the marketplace is cloned with the
@@ -234,26 +326,62 @@ sentences below are observed behaviour, not documentation.
    with `unable to get password from user` on a machine where an interactive
    `git clone` of the same repo succeeds (6.19). `gh auth login` alone does not
    always suffice — follow it with `gh auth setup-git`, or set `GH_TOKEN`.
-2. **The `git` marketplace source form.** `{"source":"github","repo":"owner/repo"}`
-   resolves over **SSH**, so it silently requires an SSH key that a machine
-   authenticated by HTTPS token does not have (6.18); `{"source":"url",...}`
-   fetches a remote `marketplace.json` over HTTP and 404s on a `.git` address
-   (6.4). Every project's `settings.json` therefore carries
-   `{"source":"git","url":"https://github.com/<owner>/<repo>.git"}`, which clones
-   over HTTPS through the credential from step 1. This is not a per-machine step
-   — it is a template invariant, listed here because it is what makes step 1
-   sufficient. `doctor` fails every other form.
-3. **The workspace trust dialog**, accepted once per clone per machine.
+
+   ```bash
+   gh auth login && gh auth setup-git
+   ```
+
+2. **One user-scope install of the plugin**, from a terminal.
+
+   ```bash
+   claude plugin marketplace add https://github.com/mavci-ai-devsystem/mavci-ai-devsystem.git
+   claude plugin install mavci-core@mavci --scope user
+   ```
+
+   The `marketplace add` is listed because it is the order that was observed to
+   work; whether `plugin install` can resolve a marketplace the machine has
+   never seen is untested, and the add costs nothing when it is redundant. The
+   install writes the machine's anchor: a `"scope": "user"` record in
+   `~/.claude/plugins/installed_plugins.json` plus `mavci-core@mavci` in
+   `~/.claude/settings.json`'s `enabledPlugins`. With it, every project's
+   committed settings block resolves on its own. Without it, the only records
+   that can exist are pinned to single directories, and a pin is what breaks
+   every other project on the machine (6.20). The `--scope` flag is not
+   optional and the in-session `/plugin install` is not a substitute: see the
+   installation rule above.
+
+**Paid once per repo, per machine:**
+
+3. **The workspace trust dialog**, accepted on first launch in each clone.
    Repository-supplied `extraKnownMarketplaces` are ignored until then
-   (verified 6.6).
+   (verified 6.6). One keystroke, no command, no file.
 
-None of this is project configuration, and none of it recurs. `claude -p` and SDK sessions never get the trust dialog and therefore never load the plugin — **headless Claude is outside the design envelope.** CI does not use Claude; it runs `verify.mjs` with `node`.
+**Not a step at all, listed because it is what makes step 1 sufficient:** the
+`git` marketplace source form. `{"source":"github","repo":"owner/repo"}`
+resolves over **SSH**, so it silently requires an SSH key that a machine
+authenticated by HTTPS token does not have (6.18);
+`{"source":"url","url":"….git"}` fetches a remote `marketplace.json` over HTTP
+and 404s on a `.git` address (6.4). Every project's `settings.json` therefore
+carries `{"source":"git","url":"https://github.com/<owner>/<repo>.git"}`, which
+clones over HTTPS through the credential from step 1. It is a template
+invariant, not something an operator types. `doctor` fails every other form.
 
-**What all three protect.** If any one of them is missing, the marketplace does
-not resolve, the plugin does not install, **no hook is registered, and nothing
-is enforced** — and the session starts normally and says nothing. That silent
-total failure is why `doctor` now proves hook registration from an artefact only
-a hook can write, rather than inferring it (section 6.4, `control/hook-run.json`).
+**The two costs, stated separately, because the distinction is the whole point
+of the topology.** Per machine: two commands, once, ever. Per repo: one trust
+dialog, zero commands, and the files `/mavci-core:connect` commits. The sixth
+SaaS project on a machine costs the same as the second — a dialog — and that is
+what "nothing is copied per project" has to mean in practice.
+
+`claude -p` and SDK sessions never get the trust dialog and therefore never load
+the plugin — **headless Claude is outside the design envelope.** CI does not use
+Claude; it runs `verify.mjs` with `node`.
+
+**What all three protect.** If any one of them is missing, the plugin does not
+load, **no hook is registered, and nothing is enforced** — and the session starts
+normally and says nothing. That silent total failure is why `doctor` proves hook
+registration from an artefact only a hook can write, rather than inferring it
+(section 6.4, `control/hook-run.json`), and why it now also reports which record
+is holding the plugin up.
 
 ---
 

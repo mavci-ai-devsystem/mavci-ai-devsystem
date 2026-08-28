@@ -49,6 +49,14 @@ jobs:
       - name: Doctor proves hook registration
         run: node scripts/ci/check-doctor.mjs
 
+      # User scope means this plugin resolves in EVERY repository on the machine,
+      # so all eight hooks run in repos that have nothing to do with Mavci. All
+      # eight must be silent there and leave nothing behind. The SessionStart
+      # preflight was not: it reported "not a Mavci project", and the toolchain
+      # warnings, into every unrelated repo.
+      - name: Hooks are silent outside a Mavci project
+        run: node scripts/ci/check-hooks-quiet.mjs
+
       # A __TOKEN__ reaching a generated project is a build failure: __PROJECT_ID__
       # in package.json makes `npm ci` fail, so a fresh scaffold is not green.
       - name: No template placeholder survives a render
