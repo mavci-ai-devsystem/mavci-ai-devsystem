@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hook-run.schema.json",
+  "title": "Mavci hook registration receipt",
+  "description": "Proof that Claude Code actually LOADED this plugin's hooks. Written by doctor.mjs --preflight, which is wired as a SessionStart hook, so its existence is the evidence: nothing but a hook Claude Code chose to run can produce it. v0.1.2 installed cleanly, registered ZERO hooks after a hooks.json schema error, and doctor still reported 'hook self-test passed' because it was spawning the guard scripts itself rather than asking whether anything calls them. Excluded from CONTROL_GLOBS - it is rewritten every session, and a sealed receipt would break the control hash on every SessionStart - but still inside control/, so an agent cannot forge one.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "project_id", "event", "at", "plugin_version"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "project_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,63}$" },
+    "event": {
+      "type": "string",
+      "description": "Closed enum, mirrors HOOK_RUN_EVENTS in config.mjs. Only hook events that are actually wired to stamp a receipt belong here; adding one is a deliberate schema change, not a free-text field.",
+      "enum": ["SessionStart", "Stop", "SubagentStop"]
+    },
+    "at": { "type": "string", "format": "date-time" },
+    "plugin_version": { "type": "string", "minLength": 1 },
+    "session_id": {
+      "type": ["string", "null"],
+      "description": "From the hook's stdin payload (NATIVE-CAPABILITIES 4.8). Null when Claude Code did not supply one."
+    },
+    "env_session_id": {
+      "type": ["string", "null"],
+      "description": "CLAUDE_CODE_SESSION_ID as seen by the hook process. Which of the three identity fields Claude Code populates is version-dependent, so a match on ANY is proof of this session and a match on none is not, by itself, proof of failure."
+    },
+    "parent_pid": { "type": ["integer", "null"] }
+  }
+}

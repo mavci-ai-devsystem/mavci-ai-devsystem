@@ -77,6 +77,9 @@ export const SEVERITIES = ['critical', 'blocker', 'warning', 'info'];
 export const VERDICTS = ['pass', 'fail'];
 export const RISK_TIERS = ['sandbox', 'standard', 'regulated'];
 
+/** Hook events wired to stamp control/hook-run.json. Mirrors hook-run.schema.json. */
+export const HOOK_RUN_EVENTS = ['SessionStart', 'Stop', 'SubagentStop'];
+
 /** Severities that stop a turn. `warning` and `info` never block. */
 export const BLOCKING_SEVERITIES = new Set(['critical', 'blocker']);
 

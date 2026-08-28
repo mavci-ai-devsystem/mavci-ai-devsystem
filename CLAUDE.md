@@ -134,9 +134,14 @@ plugin loader's schema validation (4.22), so local development cannot see this
 whole class of fault. Before any release, `claude plugin validate --strict` is
 the authority — not our reading of the docs, and not a local run.
 
+0.1.4 completes it: `control/hook-run.json` now carries `schema_version` and
+`project_id`, has a schema under `templates/schemas/`, and is covered by
+`state.schema_valid`. `check-schemas.mjs` asserts its closed enum agrees with
+`config.mjs`, so the duplicated enum cannot drift.
+
 Still unproven: version propagation across a bump (`/plugin marketplace update`
 → `/plugin update`), and hooks actually firing in an installed plugin. Both are
-the next Gate 3 re-run.
+the next Gate 3 re-run — **against v0.1.4**, not v0.1.3.
 
 ---
 

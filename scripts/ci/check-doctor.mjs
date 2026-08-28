@@ -98,6 +98,21 @@ try {
       bad(`receipt is wrong: ${JSON.stringify(receipt)}`);
     }
 
+    // Locked format rules, ROADMAP "Data-format constraints": schema_version,
+    // project_id, ISO-8601 UTC, closed enums.
+    if (receipt.schema_version === 1 && receipt.project_id === MANIFEST.project_id
+        && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[.]\d+)?Z$/.test(receipt.at ?? '')) {
+      ok('the receipt carries schema_version, project_id and an ISO-8601 UTC timestamp');
+    } else {
+      bad(`receipt violates the locked state-file format: ${JSON.stringify(receipt)}`);
+    }
+
+    // The receipt is covered by state.schema_valid, so a malformed one is a
+    // blocker rather than something the gate walks past.
+    const errs = state.validateAll(tmp);
+    if (errs.length === 0) ok('a stamped receipt passes state.schema_valid');
+    else bad(`a freshly stamped receipt fails validateAll: ${JSON.stringify(errs)}`);
+
     const r = runDoctor(tmp, { env: { CLAUDE_CODE_SESSION_ID: 'session-A' } });
     if (/\[ok  \] plugin hooks are registered/.test(r.stdout)) {
       ok('a receipt from this session proves registration');
@@ -111,7 +126,7 @@ try {
 {
   const tmp = makeProject(); cleanup.push(tmp);
   fs.writeFileSync(path.join(tmp, PATHS.hookRun), JSON.stringify({
-    schema_version: 1, event: 'SessionStart', at: new Date().toISOString(),
+    schema_version: 1, project_id: MANIFEST.project_id, event: 'SessionStart', at: new Date().toISOString(),
     plugin_version: '0.0.1-old', session_id: 'session-B', env_session_id: null, parent_pid: null,
   }, null, 2));
   const r = runDoctor(tmp, { env: { CLAUDE_CODE_SESSION_ID: 'session-B' } });
@@ -127,7 +142,7 @@ try {
   const tmp = makeProject(); cleanup.push(tmp);
   const old = new Date(Date.now() - 72 * 3_600_000).toISOString();
   fs.writeFileSync(path.join(tmp, PATHS.hookRun), JSON.stringify({
-    schema_version: 1, event: 'SessionStart', at: old,
+    schema_version: 1, project_id: MANIFEST.project_id, event: 'SessionStart', at: old,
     plugin_version: PLUGIN_VERSION, session_id: 'long-gone', env_session_id: null, parent_pid: null,
   }, null, 2));
   const r = runDoctor(tmp, { env: { CLAUDE_CODE_SESSION_ID: 'session-C' } });
@@ -155,6 +170,43 @@ try {
   const r = runDoctor(tmp, { args: ['--preflight'], input: '' });
   if (r.status === 0) ok('--preflight in a non-project directory still exits 0');
   else bad(`--preflight outside a project exited ${r.status}`);
+}
+
+/* --- 6. state.schema_valid really covers the receipt ------------------ */
+// "It has a schema" is worth exactly as much as the schema being enforced.
+// Without this, hook-run.schema.json could sit unreferenced in templates/schemas/
+// and every claim about it would still read as true.
+{
+  const tmp = makeProject(); cleanup.push(tmp);
+  const cases = [
+    [{ schema_version: 1, event: 'SessionStart', at: new Date().toISOString(), plugin_version: '1.0.0' },
+      'project_id', 'a receipt with no project_id'],
+    [{ schema_version: 1, project_id: MANIFEST.project_id, event: 'Whenever', at: new Date().toISOString(), plugin_version: '1.0.0' },
+      'event', 'an event outside the closed enum'],
+    [{ schema_version: 1, project_id: MANIFEST.project_id, event: 'SessionStart', at: '28/08/2026', plugin_version: '1.0.0' },
+      'at', 'a timestamp that is not ISO-8601'],
+    [{ schema_version: 1, project_id: MANIFEST.project_id, event: 'SessionStart', at: new Date().toISOString(), plugin_version: '1.0.0', rogue: true },
+      'rogue', 'an undeclared property'],
+  ];
+  for (const [doc, needle, label] of cases) {
+    fs.writeFileSync(path.join(tmp, PATHS.hookRun), JSON.stringify(doc, null, 2));
+    const errs = state.validateAll(tmp);
+    if (errs.some((e) => String(e).includes(PATHS.hookRun) && String(e).includes(needle))) {
+      ok(`state.schema_valid rejects ${label}`);
+    } else {
+      bad(`state.schema_valid ACCEPTED ${label}. The receipt's schema is not enforced: ${JSON.stringify(errs)}`);
+    }
+  }
+
+  // stampHookRun must refuse to write a receipt it knows is invalid, rather than
+  // leaving one behind that blocks the next gate.
+  fs.rmSync(path.join(tmp, PATHS.hookRun), { force: true });
+  const written = state.stampHookRun(tmp, { event: 'NotAnEvent', session_id: 'x' });
+  if (written === null && !fs.existsSync(path.join(tmp, PATHS.hookRun))) {
+    ok('stampHookRun refuses to write a receipt that would fail its own schema');
+  } else {
+    bad('stampHookRun wrote an invalid receipt, which would fail state.schema_valid on the next gate');
+  }
 }
 
 } finally {

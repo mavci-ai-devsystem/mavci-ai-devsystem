@@ -349,8 +349,24 @@ The system holds no list of projects and has no per-project configuration. Every
     ├── verdicts/0007-attempt-02.json
     ├── baseline.json               # pre-existing violations, section 6.5
     ├── waivers.json                # time-boxed exceptions, section 6.6
-    └── integrity.json              # control_hash + last-gate heartbeat, sections 4.3 and 6.4
+    ├── integrity.json              # control_hash + last-gate heartbeat, sections 4.3 and 6.4
+    ├── gate-run.json               # gate completion sentinel, section 6.4
+    └── hook-run.json               # proof Claude Code LOADED our hooks, section 6.4
 ```
+
+`integrity.json`, `gate-run.json` and `hook-run.json` are the three control files
+**excluded from the control hash** (`config.mjs CONTROL_GLOBS`). Each holds a
+result or a heartbeat rather than a governing value, and each is rewritten on a
+cadence — every turn, every session — that would otherwise break the seal
+continuously. They are still inside `control/`, so no agent can write or forge
+one.
+
+`integrity.json` and `hook-run.json` carry `schema_version` and `project_id`,
+have schemas under `templates/schemas/`, and are covered by `state.schema_valid`
+like every other state file. `gate-run.json` does **not**: it is a within-turn
+sentinel written and read only by `gate.mjs` and `risk-guard.mjs`, and it never
+outlives the turn that wrote it. That is a real gap, not a design principle —
+if anything else ever reads it, it needs a schema first.
 
 **The split (B1).** A stuck agent's cheapest move used to be editing the file that governs it. Now every governing value — phase, attempts, ceiling, verdicts, baseline, waivers — is on the far side of a permission deny rule. What remains agent-writable is exactly the material an agent legitimately produces: specs, artifact lists, notes, ADRs, lessons.
 

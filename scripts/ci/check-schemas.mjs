@@ -58,6 +58,28 @@ for (const f of files) {
   console.log(`  ok   ${f}`);
 }
 
+// Closed enums duplicated between config.mjs and a schema must not drift. The
+// duplication is deliberate (the schemas are data, config.mjs is code), but a
+// silent disagreement means one of the two is enforcing nothing.
+{
+  const config = await import(pathToFileURL(path.join(ROOT, 'plugins/mavci-core/scripts/config.mjs')).href);
+  const pairs = [
+    ['state.schema.json', 'phase', config.PHASES],
+    ['hook-run.schema.json', 'event', config.HOOK_RUN_EVENTS],
+  ];
+  for (const [file, prop, fromConfig] of pairs) {
+    const p = path.join(DIR, file);
+    if (!fs.existsSync(p)) { failures.push(`${file}: missing, but config.mjs still declares its enum`); continue; }
+    const inSchema = JSON.parse(fs.readFileSync(p, 'utf8')).properties?.[prop]?.enum;
+    if (!Array.isArray(inSchema)) { failures.push(`${file}: ${prop} has no enum, so the closed set is not enforced`); continue; }
+    if (JSON.stringify(inSchema) !== JSON.stringify(fromConfig)) {
+      failures.push(`${file} ${prop} enum ${JSON.stringify(inSchema)} disagrees with config.mjs ${JSON.stringify(fromConfig)}`);
+    } else {
+      console.log(`  ok   ${file} ${prop} enum matches config.mjs`);
+    }
+  }
+}
+
 // The validator itself must actually reject something, or every schema "passes".
 const probe = { type: 'object', required: ['a'], properties: { a: { type: 'integer', minimum: 2 } }, additionalProperties: false };
 if (validate({ a: 1 }, probe).length === 0) failures.push('validator did not reject a value below minimum');

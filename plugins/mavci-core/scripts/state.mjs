@@ -442,9 +442,16 @@ export function lastGate(root) {
  */
 export function stampHookRun(root, { event, session_id }) {
   const p = abs(root, PATHS.hookRun);
+  // No control directory, or no manifest to take project_id from, means this is
+  // not a connected project: there is nothing to stamp and nothing that will
+  // later read it. Return null rather than writing a file that fails its schema.
   if (!exists(path.dirname(p))) return null;
+  const projectId = readJsonOrNull(abs(root, PATHS.manifest))?.project_id;
+  if (!projectId) return null;
+
   const doc = {
     schema_version: 1,
+    project_id: projectId,
     event,
     at: nowIso(),
     plugin_version: pluginVersion(),
@@ -455,6 +462,12 @@ export function stampHookRun(root, { event, session_id }) {
     env_session_id: process.env.CLAUDE_CODE_SESSION_ID ?? null,
     parent_pid: Number.isInteger(process.ppid) ? process.ppid : null,
   };
+
+  // Validate before writing. An invalid receipt would fail state.schema_valid on
+  // the next gate, which would turn a hook that is working correctly into a
+  // blocker - the receipt must never be the thing that breaks the build.
+  if (validate(doc, schemas()['hook-run']).length) return null;
+
   try { writeJsonAtomic(p, doc); } catch { return null; }
   return doc;
 }
@@ -511,6 +524,7 @@ export function validateAll(root) {
   check(PATHS.baseline, 'baseline');
   check(PATHS.waivers, 'waivers');
   check(PATHS.integrity, 'integrity');
+  check(PATHS.hookRun, 'hook-run');
 
   for (const dir of [PATHS.controlTasks, PATHS.verdicts, PATHS.tasks]) {
     const d = abs(root, dir);
