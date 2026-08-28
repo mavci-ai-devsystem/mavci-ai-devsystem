@@ -113,7 +113,14 @@ function checkSchemas(root, out) {
 function checkVersionSkew(root, out, { sync = false } = {}) {
   const installed = pluginVersion();
   const state = readJsonOrNull(abs(root, PATHS.state));
-  if (!state) return;
+  if (!state) {
+    // Same rule as every other probe in this file: returning silently deleted the
+    // version-skew line from the report, and an absent line reads as a pass.
+    out.push({ status: WARN, text: line(WARN, 'version skew NOT CHECKED',
+      `${PATHS.state} is missing or unreadable, so the installed plugin version cannot be`
+      + ' compared with the tag CI clones.' + '\n         This is unknown, not passing. Run /mavci:connect, then re-run doctor.') });
+    return;
+  }
   const recorded = state.plugin_version;
   if (recorded === installed) {
     out.push({ status: OK, text: line(OK, `plugin ${installed} (CI clones tag v${recorded})`) });

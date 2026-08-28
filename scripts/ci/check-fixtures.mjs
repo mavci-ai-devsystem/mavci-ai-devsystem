@@ -79,6 +79,13 @@ async function runFixture(checkId, variant) {
     fs.writeFileSync(path.join(tmp, '.gitignore'), 'node_modules\n.env*\n');
     state.init(tmp, BASE_MANIFEST);
     copyTree(path.join(FX, checkId, variant), tmp);
+    // Reseal after the copy. A fixture that writes into .mavci/control/ would
+    // otherwise break the integrity seal as a side effect, so its bad/ case would
+    // fire twice - once for the thing it is documenting and once for the seal -
+    // and the fixture would no longer say what the rule catches. The seal is
+    // proved separately, by the tampering assertion below. For every fixture that
+    // does not touch .mavci/control/ this is a no-op.
+    state.seal(tmp);
 
     const { findings } = await runChecks(tmp, { scope: 'full' });
     return findings.filter((f) => f.check_id === checkId);
@@ -87,19 +94,53 @@ async function runFixture(checkId, variant) {
   }
 }
 
+/**
+ * Every file under `dir`, recursively. A missing or empty directory returns [].
+ *
+ * This exists because `fs.existsSync(dir)` was the assertion here, and it is a
+ * PROXY: it stands in for "the fixture is present and correct" but is satisfied
+ * by an empty directory. Git cannot track an empty directory, so an empty
+ * fixture dir exists ONLY on the machine that created it - the check passed on
+ * every local run and failed the first time CI ever executed. A proxy that
+ * cannot fail is not an assertion.
+ */
+function filesUnder(dir) {
+  const out = [];
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) out.push(...filesUnder(full));
+    else if (e.isFile()) out.push(full);
+  }
+  return out;
+}
+
 const failures = [];
 
 for (const rule of RULES) {
   const dir = path.join(FX, rule.id);
-  const hasBad = fs.existsSync(path.join(dir, 'bad'));
-  const hasGood = fs.existsSync(path.join(dir, 'good'));
+  const badDir = path.join(dir, 'bad');
+  const goodDir = path.join(dir, 'good');
 
-  if (!hasBad || !hasGood) {
+  if (!fs.existsSync(badDir) || !fs.existsSync(goodDir)) {
     failures.push(`${rule.id}: missing fixture pair (templates/fixtures/${rule.id}/{bad,good}/)`);
     continue;
   }
 
-  // state.schema_valid is exercised by corrupting the control plane, not by files.
+  // Presence is not enough - the directory must actually carry a fixture.
+  const badFiles = filesUnder(badDir);
+  const goodFiles = filesUnder(goodDir);
+  if (!badFiles.length || !goodFiles.length) {
+    const empty = [!badFiles.length && 'bad/', !goodFiles.length && 'good/'].filter(Boolean);
+    failures.push(`${rule.id}: ${empty.join(' and ')} ${empty.length > 1 ? 'are' : 'is'} EMPTY. `
+      + 'Git does not track empty directories, so this fixture exists on one machine '
+      + 'only and can never run in CI.');
+    continue;
+  }
+
+  // state.schema_valid additionally proves the SEAL catches a hand-edit, which no
+  // file fixture can express. It does not exempt the rule from the pair above.
   if (rule.id === 'state.schema_valid') {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-fx-state-'));
     try {
@@ -122,7 +163,8 @@ for (const rule of RULES) {
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
-    continue;
+    // No `continue`: this rule is NOT exempt from the bad/good pair. The
+    // tampering case above proves the seal; the fixture below proves the schema.
   }
 
   const bad = await runFixture(rule.id, 'bad');

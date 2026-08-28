@@ -38,6 +38,7 @@ if (exists(plPath)) {
 }
 if (exists(mkPath)) {
   const mk = JSON.parse(read(mkPath));
+  if (!mk.plugins?.length) failures.push('marketplace.json lists no plugins - the loop below would assert nothing');
   if (!mk.name) failures.push('marketplace.json has no name');
   if (!mk.owner?.name) failures.push('marketplace.json has no owner.name');
   for (const p of mk.plugins ?? []) {
@@ -91,8 +92,13 @@ if (!exists(hooksPath)) {
     }
   }
 
+  // `?.length`, not truthiness: `"Stop": []` is an empty array, which is truthy in
+  // JS, so a declared-but-empty event passed as "core enforcement point present"
+  // while registering zero hooks.
   for (const required of ['PreToolUse', 'Stop', 'SubagentStop']) {
-    if (!hooks[required]) failures.push(`hooks.json has no ${required} entry - a core enforcement point is missing`);
+    if (!hooks[required]?.length) {
+      failures.push(`hooks.json has no ${required} hooks - a core enforcement point registers nothing`);
+    }
   }
 }
 

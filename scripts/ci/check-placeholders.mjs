@@ -102,6 +102,8 @@ const MANIFEST = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'fixtures', 'se
     }
 
     /* --- 4. shared config really was rendered for BOTH commands ------- */
+    // Guard the loop: zero entries would run zero assertions and still print ok.
+    if (!render.SHARED_FILES.length) bad('render.SHARED_FILES is empty, so nothing was checked');
     for (const { to } of render.SHARED_FILES) {
       const p = path.join(tmp, to);
       if (!fs.existsSync(p)) { bad(`${to} was not rendered`); continue; }

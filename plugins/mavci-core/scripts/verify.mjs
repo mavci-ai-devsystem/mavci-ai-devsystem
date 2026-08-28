@@ -94,7 +94,13 @@ export async function runChecks(root = projectRoot(), { scope = 'full' } = {}) {
     },
     validateState() {
       const errs = validateAll(root).map((message) => ({ message }));
-      if (exists(abs(root, PATHS.integrity))) {
+      // NO exists() guard on the seal. A MISSING integrity.json is the strongest
+      // tamper signal there is - deleting one file used to disable tamper
+      // detection entirely and report a clean pass, because validateAll also
+      // skips files that are not there. verifyIntegrity already reports an
+      // absent seal as "never sealed", so let it speak.
+      // Only an unconnected directory is exempt: there is nothing to seal yet.
+      if (exists(abs(root, PATHS.manifest))) {
         const r = verifyIntegrity(root);
         if (!r.ok) errs.push({ message: r.reason, path: PATHS.integrity });
       }

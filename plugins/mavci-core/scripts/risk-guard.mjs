@@ -276,22 +276,49 @@ function main() {
       /* --- phase gate + per-agent edit scope (hook-only, ARCHITECTURE 1.1) */
       if (agent) {
         const scopes = readJsonOrNull(path.join(PLUGIN_ROOT, 'agents', 'agent-scopes.json'));
-        const scope = scopes?.[agent];
+        // An unreadable scopes file means per-agent edit scope CANNOT be enforced.
+        // Falling through silently let any agent edit anything with no notice, so
+        // deleting or renaming one file disabled the control. Refuse instead.
+        if (!scopes) {
+          deny('agents/agent-scopes.json could not be read, so per-agent edit scope cannot be '
+            + 'enforced. Refusing the edit rather than allowing it unchecked. Reinstall the plugin.');
+        }
+        const scope = scopes[agent];
+        // A mavci agent with no entry is a packaging bug, not an unscoped agent.
+        // Third-party agents are not ours to scope, so they pass through.
+        if (!scope && agent.startsWith('mavci-')) {
+          deny(`${agent} has no entry in agents/agent-scopes.json, so its edit scope is undefined. `
+            + 'Refusing the edit rather than allowing it unchecked.');
+        }
         if (scope) {
           if (scope.deny?.length && matchesAny(rel, scope.deny)) {
             deny(`${agent} may not edit ${rel}. Its scope is limited to: ${(scope.allow ?? []).join(', ') || '(nothing)'}. `
               + 'If this file genuinely needs to change, say so in `suggested_next` and stop.');
           }
-          if (scope.allow?.length && !matchesAny(rel, scope.allow)) {
-            deny(`${agent} may only edit ${(scope.allow).join(', ')}. ${rel} is outside that scope.`);
+          // `scope.allow` present, NOT `.length`. An empty allow list means "may
+          // edit nothing" - mavci-verifier really is `"allow": []` - but `?.length`
+          // made that falsy and skipped the check entirely. The verifier was
+          // constrained only by its separate `deny: ["**"]`; remove that line and
+          // it could have edited anything.
+          if (scope.allow && !matchesAny(rel, scope.allow)) {
+            deny(`${agent} may only edit ${scope.allow.join(', ') || '(nothing)'}. ${rel} is outside that scope.`);
           }
         }
 
         const APP_PATHS = ['app/**', 'src/**', 'lib/**', 'components/**', 'supabase/**'];
-        if (state && state.phase !== 'build' && matchesAny(rel, APP_PATHS)) {
-          deny(`the project is in the "${state.phase}" phase, so application code is frozen. `
-            + 'Move to the build phase with /mavci:build before changing app code. '
-            + 'Planning and verification do not edit code - that separation is what keeps a verifier honest.');
+        if (matchesAny(rel, APP_PATHS)) {
+          // An unreadable control plane is not permission to write. `state &&`
+          // meant a missing or corrupt state.json silently lifted the phase
+          // freeze, which is the one moment it most needs to hold.
+          if (!state) {
+            deny('the control plane could not be read, so the build-phase freeze on application '
+              + 'code cannot be evaluated. Refusing the edit. Run /mavci-core:doctor.');
+          }
+          if (state.phase !== 'build') {
+            deny(`the project is in the "${state.phase}" phase, so application code is frozen. `
+              + 'Move to the build phase with /mavci:build before changing app code. '
+              + 'Planning and verification do not edit code - that separation is what keeps a verifier honest.');
+          }
         }
       }
     }

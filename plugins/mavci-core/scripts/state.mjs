@@ -516,7 +516,8 @@ async function main() {
     switch (cmd) {
       case '--validate': {
         const errors = validateAll(root);
-        const integrity = exists(abs(root, PATHS.integrity)) ? verifyIntegrity(root) : { ok: true };
+        // A missing seal is a FAILURE, not an implicit ok - see verify.mjs.
+        const integrity = verifyIntegrity(root);
         if (!integrity.ok) errors.push(integrity.reason);
         if (errors.length) {
           console.error(`state validation FAILED (${errors.length}):`);
