@@ -104,8 +104,13 @@ fails a tag that disagrees with it.
     edit → build-agents.mjs if a def changed → bump plugin.json → commit →
     push → tag vX.Y.Z → push tag
 
-Projects pull with `/plugin marketplace update` then `/plugin update
-mavci-core@mavci`. No project file is edited. Rollback: see `ARCHITECTURE` §13 —
+Propagation is **manual at both links** and costs one operator visit per
+machine per release: `git fetch origin` + `checkout -B main origin/main` in
+`~/.claude/plugins/marketplaces/mavci`, then `claude plugin uninstall
+mavci-core@mavci` + `claude plugin install mavci-core@mavci --scope user`,
+then restart. `/plugin marketplace update` does not move the clone (4 of 4)
+and `claude plugin update` does not move the install (1 of 1) — 6.21, and
+`ARCHITECTURE` §2 step 5. No project file is edited.
 roll-forward is primary, because ref-pinning inside `extraKnownMarketplaces` is
 unverified (6.16).
 
@@ -207,9 +212,10 @@ because both were invisible:
    `check-hooks-quiet.mjs` asserts all eight, both directions, and counts the
    entries in `hooks.json` so a ninth hook fails the test until it is covered.
 
-Still unproven: version propagation across a bump (`/plugin marketplace update`
-→ `/plugin update`), and hooks actually **firing** — 8 hooks are registered, but
-no `control/hook-run.json` receipt has been checked in a connected project yet.
+Still unproven: version propagation across a bump — the four-command manual
+procedure above, end to end, from a pushed tag to a restarted session running
+the new code — and hooks actually **firing**: 8 hooks are registered, but no
+`control/hook-run.json` receipt has been checked in a connected project yet.
 Both are Gate 4, restarting from step 3 in a clean project **against v0.1.7**.
 `gate4` and `gate4-verify` are contaminated — an emptied `enabledPlugins` in one,
 an auto-recorded project pin and an untracked settings file in the other — and

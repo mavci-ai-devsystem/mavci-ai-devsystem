@@ -273,9 +273,55 @@ Consequences for the topology:
 2. `node scripts/build-agents.mjs` if an agent changed. CI verifies generated files match.
 3. Bump `version` in `plugin.json` **and push a matching git tag `v<version>`**. `release.yml` fails if version and tag disagree — the tag is what CI in every project clones (section 6.7).
 4. Push.
-5. In any project, any machine: `/plugin marketplace update`, `/plugin update mavci-core@mavci`, **restart the session**, then `/mavci-core:doctor --sync` to record the new version in `state.json.plugin_version` so CI follows.
+5. In any project, any machine, run the propagation procedure. **Both links in
+   the chain are manual** — neither `/plugin marketplace update` nor
+   `claude plugin update` moves anything (see below):
+
+   ```bash
+   # link 1 - advance the marketplace clone
+   git -C ~/.claude/plugins/marketplaces/mavci fetch origin
+   git -C ~/.claude/plugins/marketplaces/mavci checkout -B main origin/main
+
+   # link 2 - advance the install
+   claude plugin uninstall mavci-core@mavci
+   claude plugin install mavci-core@mavci --scope user
+   ```
+
+   Then **restart the session**, then `/mavci-core:doctor --sync` to record the
+   new version in `state.json.plugin_version` so CI follows. On Windows the
+   clone is under `%USERPROFILE%\.claude\plugins\marketplaces\mavci`.
 
 No project file changes except that one recorded version field, which is the point: local and CI can never silently diverge.
+
+**Why every step of that is manual.** Two separate commands in the documented
+path have been observed not to do their job, and they fail independently:
+
+- **`/plugin marketplace update` does not advance the clone.** Four
+  observations, no successes — most recently with the clone at `9b04f52` and
+  `9226bc9` (v0.1.7) on origin. `git fetch origin` plus
+  `checkout -B main origin/main` has moved it every time.
+- **`claude plugin update` does not advance the install.** Observed with the
+  clone already at v0.1.7: the command reported no error and the loaded plugin
+  stayed at the previous version. `claude plugin uninstall` followed by
+  `claude plugin install --scope user` moved it.
+
+Neither has a counter-example, so both are documented as the behaviour of those
+commands rather than as intermittent faults. **This is the real propagation
+procedure until Claude Code changes**, and the two halves are not
+interchangeable: fetching the clone without reinstalling leaves the old code
+loaded, and reinstalling without fetching reinstalls the old code.
+
+**The detector is `doctor`, and the procedure above is the fix.** Nothing in the
+update path reports either failure: both commands print no error, and the loaded
+plugin keeps working, one release behind. What surfaces it is
+`checkDistribution` in `/mavci-core:doctor`, which compares three things — the
+loaded plugin's version, the clone's `plugin.json` version, and the clone's HEAD
+against `origin/main` — and warns `marketplace clone is BEHIND origin/<branch>`
+(link 1 has not been run) or `loaded plugin X, marketplace clone has Y` (link 1
+ran, link 2 did not). Each warning prints the full four-command procedure. That
+warning is the only routine signal an operator gets that a release has not
+landed, which is why `doctor` runs its distribution checks whether or not the
+project is connected.
 
 **Evidence status of step 5, stated exactly.** Gate 4 (2026-08-28) verified the
 first half and inferred the second, and the difference matters because the whole
@@ -317,7 +363,8 @@ Gate 3 (2026-08-28) turned the first of these from one step into two. The Gate 4
 re-run added the second. Everything below is observed behaviour, not
 documentation.
 
-**Paid once per machine, ever:**
+**Paid once per machine — item 1 once ever, item 2 again at every version
+bump** (`claude plugin update` does not move an install; see step 5 above):
 
 1. **A git credential that resolves WITHOUT A PROMPT, configured before Claude
    Code launches.** The repo is private, so the marketplace is cloned with the
@@ -367,10 +414,21 @@ clones over HTTPS through the credential from step 1. It is a template
 invariant, not something an operator types. `doctor` fails every other form.
 
 **The two costs, stated separately, because the distinction is the whole point
-of the topology.** Per machine: two commands, once, ever. Per repo: one trust
-dialog, zero commands, and the files `/mavci-core:connect` commits. The sixth
-SaaS project on a machine costs the same as the second — a dialog — and that is
-what "nothing is copied per project" has to mean in practice.
+of the topology.** Per machine: two commands to bootstrap, **plus two more at
+every version bump** — the uninstall/install pair above, because
+`claude plugin update` does not move the install. Per repo: one trust dialog,
+zero commands, and the files `/mavci-core:connect` commits. The sixth SaaS
+project on a machine costs the same as the second — a dialog — and that is what
+"nothing is copied per project" has to mean in practice.
+
+**The per-machine cost is not "one install, forever".** Earlier revisions of
+this section said it was, and that was wrong: it is **one install per version
+bump, per machine.** The claim that survives is the one about *projects* — a
+release still reaches every project on a machine without editing a single
+project file, and the sixth project still costs nothing. What it costs is one
+operator visit per machine per release, not per project per release. Still
+small, still bounded, still O(machines) rather than O(projects) — but it is a
+recurring cost, and a fleet of machines pays it on every bump.
 
 `claude -p` and SDK sessions never get the trust dialog and therefore never load
 the plugin — **headless Claude is outside the design envelope.** CI does not use
@@ -1131,9 +1189,9 @@ A bad release reaches every project at once. That is the cost of the propagation
 1. In the system repo: `git revert <bad-commit>`.
 2. Bump `plugin.json` to the next patch (`0.3.1`), whose content equals the last-good release.
 3. Push, with tag `v0.3.1`. `release.yml` verifies version and tag agree.
-4. In each project: `/plugin marketplace update`, `/plugin update mavci-core@mavci`, `/mavci-core:doctor --sync`.
+4. On each machine: the four-command propagation procedure from section 2 step 5 — `git fetch origin` and `checkout -B main origin/main` in `~/.claude/plugins/marketplaces/mavci`, then `claude plugin uninstall mavci-core@mavci` and `claude plugin install mavci-core@mavci --scope user`. Then restart, and `/mavci-core:doctor --sync` in each project. **Neither `/plugin marketplace update` nor `claude plugin update` will do this for you** (6.21), which matters most here: a rollback that appears to have propagated and has not is the worst state to be in during an incident.
 
-Roll-forward is primary because every step is a verified mechanism and it leaves a linear, auditable history. Time to recover: about two minutes plus one command per project.
+Roll-forward is primary because every step is a verified mechanism and it leaves a linear, auditable history. Time to recover: about two minutes in the system repo, plus the four-command procedure once per machine and a `--sync` per project.
 
 ### Lever 2 — pin one project to an older version
 
