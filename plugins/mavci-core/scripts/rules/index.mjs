@@ -503,7 +503,12 @@ const stateSchemaValid = {
  */
 const marketplaceForm = {
   id: 'settings.marketplace_form',
-  severity: 'blocker',
+  // `critical`, not `blocker`, and it is the second rule to earn that. The other
+  // twelve ask whether a standard is met; this one asks whether checking happens
+  // at all. Baselining or waiving it would mean recording "nothing is enforced
+  // here" as accepted technical debt, which is not a debt - it is the end of the
+  // system. `critical` is the set of findings it is never legitimate to suppress.
+  severity: 'critical',
   always: true,
   description: 'The marketplace is registered in the one source form that resolves, and the plugin is enabled.',
   remedy: `Set extraKnownMarketplaces.${MARKETPLACE_NAME}.source to `

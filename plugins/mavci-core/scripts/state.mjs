@@ -268,8 +268,10 @@ export function baselineInit(root, findings) {
     const lines = critical.map((c) => `  - ${c.check_id} at ${c.path ?? '(repo)'}`).join('\n');
     throw new Error(
       `refusing to baseline ${critical.length} critical finding(s):\n${lines}\n\n`
-      + 'A committed secret is not acceptable technical debt. Remove it, rotate the key, '
-      + 'then run /mavci-core:connect again.');
+      + 'A critical finding is never acceptable technical debt. A committed secret must be '
+      + 'removed and its key rotated. A broken marketplace registration must be fixed, because '
+      + 'baselining it would file "nothing is enforced here" as debt. Then run '
+      + '/mavci-core:connect again.');
   }
   const s = readJsonOrNull(abs(root, PATHS.state));
   const now = nowIso();

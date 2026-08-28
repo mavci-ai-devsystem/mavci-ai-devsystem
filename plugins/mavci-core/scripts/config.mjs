@@ -105,7 +105,13 @@ export const BLOCKING_SEVERITIES = new Set(['critical', 'blocker']);
 
 /**
  * `critical` findings can never be baselined or waived.
- * A committed live key is not acceptable technical debt. ARCHITECTURE 4.4 / 6.5 / 6.6.
+ *
+ * The category is "things it is never legitimate to suppress", and two kinds
+ * qualify. A committed live key is not acceptable technical debt
+ * (ARCHITECTURE 4.4 / 6.5 / 6.6). The absence of enforcement itself is not
+ * either: `settings.marketplace_form` reports a project where the marketplace
+ * never resolves, so no plugin installs and no hook registers. Baselining that
+ * would file "nothing is checked here" as accepted debt.
  */
 export const UNSUPPRESSIBLE_SEVERITIES = new Set(['critical']);
 
