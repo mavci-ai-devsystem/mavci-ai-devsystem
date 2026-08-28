@@ -300,6 +300,54 @@ try {
   }
 }
 
+/* --- 8. distribution: loaded plugin vs marketplace clone vs origin ----
+ * A stale marketplace clone produces output that looks correct and is generated
+ * by superseded code. Observed 2026-08-28: `/plugin marketplace update` refreshed
+ * one marketplace, silently skipped this one, and new-project then rendered a
+ * project from a template that had already been fixed and released.
+ *
+ * Doctor is the only component positioned to see it, so the check must be PROVEN
+ * to fire. Both cases assert a WARN, not a pass: a freshness probe that cannot
+ * report staleness is the same fail-open shape as a doctor that certifies a
+ * broken marketplace form.
+ */
+{
+  const stageClone = (version) => {
+    const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-cfg-'));
+    cleanup.push(cfg);
+    const name = PLUGIN_ID.split('@')[0];
+    const clone = path.join(cfg, 'plugins', 'marketplaces', MARKETPLACE_NAME);
+    const sub = path.join(clone, 'plugins', name, '.claude-plugin');
+    fs.mkdirSync(path.join(clone, '.claude-plugin'), { recursive: true });
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(path.join(clone, '.claude-plugin', 'marketplace.json'),
+      JSON.stringify({ name: MARKETPLACE_NAME, plugins: [{ name, source: `./plugins/${name}` }] }, null, 2));
+    fs.writeFileSync(path.join(sub, 'plugin.json'), JSON.stringify({ name, version }, null, 2));
+    return cfg;
+  };
+
+  const tmp = makeProject(); cleanup.push(tmp);
+
+  // A clone holding a DIFFERENT version than the loaded plugin.
+  const r1 = runDoctor(tmp, { env: { CLAUDE_CONFIG_DIR: stageClone('99.99.99') } });
+  if (/\[WARN\] loaded plugin .*marketplace clone has 99\.99\.99/.test(r1.stdout)) {
+    ok('doctor WARNs when the loaded plugin differs from the marketplace clone');
+  } else {
+    bad('doctor did NOT report a loaded plugin differing from the marketplace clone. A session '
+      + 'running superseded code, and every project it scaffolds, would look clean.');
+  }
+
+  // No clone at all: unknown, and unknown must be reported rather than skipped.
+  const missing = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-nocfg-'));
+  cleanup.push(missing);
+  const r2 = runDoctor(tmp, { env: { CLAUDE_CONFIG_DIR: missing } });
+  if (/\[WARN\] marketplace clone NOT FOUND/.test(r2.stdout)) {
+    ok('doctor reports an absent marketplace clone as unknown rather than passing');
+  } else {
+    bad('doctor was SILENT with no marketplace clone present. An absent line reads as a pass.');
+  }
+}
+
 } finally {
   for (const d of cleanup) fs.rmSync(d, { recursive: true, force: true });
 }
