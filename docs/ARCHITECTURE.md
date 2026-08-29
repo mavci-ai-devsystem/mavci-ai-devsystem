@@ -796,7 +796,7 @@ Practical effect: a question turn costs nothing. A one-file edit costs a few hun
 
 | Failure | Detection | Result |
 |---|---|---|
-| `verify.mjs` throws | try/catch around the whole run | exit 2, `stopReason`: "standards checker crashed: `<message>`. Enforcement did not run. Run /mavci-core:doctor." |
+| `verify.mjs` throws | try/catch around the whole run | exit 2, `reason`: "standards checker crashed: `<message>`. Enforcement did not run. Run /mavci-core:doctor." |
 | `verify.mjs` exceeds budget | internal 120 s budget, under the hook's 150 s `timeout` | exit 2, "checker exceeded its 120 s budget. Enforcement did not run." |
 | Malformed or missing `project.json` / schema | validation before scanning | exit 2, naming the file |
 | `integrity.json` mismatch | hash recompute (section 4.2) | exit 2, "control plane modified outside state.mjs" |
@@ -862,14 +862,21 @@ Timeouts are set explicitly (`150`), never left at the 600-second default that w
 }
 ```
 
-On a blocking verdict, `gate.mjs` prints:
+On a blocking verdict, `gate.mjs` exits 2 and writes the same text on both carriers the Stop
+contract defines. On stdout, the top-level decision:
 
 ```json
-{ "hookSpecificOutput": { "hookEventName": "Stop", "continue": true,
-  "stopReason": "mavci: 1 blocking violation. next.route_force_dynamic at app/api/portal/route.ts:1 — no `export const dynamic` found. Not baselined, not waived. Fix it, then stop again." } }
+{ "decision": "block",
+  "reason": "mavci: 1 blocking violation. next.route_force_dynamic at app/api/portal/route.ts:1 — no `export const dynamic` found. Not baselined, not waived. Fix it, then stop again." }
 ```
 
-`continue: true` on a `Stop` hook is verified (4.5): the agent cannot end its turn, and it is handed the check ID, the file, and the line.
+and the same string on stderr. Exit 2 is what refuses the stop; the reason is what the agent is
+told, and the JSON decision wins when both are present (4.5). Both are written because stderr is
+the carrier that still delivers if the JSON is ever rejected by a tightened schema.
+
+Neither `continue` nor a nested `stopReason` appears. `continue` defaults to `true` and acts only
+when `false`, so it was inert noise; a `stopReason` nested inside `hookSpecificOutput` is honoured
+by nothing on `Stop` and is what made 0.1.10 block in silence. Do not add either back.
 
 **Loop safety.** A counter keyed on `prompt_id` lives in `control/integrity.json` — moved out of the OS temp directory in revision 2, since it is control-plane state and needs to survive a session restart. On the third consecutive gate for one prompt, `gate.mjs` stops returning `continue: true`, returns a plain `systemMessage`, lets the turn end, and marks the task `blocked`. A gate that cannot be satisfied must reach the operator, not spin.
 

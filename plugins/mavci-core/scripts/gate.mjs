@@ -132,29 +132,70 @@ function sweepStaleMarkers(now = Date.now()) {
 }
 
 /**
- * Emit the Stop payload. NOTE: this payload alone does NOT block the turn.
+ * Emit a Stop BLOCK: the refusal and the explanation, on both documented
+ * carriers, before the caller exits 2.
  *
- * What the docs establish (code.claude.com/docs/en/hooks, CC 2.1.250):
- *   - exit code 2 on Stop: "Prevents Claude from stopping, continues the
- *     conversation". For a `type: "command"` hook this is the ONLY confirmed
- *     block, and it is what every caller intending to block must use.
- *   - `continue`/`stopReason` ARE correctly nested inside hookSpecificOutput -
- *     that part of the original shape was right - but the reference's
- *     decision-control table does not define what `continue: true` vs `false`
- *     means for a command Stop hook. The global `continue: false` + `stopReason`
- *     pair appears to HALT the session and show the reason to the operator,
- *     which is the opposite of refusing a stop, so this deliberately does not
- *     set it. Do not "fix" that without a verbatim doc quote: 0.1.9 shipped
- *     seven releases on the inverted guess and never blocked once.
- *   - `ok`/`reason`/`impossible` is the `type: "prompt"` hook format. This is a
- *     `type: "command"` hook and cannot use it.
+ * Verbatim, from the hooks reference (code.claude.com/docs/en/hooks, fetched
+ * 2026-08-29). Read these before changing a character of this function; the
+ * last two releases were each written from a paraphrase of them.
  *
- * See NATIVE-CAPABILITIES 4.5, corrected in 0.1.10.
+ *   Exit-code-2 table:
+ *     "`Stop` | Yes | Prevents Claude from stopping, continues the conversation"
+ *
+ *   Exit code 2, on where the text comes from:
+ *     "The blocking message is the reason from your JSON's blocking decision
+ *      when it makes one, and your stderr text otherwise."
+ *
+ *   Stop decision control, the two TOP-LEVEL fields:
+ *     "`decision` | `"block"` prevents Claude from stopping. Omit to allow
+ *      Claude to stop"
+ *     "`reason`   | Required when `decision` is `"block"`. Tells Claude why it
+ *      should continue"
+ *     "A hook that blocks by exiting 2 routes the same way as `reason`: Claude
+ *      receives the stderr message as the explanation for why it should
+ *      continue."
+ *
+ *   And that mixing the two is sanctioned, not a conflict:
+ *     "exit 2 keeps its blocking effect, and Claude Code still reads the JSON
+ *      fields"
+ *
+ * So both carriers are written on purpose, and either one alone delivers. The
+ * JSON wins when both are present; stderr is what survives a schema change,
+ * since "A hook that exits 2 while printing JSON that fails JSON output schema
+ * validation still blocks: Claude Code uses stderr as the blocking reason."
+ * That is a real belt and braces, unlike 0.1.10's, where both halves were
+ * fastened to nothing.
+ *
+ * What is deliberately NOT here, and must not come back:
+ *   - `stopReason` nested inside `hookSpecificOutput`. This was the whole
+ *     defect. For Stop the only `hookSpecificOutput` field honoured is
+ *     `additionalContext` (plus the required `hookEventName`), so a nested
+ *     `stopReason` is a field of no documented shape and renders NO decision.
+ *     0.1.10 blocked with it and Gate 4's entire Stop feedback was "No stderr
+ *     output": the refusal landed, the explanation went nowhere.
+ *   - `continue`. It defaults to `true` and acts only when `false` ("If
+ *     `false`, Claude stops processing entirely after the hook runs"), so
+ *     `continue: true` was never the inversion it was recorded as - it was
+ *     inert. Inert noise in a blocking payload is one more thing the next
+ *     reader has to work out is meaningless, so it is gone.
+ *   - top-level `stopReason`, which is "Message shown to the user when
+ *     `continue` is `false`. Not shown to Claude" - never a model-facing
+ *     carrier.
+ *   - `ok`/`reason`/`impossible`, which is the `type: "prompt"` hook format.
+ *     This is a `type: "command"` hook and cannot use it.
+ *
+ * Length: "Hook output strings, including `additionalContext`, `systemMessage`,
+ * and plain stdout, are capped at 10,000 characters." `detail` fits with room
+ * to spare - the fail path slices to the first 5 failing checks, and a check
+ * line is a check id, a path:line, an evidence string and a remedy string, so
+ * the worst realistic case is a few hundred characters times five. Anything
+ * that widens that slice has to re-check this.
+ *
+ * See NATIVE-CAPABILITIES 4.5, corrected again in 0.1.11.
  */
-function emitContinue(event, reason) {
-  process.stdout.write(JSON.stringify({
-    hookSpecificOutput: { hookEventName: event, continue: true, stopReason: reason },
-  }));
+function emitBlock(reason) {
+  process.stdout.write(JSON.stringify({ decision: 'block', reason }));
+  process.stderr.write(reason);
 }
 
 function emitMessage(event, message) {
@@ -164,13 +205,13 @@ function emitMessage(event, message) {
 }
 
 /**
- * Fail closed. Emits the JSON decision AND exits 2.
- * Belt and braces on purpose: if the hook output schema ever changes under us,
- * the exit code still blocks (4.2). This is the single most version-fragile
- * surface in the system, so it gets two independent mechanisms.
+ * Fail closed: block the stop, and say that enforcement did not run.
+ * The reason matters more here than on the violations path, not less. An agent
+ * refused with no explanation reads it as a malfunction it cannot act on, and
+ * `readContinues` will spend the whole ceiling reaching that same silence.
  */
-function failClosed(event, reason) {
-  emitContinue(event, `mavci: ENFORCEMENT DID NOT RUN. ${reason}`);
+function failClosed(reason) {
+  emitBlock(`mavci: ENFORCEMENT DID NOT RUN. ${reason}`);
   process.exit(2);
 }
 
@@ -307,13 +348,13 @@ async function gate(input) {
     const r = interpretRunError(err);
     if (r.kind === 'timeout') {
       closeGateRun(root, 'budget_exceeded');
-      return failClosed(event,
+      return failClosed(
         `The standards checker exceeded its ${GATE_BUDGET_MS / 1000}s budget and was stopped, so nothing was verified. `
         + 'Run /mavci-core:doctor to diagnose, or verify by hand with `node <plugin>/scripts/verify.mjs`.');
     }
     if (r.kind === 'crash') {
       closeGateRun(root, 'crashed');
-      return failClosed(event,
+      return failClosed(
         `The standards checker crashed: ${r.message}. Nothing was verified. `
         + 'This is a bug in the checker, not in your code. Run /mavci-core:doctor, and /mavci-core:retro to file it.');
     }
@@ -322,7 +363,7 @@ async function gate(input) {
 
   if (!verdict || typeof verdict.summary?.blockers !== 'number') {
     closeGateRun(root, 'unreadable_verdict');
-    return failClosed(event, 'The standards checker returned an unreadable verdict, so nothing was verified.');
+    return failClosed('The standards checker returned an unreadable verdict, so nothing was verified.');
   }
 
   /* ---- pass ---------------------------------------------------------- */
@@ -365,10 +406,12 @@ async function gate(input) {
     process.exit(0);
   }
 
-  // Belt and braces, exactly as failClosed does. The payload is advisory; exit 2
-  // is what actually refuses the stop. Emitting without exiting 2 is what made
-  // this gate record failing verdicts throughout Gate 4 and never block once.
-  emitContinue(event, `${detail}\n\nNot baselined, not waived. Fix these, then stop again.`);
+  // Belt and braces, exactly as failClosed does - and now both braces hold
+  // something. Exit 2 refuses the stop; the top-level decision and stderr each
+  // carry `detail`, so the agent is told which check, which file and which line.
+  // 0.1.9 emitted without exiting 2 and never blocked; 0.1.10 exited 2 with the
+  // reason in a field nothing reads, and blocked in silence.
+  emitBlock(`${detail}\n\nNot baselined, not waived. Fix these, then stop again.`);
   process.exit(2);
 }
 
@@ -436,7 +479,7 @@ async function main() {
     // Unparseable payload means we do not know the project, the prompt, or the
     // event. Guessing would silently reset the loop counter and scan the wrong
     // directory. Fail closed and say why.
-    return failClosed('Stop',
+    return failClosed(
       `The hook payload was not valid JSON (${parseError}), so the gate could not tell which `
       + 'project or turn it was checking. Nothing was verified. Run /mavci-core:doctor.');
   }
@@ -444,12 +487,11 @@ async function main() {
 }
 
 main().catch((err) => {
-  // Even the gate's own failure must fail closed.
-  process.stdout.write(JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: 'Stop', continue: true,
-      stopReason: `mavci: ENFORCEMENT DID NOT RUN. The gate itself failed: ${err.message}. Run /mavci-core:doctor.`,
-    },
-  }));
+  // Even the gate's own failure must fail closed - and must say so. Inlined
+  // rather than calling failClosed: this handler has to survive a fault in
+  // anything above it, emitBlock included.
+  const reason = `mavci: ENFORCEMENT DID NOT RUN. The gate itself failed: ${err.message}. Run /mavci-core:doctor.`;
+  try { process.stdout.write(JSON.stringify({ decision: 'block', reason })); } catch { /* stdout gone */ }
+  try { process.stderr.write(reason); } catch { /* stderr gone */ }
   process.exit(2);
 });

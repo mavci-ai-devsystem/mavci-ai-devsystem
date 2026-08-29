@@ -289,10 +289,99 @@ finding is that the plugin under test cannot produce the observation the Gate
 exists to make*. Then the run is already over: record its result and cut. That
 is the only exception, and it requires a finding, not an inconvenience.
 
-### 0.1.11 — recorded, not built
+### 0.1.11 — the gate can speak
+
+**Cut 2026-08-29. Single-purpose, deliberately, for the same reason 0.1.10 was:
+the next Gate step is the fix-in-place test, and it can only be attributed to a
+release whose only change is that the gate can speak.** The doctor fix and the
+lifecycle items were held back to 0.1.12 — see "recorded, not built" below.
+
+0.1.10 made the gate block. It blocked in silence: exit 2 refused the turn and
+the entire Stop feedback was `No stderr output`, while `detail` — check id, path,
+line, evidence, remedy — sat in a field nothing reads. **Blocking without a
+reason is close to not blocking, and in one respect worse than 0.1.9: 0.1.9
+failed loudly in a verdict file a person might open. 0.1.10 refused in silence.**
+An agent that is refused and not told why cannot fix the violation, so it stops
+again identically until `GATE_MAX_CONTINUES` is spent and the gate gives up —
+the loop guard becomes the exit path for every real violation.
+
+Contents: `emitBlock` replaces `emitContinue`, writing top-level
+`{"decision":"block","reason":detail}` to stdout **and** `detail` to stderr before
+`exit 2`, on the violations path, in `failClosed`, and in `main().catch`.
+`emitMessage` stays for the two non-blocking notes. `continue` and the nested
+`stopReason` are gone. 4.5 and 4.6 are rewritten from a table that loaded in
+full; ARCHITECTURE's blocking-verdict example and ROADMAP's A8 criterion are
+corrected. Nothing else.
+
+**The contract is quoted, not inferred.** 0.1.10's condition for touching this
+payload again was "do not change the string until the decision-control table
+loads and it can be quoted verbatim". It loaded on 2026-08-29 — 316,753 bytes,
+no truncation — and settled three things, two of them against us:
+
+1. **`continue` was never the inversion we recorded.** It is a universal field:
+   *"`continue` | `true` | If `false`, Claude stops processing entirely after the
+   hook runs."* It defaults to true and acts only when false, so `continue: true`
+   was **inert**, not contradictory. The 0.1.10 note calling it "the literal
+   opposite of the intent" was wrong. It is removed anyway — inert noise in a
+   blocking payload is one more thing a future reader must work out is
+   meaningless — but removing it fixed no bug.
+2. **The nesting was the whole defect**, and 0.1.10's note claiming *"the nesting
+   was right"* was the load-bearing error. For `Stop` the only
+   `hookSpecificOutput` field honoured is `additionalContext`, so a `stopReason`
+   nested there renders **no decision at all** — and because no JSON decision was
+   made, resolution fell through to *"your stderr text otherwise"*, which
+   `gate.mjs` never wrote. `No stderr output` was the contract working exactly as
+   documented.
+3. Top-level `stopReason` would not have helped either: *"Message shown to the
+   user when `continue` is `false`. Not shown to Claude."*
+
+**The self-test was written first and watched fail — the first application of
+0.1.10's rule, and it holds.** `check-gate.mjs` gained
+`deliveredBlockingMessage`, which resolves *what the agent actually receives* by
+the documented order (*"The blocking message is the reason from your JSON's
+blocking decision when it makes one, and your stderr text otherwise"*) rather
+than by our own convention. Against 0.1.10 it reported `NOTHING reached the
+agent` — **while the two assertions directly above it, `exit 2` and `the payload
+names the failing check`, both still passed.** That is the adjacent-but-wrong
+signal caught in the act rather than seven releases later, and it is why the
+rule is written down.
+
+**Two carriers means two assertions.** The first green run resolved *both*
+delivery assertions via `decision.reason`: stderr was written and never
+exercised, because the JSON decision wins whenever it is present. A test that
+depends on which carrier happens to win is how belt-and-braces decays into one
+belt and a decorative brace — which is precisely what 0.1.10 shipped.
+`assertDelivered` now resolves twice, the second time with stdout removed, which
+is the documented fallback (*"A hook that exits 2 while printing JSON that fails
+JSON output schema validation still blocks: Claude Code uses stderr as the
+blocking reason"*), and requires `decision.reason` then `stderr`. Negative
+control: deleting the single `process.stderr.write` makes only the second half
+fail. **Each brace is independently load-bearing, and that is now asserted, not
+asserted-and-always-true.**
+
+**The same wrong payload had been copied into three more documents**, which is
+the 0.1.5 shape again — a value written down once, wrongly, then propagated.
+ARCHITECTURE's example asserted `continue: true` was "verified (4.5)". Worse,
+**ROADMAP's A8 acceptance criterion required the dead shape**: Gate 4 would have
+scored a gate that blocks nothing as a PASS. An acceptance test that certifies
+the defect is the same failure one level up from the defect.
+
+Still untested, and the only claim left in Gate 4's enforcement step:
+**fix-in-place** — whether an agent reads the reason and repairs the violation in
+the same turn, with nobody opening `.mavci/control/verdicts/` by hand. That path
+did not exist before this release, so it has never been exercised. It runs in
+gate4c against v0.1.11.
+
+### 0.1.12 — recorded, not built
 
 **None of these is built.** Items 1–4 were logged against 0.1.10 and moved when
-0.1.10 was cut as a single-purpose gate fix; 5 and 6 are from Gate 4c.
+0.1.10 was cut as a single-purpose gate fix; 5 and 6 are from Gate 4c; 7 is the
+risk-guard `deferToUser` finding. They moved again at 0.1.11, for the same reason
+and by the same rule: 0.1.11 exists so that the fix-in-place result can be
+attributed to one change. **Item 1 (doctor cannot see the version it is running)
+is the priority of 0.1.12 and rides with the lifecycle items** — it is invisible
+from inside a session, so it costs nothing to defer only in the sense that
+nobody will notice, which is also the argument for not deferring it twice.
 
 1. **`doctor` must FAIL when a pin's version differs from the anchor's.** Gate 4c
    found `mavci-core@mavci` holding two records — `{scope:"user", version:"0.1.9"}`

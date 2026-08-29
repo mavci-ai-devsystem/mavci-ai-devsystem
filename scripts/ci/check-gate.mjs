@@ -19,7 +19,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -36,25 +36,38 @@ const failures = [];
 const ok = (m) => console.log(`  ok   ${m}`);
 const bad = (m) => { failures.push(m); console.log(`  FAIL ${m}`); };
 
-/** Run gate.mjs with a payload; never throws. */
+/**
+ * Run gate.mjs with a payload; never throws.
+ * spawnSync, not execFileSync, because stderr is half the contract: on exit 2
+ * "the blocking message is the reason from your JSON's blocking decision when
+ * it makes one, and your stderr text otherwise". A runner that discards stderr
+ * cannot see which half arrived, or whether either did.
+ */
 function runGate(cwd, payload, { raw = null, args = [] } = {}) {
   const input = raw !== null ? raw : JSON.stringify({ ...payload, cwd });
-  try {
-    const stdout = execFileSync(process.execPath, [GATE, ...args],
-      { input, encoding: 'utf8', timeout: 60_000, cwd });
-    return { stdout, status: 0 };
-  } catch (err) {
-    return { stdout: err.stdout?.toString() ?? '', status: err.status ?? -1 };
-  }
+  const r = spawnSync(process.execPath, [GATE, ...args],
+    { input, encoding: 'utf8', timeout: 60_000, cwd });
+  return {
+    stdout: r.stdout ?? '',
+    stderr: r.stderr ?? '',
+    status: r.status === null ? -1 : r.status,
+  };
 }
 
+/**
+ * Classify the emitted payload by shape. `block` is the top-level decision the
+ * Stop decision-control table defines; `message` is `systemMessage`, which is a
+ * user-facing note and renders no decision. These are SHAPE assertions - the
+ * delivery assertions below are the load-bearing ones, and this reader exists to
+ * say which shape produced them, not to stand in for them.
+ */
 function decision(stdout) {
   if (!stdout.trim()) return { kind: 'silent' };
   let o;
-  try { o = JSON.parse(stdout).hookSpecificOutput; }
+  try { o = JSON.parse(stdout); }
   catch { return { kind: 'unparseable', stdout }; }
-  if (o.continue) return { kind: 'continue', reason: o.stopReason ?? '' };
-  if (o.systemMessage) return { kind: 'message', reason: o.systemMessage };
+  if (o.decision === 'block') return { kind: 'block', reason: o.reason ?? '' };
+  if (o.hookSpecificOutput?.systemMessage) return { kind: 'message', reason: o.hookSpecificOutput.systemMessage };
   return { kind: 'other', o };
 }
 
@@ -81,8 +94,8 @@ try {
   const tmp = makeProject(); cleanup.push(tmp);
   const r = runGate(tmp, null, { raw: 'this is not json' });
   const d = decision(r.stdout);
-  if (d.kind === 'continue' && /ENFORCEMENT DID NOT RUN/.test(d.reason) && r.status === 2) {
-    ok('malformed hook payload fails closed (continue + exit 2)');
+  if (d.kind === 'block' && /ENFORCEMENT DID NOT RUN/.test(d.reason) && r.status === 2) {
+    ok('malformed hook payload fails closed (decision:block + exit 2)');
   } else {
     bad(`malformed payload: expected fail-closed, got kind=${d.kind} status=${r.status}`);
   }
@@ -97,7 +110,7 @@ try {
     runGate(tmp, { hook_event_name: 'Stop', prompt_id: 'c1', session_id: 's' }, { args: ['--mark-dirty'] });
     const r = runGate(tmp, { hook_event_name: 'Stop', prompt_id: 'c1', session_id: 's' });
     const d = decision(r.stdout);
-    if (d.kind === 'continue' && /ENFORCEMENT DID NOT RUN/.test(d.reason) && r.status === 2) {
+    if (d.kind === 'block' && /ENFORCEMENT DID NOT RUN/.test(d.reason) && r.status === 2) {
       ok('crashed checker fails closed');
     } else {
       bad(`crashed checker: expected fail-closed, got kind=${d.kind} status=${r.status}`);
@@ -158,7 +171,7 @@ try {
   } else {
     bad(`violation: expected exit 2, got status=${r.status}. The turn would NOT be blocked.`);
   }
-  if (d.kind === 'continue' && /next\.route_force_dynamic/.test(d.reason)) {
+  if (d.kind === 'block' && /next\.route_force_dynamic/.test(d.reason)) {
     ok('the payload names the failing check');
   } else {
     bad(`violation: expected payload naming the check, got kind=${d.kind}`);
@@ -173,12 +186,146 @@ try {
     runGate(tmp, p, { args: ['--mark-dirty'] });
     kinds.push(decision(runGate(tmp, p).stdout).kind);
   }
-  // first gate above was continue #1, so these are #2, #3, #4
-  if (kinds[0] === 'continue' && kinds[1] === 'message' && kinds[2] === 'message') {
+  // first gate above was block #1, so these are #2, #3, #4
+  if (kinds[0] === 'block' && kinds[1] === 'message' && kinds[2] === 'message') {
     ok('loop ceiling: stops asking after 3 gates and hands the failure to the operator');
   } else {
-    bad(`loop ceiling: expected continue,message,message got ${kinds.join(',')}`);
+    bad(`loop ceiling: expected block,message,message got ${kinds.join(',')}`);
   }
+}
+
+/* --- 4b. the blocking reason must REACH THE AGENT ---------------------
+ *
+ * The load-bearing assertion of 0.1.11, and the one every earlier version of
+ * this file was missing. Case 4 asserts exit 2, which is the REFUSAL. This
+ * asserts the EXPLANATION, and exit 2 with an empty explanation is exactly what
+ * 0.1.10 ships. Gate 4's Stop feedback, in full:
+ *
+ *     [node .../0.1.10/scripts/gate.mjs]: No stderr output
+ *
+ * while `detail` - check id, path, line, evidence and remedy - sat in a payload
+ * field nothing reads. An agent refused without being told why cannot fix the
+ * violation, so it stops again identically until GATE_MAX_CONTINUES is spent
+ * and the gate gives up: the loop guard becomes the exit path for every real
+ * violation.
+ *
+ * `deliveredBlockingMessage` is NOT our convention. It transcribes the
+ * documented resolution order from the hooks reference
+ * (code.claude.com/docs/en/hooks, fetched 2026-08-29):
+ *
+ *   Exit code 2: "The blocking message is the reason from your JSON's blocking
+ *   decision when it makes one, and your stderr text otherwise."
+ *
+ *   Stop decision control: "`decision` | `"block"` prevents Claude from
+ *   stopping. Omit to allow Claude to stop" and "`reason` | Required when
+ *   `decision` is `"block"`. Tells Claude why it should continue" - both
+ *   TOP-LEVEL. Plus: "A hook that blocks by exiting 2 routes the same way as
+ *   `reason`: Claude receives the stderr message as the explanation for why it
+ *   should continue."
+ *
+ *   Decision-control table, Stop's row: pattern "Top-level `decision`", key
+ *   fields `decision: "block"`, `reason`. The only `hookSpecificOutput` field
+ *   Stop honours is `additionalContext`; a `stopReason` nested inside
+ *   `hookSpecificOutput` is not a field of any documented shape and renders no
+ *   decision at all.
+ *
+ * So the resolution is exact rather than a guess: no top-level blocking
+ * decision means the message is stderr, and empty stderr means the agent is
+ * told nothing. This is CLAUDE.md's rule applied to the checker itself - the
+ * assertion compares against the contract OUTSIDE this repo, not against what
+ * our own code happens to emit. "gate.mjs emits what gate.mjs emits" is the
+ * shape of assertion that let seven releases ship a dead gate.
+ */
+function deliveredBlockingMessage({ stdout, stderr }) {
+  const t = (stdout ?? '').trim();
+  if (t.startsWith('{') && t.endsWith('}')) {
+    let o = null;
+    try { o = JSON.parse(t); } catch { /* unparseable: resolution falls to stderr */ }
+    if (o && o.decision === 'block' && typeof o.reason === 'string' && o.reason.trim()) {
+      return { via: 'decision.reason', text: o.reason };
+    }
+  }
+  return (stderr ?? '').trim() ? { via: 'stderr', text: stderr } : { via: 'NOTHING', text: '' };
+}
+
+/**
+ * Assert that a blocking run actually delivered `want` to the agent, on BOTH
+ * documented carriers independently.
+ *
+ * Asserting only the resolved message is not enough. The JSON decision wins
+ * whenever it is present, so a test that checks the resolution alone would go
+ * green with stderr empty and never notice - and stderr is the carrier that
+ * survives the one failure the reference singles out:
+ *
+ *   "A hook that exits 2 while printing JSON that fails JSON output schema
+ *    validation still blocks: Claude Code uses stderr as the blocking reason
+ *    and records the validation failure in the debug log."
+ *
+ * That is the entire point of writing both. If a future Claude Code tightens
+ * the Stop schema and rejects our object, the gate must still speak. So the
+ * fallback is exercised deliberately, by resolving a second time with stdout
+ * removed: not a simulation of a bug we invented, but of the documented path.
+ * Depending on which carrier happens to win is how belt-and-braces decays into
+ * one belt and a decorative brace - which is what 0.1.10 shipped.
+ */
+function assertDelivered(label, r, want) {
+  if (r.status !== 2) {
+    bad(`${label}: precondition failed - expected exit 2, got status=${r.status}`);
+    return;
+  }
+
+  const carriers = [
+    ['as sent', deliveredBlockingMessage(r)],
+    // stdout removed: what the agent gets if the JSON object is ever rejected.
+    ['with the JSON decision rejected', deliveredBlockingMessage({ stdout: '', stderr: r.stderr })],
+  ];
+
+  const vias = [];
+  for (const [when, got] of carriers) {
+    if (got.via === 'NOTHING') {
+      bad(`${label}, ${when}: NOTHING reached the agent. No top-level decision:"block" with a `
+        + `reason on stdout, and no stderr. The turn is refused with an empty explanation. `
+        + `stdout was ${JSON.stringify((r.stdout ?? '').slice(0, 160))}`);
+      return;
+    }
+    const missing = want.filter((re) => !re.test(got.text));
+    if (missing.length) {
+      bad(`${label}, ${when}: delivered via ${got.via}, but the text does not contain `
+        + `${missing.map(String).join(', ')} - got ${JSON.stringify(got.text.slice(0, 200))}`);
+      return;
+    }
+    vias.push(got.via);
+  }
+
+  if (vias[0] !== 'decision.reason' || vias[1] !== 'stderr') {
+    bad(`${label}: expected the JSON decision to win as sent and stderr to carry it alone, `
+      + `got ${vias.join(' then ')}`);
+    return;
+  }
+  ok(`${label}: delivered via ${vias[0]}, and independently via ${vias[1]}`);
+}
+
+{
+  const tmp = makeProject(); cleanup.push(tmp);
+  fs.mkdirSync(path.join(tmp, 'app', 'api', 'y'), { recursive: true });
+  fs.writeFileSync(path.join(tmp, 'app', 'api', 'y', 'route.ts'),
+    'export async function GET(){return Response.json({})}\n');
+
+  const p = { hook_event_name: 'Stop', prompt_id: 'd1', session_id: 's' };
+  runGate(tmp, p, { args: ['--mark-dirty'] });
+  assertDelivered('a violation tells the agent what to fix',
+    runGate(tmp, p),
+    [/next\.route_force_dynamic/, /app[\/]api[\/]y[\/]route\.ts/]);
+}
+
+{
+  // failClosed is the other half. A gate that broke must say so to the agent
+  // too: "ENFORCEMENT DID NOT RUN" delivered nowhere is a turn refused for no
+  // stated reason, which reads to an agent as a malfunction it cannot act on.
+  const tmp = makeProject(); cleanup.push(tmp);
+  assertDelivered('a fail-closed gate tells the agent enforcement did not run',
+    runGate(tmp, null, { raw: 'this is not json' }),
+    [/ENFORCEMENT DID NOT RUN/, /doctor/]);
 }
 
 /* --- 6. the completion sentinel is what a TIMEOUT leaves behind -------
