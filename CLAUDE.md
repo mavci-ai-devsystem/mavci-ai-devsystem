@@ -354,6 +354,14 @@ is the only exception, and it requires a finding, not an inconvenience.
    the first release run ever to execute it**. A red mark on a green run trains
    exactly the habit that let run 33265540461 go unread.
 
+4. **Recorded, no work — v0.1.6's protected-environment check is live, not dead
+   code.** `doctor`'s FAIL on a protected environment with no `supabase_ref`
+   (`9d62c45`, shipped in v0.1.6) fired for the first time against a real project
+   in gate4c, wording intact: *"This environment reads as protected and is not."*
+   Both risk-guard arms it protects were inert and the environment read as
+   protected. The `4 of 4` / `1 of 1` propagation counters in the version-skew
+   warning (6.21) also rendered as intended.
+
 5. **One task-lifecycle command surface — `--abandon`, activation, and a phase
    transition that also moves the task record.** Gate 4c found three lifecycle
    transitions the data model can represent and no command can express. A task
@@ -399,13 +407,31 @@ is the only exception, and it requires a finding, not an inconvenience.
    pointer names. Cheapest item here, and the one that makes an orphaned task
    self-describing with no tooling at all.
 
-4. **Recorded, no work — v0.1.6's protected-environment check is live, not dead
-   code.** `doctor`'s FAIL on a protected environment with no `supabase_ref`
-   (`9d62c45`, shipped in v0.1.6) fired for the first time against a real project
-   in gate4c, wording intact: *"This environment reads as protected and is not."*
-   Both risk-guard arms it protects were inert and the environment read as
-   protected. The `4 of 4` / `1 of 1` propagation counters in the version-skew
-   warning (6.21) also rendered as intended.
+7. **`risk-guard`'s tier-2 confirm emits a value Claude Code rejects.** `confirm()`
+   sends `permissionDecision: "deferToUser"`; the runtime validator accepts
+   `"allow"|"deny"|"ask"|"defer"` and rejects the whole payload, so no decision is
+   applied and the call falls through to the normal permission flow. Same failure
+   shape as the Stop gate: a correct decision computed and discarded. **Tier 3 is
+   unaffected** - `deny()` sends `"deny"`, which is valid and was observed
+   hard-blocking two live calls during the investigation that found this.
+   **The unparseable-input fail-safe also routes through `confirm()`, so the one
+   path whose entire purpose is to stop and ask a human is inert too** - found by
+   accident, from a malformed probe that came back `deferToUser` carrying "the tool
+   call could not be read ... Approve only if you know what this call does."
+   `check-risk-guard.mjs` compares the emitted value against a case table whose
+   expected value is the literal string `'deferToUser'`: it asserts that the guard
+   emits what the guard emits, and never that the value is one Claude Code accepts.
+   5 of its 62 cases assert the invalid string and all 62 pass. NATIVE-CAPABILITIES
+   4.3 carries the same wrong value. **The fix is not a one-word swap.** The
+   validator lists four values, and `ask` versus `defer` is exactly the
+   adjacent-but-wrong distinction this Gate keeps finding - one prompts the
+   operator, the other may hand the call back to the normal permission flow, which
+   is what already happens. Do not change the string until the decision-control
+   table loads and it can be quoted verbatim; guessing at a hook payload value is
+   how both this and the Stop gate happened. **The enum assertion must compare
+   against Claude Code's accepted set, not against our own case table.** Every one
+   of the seven instances this session found shares that shape: the assertion was
+   internally consistent and never checked against the thing outside it.
 
 ---
 
