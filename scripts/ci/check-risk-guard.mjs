@@ -114,27 +114,100 @@ const CASES = [
   ['allow', { tool_name: 'mcp__claude_ai_Supabase__execute_sql', tool_input: { project_id: 'stagingref', query: 'select 1' } }, 'unprotected env'],
 ];
 
+/* --- the agent namespace ---------------------------------------------
+ *
+ * `agent_type` arrives PLUGIN-QUALIFIED for an agent that ships in a plugin
+ * (`mavci-core:mavci-architect`); `agent-scopes.json` and `agent-defs/` key on
+ * the BARE name. Every case above passes `agent_type` bare, so all 62 of them
+ * exercised a form the hook never actually receives in production. The real
+ * qualified form missed the scopes lookup, matched the `startsWith('mavci-')`
+ * fallback, and denied every edit by every agent - on a real install, at 0.1.8,
+ * with CI green. NATIVE-CAPABILITIES 6.24.
+ *
+ * So this block is roster-driven rather than a list: an agent added to
+ * agent-scopes.json is covered the day it is added, with nobody remembering to
+ * write a case. It asserts two things, and the second is the load-bearing one:
+ *
+ *   1. the qualified form and the bare form reach the SAME decision - the
+ *      plugin prefix must not change the outcome; and
+ *   2. neither reaches it through the undefined-scope denial.
+ *
+ * Decision alone is not sufficient, and that is the whole lesson here.
+ * `mavci-verifier` is `"allow": []`, so an edit is denied whether its scope
+ * resolved or not; a check comparing only verdicts would have gone green on the
+ * broken build. The reason string is what separates "scoped, and refused" from
+ * "not scoped, so refused blindly".
+ */
+const SCOPES = JSON.parse(fs.readFileSync(
+  path.join(ROOT, 'plugins/mavci-core/agents/agent-scopes.json'), 'utf8'));
+const PLUGIN_NAME = JSON.parse(fs.readFileSync(
+  path.join(ROOT, 'plugins/mavci-core/.claude-plugin/plugin.json'), 'utf8')).name;
+
+// The marker the guard prints when scopes[agent] misses. Substring, not equality:
+// the message carries the agent name and wraps.
+const UNSCOPED = 'has no entry in agents/agent-scopes.json';
+
+// A concrete path inside a scope glob: `.mavci/tasks/**` -> `.mavci/tasks/probe.md`.
+// An agent with an empty allow list still needs a probe path; any path serves,
+// because what is asserted is the reason rather than the verdict.
+function probePath(scope) {
+  const glob = scope.allow?.[0];
+  if (!glob) return '.mavci/tasks/probe.md';
+  const base = glob.replace(/\/?\*+$/, '').replace(/\*/g, '').replace(/\/$/, '');
+  if (!base || base.includes('.')) return '.mavci/tasks/probe.md';
+  return `${base}/probe.${/^(app|src|lib|components)/.test(base) ? 'ts' : 'md'}`;
+}
+
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-guard-'));
 fs.mkdirSync(path.join(tmp, '.mavci'), { recursive: true });
 fs.copyFileSync(FIXTURE, path.join(tmp, '.mavci', 'project.json'));
 
 const failures = [];
+
+function runGuard(input) {
+  let stdout = '';
+  try {
+    stdout = execFileSync(process.execPath, [GUARD], {
+      input: JSON.stringify({ ...input, cwd: tmp }), encoding: 'utf8', timeout: 15000,
+    });
+  } catch (err) { stdout = err.stdout?.toString() ?? ''; }
+  if (!stdout.trim()) return { decision: 'allow', reason: '' };
+  const o = JSON.parse(stdout).hookSpecificOutput ?? {};
+  return { decision: o.permissionDecision ?? 'allow', reason: String(o.permissionDecisionReason ?? '') };
+}
+
 try {
   for (const [expected, input, label] of CASES) {
-    let stdout = '';
-    try {
-      stdout = execFileSync(process.execPath, [GUARD], {
-        input: JSON.stringify({ ...input, cwd: tmp }), encoding: 'utf8', timeout: 15000,
-      });
-    } catch (err) { stdout = err.stdout?.toString() ?? ''; }
-
-    let actual = 'allow';
-    if (stdout.trim()) {
-      try { actual = JSON.parse(stdout).hookSpecificOutput?.permissionDecision ?? 'allow'; }
-      catch { failures.push(`${label}: guard emitted unparseable output: ${stdout.slice(0, 120)}`); continue; }
-    }
+    let actual;
+    try { actual = runGuard(input).decision; }
+    catch { failures.push(`${label}: guard emitted unparseable output`); continue; }
     const desc = input.tool_input?.command ?? input.tool_input?.file_path ?? input.tool_name;
     if (actual !== expected) failures.push(`${label} [${desc}]: expected ${expected}, got ${actual}`);
+  }
+
+  for (const [name, scope] of Object.entries(SCOPES)) {
+    const file_path = probePath(scope);
+    const qualified = `${PLUGIN_NAME}:${name}`;
+    let bare, qual;
+    try {
+      bare = runGuard({ tool_name: 'Edit', tool_input: { file_path }, agent_type: name });
+      qual = runGuard({ tool_name: 'Edit', tool_input: { file_path }, agent_type: qualified });
+    } catch { failures.push(`agent scope [${qualified}]: guard emitted unparseable output`); continue; }
+
+    if (qual.reason.includes(UNSCOPED)) {
+      failures.push(`agent scope [${qualified} -> ${file_path}]: scope did NOT resolve for the `
+        + `qualified name - guard said "${qual.reason.trim().slice(0, 90)}". `
+        + `agent-scopes.json keys on "${name}"; strip the plugin prefix before the lookup.`);
+    }
+    if (bare.reason.includes(UNSCOPED)) {
+      failures.push(`agent scope [${name} -> ${file_path}]: scope did not resolve for the bare `
+        + `name either - "${name}" is missing from agent-scopes.json.`);
+    }
+    if (bare.decision !== qual.decision) {
+      failures.push(`agent scope [${file_path}]: the plugin prefix changed the decision - `
+        + `"${name}" got ${bare.decision}, "${qualified}" got ${qual.decision}. `
+        + 'The two forms name the same agent and must be governed identically.');
+    }
   }
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
@@ -146,7 +219,13 @@ if (failures.length) {
   console.error('\nEnforcement is not working as specified. Do not release.');
   process.exit(2);
 }
+const roster = Object.keys(SCOPES);
 console.log(`risk guard: ${CASES.length} cases behave as specified `
   + `(${CASES.filter((c) => c[0] === 'deny').length} deny, `
   + `${CASES.filter((c) => c[0] === 'deferToUser').length} confirm, `
   + `${CASES.filter((c) => c[0] === 'allow').length} allow)`);
+// Reported separately and by name. The count above stayed at 62 through the
+// whole 6.22 defect, so a total that silently absorbs the roster cases would
+// hide exactly the coverage this block exists to prove.
+console.log(`risk guard: agent scope resolves for ${roster.length} agent(s), bare and `
+  + `${PLUGIN_NAME}:-qualified (${roster.join(', ')})`);

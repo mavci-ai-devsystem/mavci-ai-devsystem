@@ -167,6 +167,29 @@ function relTo(root, p) {
   return toPosix(r);
 }
 
+// `agent_type` arrives PLUGIN-QUALIFIED for an agent that ships in a plugin
+// (`mavci-core:mavci-architect`) and bare for a project-local one
+// (`mavci-architect`). `agents/agent-scopes.json` and `agent-defs/` both key on
+// the BARE name - that is the vocabulary the contract uses - so the prefix is
+// stripped here, ONCE, before any lookup or name comparison downstream. Strip
+// the prefix; do not re-key the scopes file.
+//
+// Getting this wrong fails CLOSED, which is why it reached a real install
+// looking like a policy decision: `scopes[agent]` misses on the qualified name,
+// the `startsWith('mavci-')` fallback below matches the qualified name too, and
+// every edit by every plugin agent is denied with "has no entry in
+// agents/agent-scopes.json". Observed on the 0.1.8 install, 2026-08-29;
+// NATIVE-CAPABILITIES 6.24. The behaviour was right and the lookup was wrong.
+//
+// Third namespace defect of the same root (6.4's marketplace `source` form and
+// 0.1.5's command prefix are the other two): a name that arrives qualified,
+// compared against one written bare.
+function bareAgentName(agentType) {
+  if (typeof agentType !== 'string' || agentType === '') return null;
+  const colon = agentType.indexOf(':');
+  return colon === -1 ? agentType : agentType.slice(colon + 1);
+}
+
 /* ------------------------------------------------------ tier-3 patterns */
 
 const HARD_BLOCK = [
@@ -201,7 +224,9 @@ function main() {
   const input = readStdin();
   const tool = input.tool_name ?? '';
   const ti = input.tool_input ?? {};
-  const agent = input.agent_type ?? null;
+  // Bare name, always. See bareAgentName: agent_type arrives qualified for a
+  // plugin agent, and every downstream comparison is written against the bare form.
+  const agent = bareAgentName(input.agent_type);
   const root = input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
   // Not a Mavci project: this hook has no opinion.

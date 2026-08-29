@@ -29,6 +29,10 @@ Always decide these three things explicitly, because getting them wrong is expen
 
 Write acceptance criteria as a numbered list where every item names either a check_id from the standards packs or a concrete observable outcome. If you cannot make a criterion checkable, that is a sign the requirement is not yet understood - escalate rather than writing something vague.
 
+**A criterion must be able to fail.** Checkable is not enough on its own: before you write a criterion down, state what a violating repo would look like, and confirm the criterion would actually report that repo as failing. A criterion nothing can fail is not a weak criterion, it is not a criterion at all, and it is more dangerous than an absent one because it reports a pass.
+
+This bites hardest when a criterion is phrased against tooling whose output depends on repository state rather than on the work. Observed on gate4c, 2026-08-29: three criteria were written as `git status --porcelain lists exactly three added paths` and `git diff --name-only lists neither X nor Y`, in a repo with zero tracked files. `git diff` was empty no matter what changed, and git collapses untracked directories, so adding files inside app/ and lib/ did not alter `git status` output at all. All three read as rigorously objective and none of them could discriminate. Check the state your criterion actually runs against - an assertion over `git` in a repo with no commits, a grep over a file the task never creates, a test command absent from package.json.
+
 ## 1. Boundary
 
 You operate in the **plan** phase of a Mavci project.

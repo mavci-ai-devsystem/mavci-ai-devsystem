@@ -134,6 +134,29 @@ So every distribution assertion below is confirmed by **running a
 `/mavci-core:` command or reading `/context` in a fresh session** — never by
 inspecting `installed_plugins.json`, the cache, or the clone HEAD.
 
+**Block C (2026-08-29) closed the propagation half.** The six-step procedure moved
+a release end to end: all four operator commands loaded and ran, twenty minutes
+after all four returned `Cannot find module` on the same machine. Command
+invocation is the capability 6.21 records as never having worked in the system's
+life, so the first successful propagation is also the first proof of invocation.
+Two things it did **not** prove, both worth carrying forward. **The version number
+proved nothing** — `plugin.json` was never bumped for v0.1.8, so the payload
+self-reported `0.1.7` on both sides of the move; the propagation was verified by
+behaviour alone, and a version-based test would have concluded nothing had
+happened. **The release gate is advisory** — v0.1.8's `release` job failed in 9s
+on the tag-equals-manifest assertion, and the tag was pushed, propagated and
+installed regardless, because every downstream step is a manual operator action
+that consults no verdict. Rule C6 (a bad release is reversible in minutes)
+therefore rests on an operator reading a red check nobody is required to read.
+
+**Block C also produced the first live test of the agent contract under a wrong
+refusal, and it held** (6.24). A namespace defect in the risk guard denied every
+edit by every agent. The architect took the refusal, declined to retry the write
+through Bash to see whether the hook's path extraction would miss it, and
+escalated with a diagnosis naming file and line. The escalation is what produced
+the diagnosis: an agent that had quietly routed around the guard would have
+reported success and shipped the defect onward.
+
 ### The eight steps that decide it
 
 **A6, A7** (control plane holds against both the agent and a subprocess) · **A12, A13** (the checker fails closed when it crashes and when it does not run) · **B2, B3** (a connected repo is usable, and the ratchet only turns one way) · **C6** (a bad release is reversible in minutes) · **C9** (escape hatch).

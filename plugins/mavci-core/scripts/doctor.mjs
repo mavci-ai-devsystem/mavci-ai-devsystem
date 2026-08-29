@@ -304,6 +304,82 @@ function checkDistribution(out, { network = true } = {}) {
 }
 
 /**
+ * THE RELEASE JOB FOR THE VERSION YOU ARE ACTUALLY RUNNING.
+ *
+ * `release.yml` asserts that the tag matches `plugin.json`, and that assertion
+ * is correct. It is also the only thing that checks it, it fires AFTER the tag
+ * exists, and nothing downstream consults its verdict: fetching the clone,
+ * uninstalling and installing are all manual operator steps that ask no CI
+ * whether the release was sound.
+ *
+ * v0.1.8 is what that costs. Tagged with `plugin.json` still at 0.1.7; run
+ * 33265540461 went red in 9 seconds on exactly that assertion; the tag
+ * propagated and installed regardless. The operator did not see it, because
+ * seeing it required opening the Actions tab of a repo they were not working in.
+ * NATIVE-CAPABILITIES 6.24.
+ *
+ * `check-pretag.mjs` closes the door before the tag; this closes the loop after
+ * it, on every machine that installed the release. The two are not redundant -
+ * the pre-tag gate protects the person cutting, this protects everyone who
+ * already pulled.
+ *
+ * Read strictly: a red release job for the INSTALLED version is a FAIL, not a
+ * warning. It means the artefact on this machine came from a tree its own
+ * release gate rejected. Anything unknown - gh missing, unauthenticated, no
+ * network, no run found - is a WARN that names the manual command, never a pass.
+ * An unchecked control is not a working control.
+ */
+function checkReleaseRun(out, { network = true } = {}) {
+  if (!network) return;
+  const version = pluginVersion();
+  if (!version || version === 'unknown') return;
+  const tag = `v${version}`;
+  const manual = `gh run list --repo ${SYSTEM_REPO} --workflow release.yml --branch ${tag}`;
+
+  let run = null;
+  try {
+    const raw = execFileSync('gh',
+      ['api', `repos/${SYSTEM_REPO}/actions/workflows/release.yml/runs?branch=${tag}&per_page=1`],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 });
+    run = JSON.parse(raw).workflow_runs?.[0] ?? false;
+  } catch {
+    out.push({ status: WARN, text: line(WARN, `release job for ${tag} NOT CHECKED`,
+      'gh is unavailable, unauthenticated, or offline, so the release gate\'s verdict for the\n'
+      + '         version on this machine is unknown. This is unknown, not passing.\n'
+      + `         Check by hand: ${manual}`) });
+    return;
+  }
+
+  if (run === false) {
+    out.push({ status: WARN, text: line(WARN, `no release job has ever run for ${tag}`,
+      'Either the tag was never pushed, or it was pushed without the workflow firing. The\n'
+      + '         installed plugin therefore passed no release gate at all.\n'
+      + `         Check by hand: ${manual}`) });
+    return;
+  }
+
+  if (run.status !== 'completed') {
+    out.push({ status: WARN, text: line(WARN, `release job for ${tag} is still ${run.status}`,
+      `${run.html_url}`) });
+    return;
+  }
+
+  if (run.conclusion === 'success') {
+    out.push({ status: OK, text: line(OK, `release job for ${tag} passed`) });
+    return;
+  }
+
+  out.push({ status: FAIL, text: line(FAIL, `the release job for ${tag} is ${String(run.conclusion).toUpperCase()}`,
+    'This is the version installed on THIS machine, so the plugin you are running came from a\n'
+    + '         tree its own release gate rejected. The most likely cause is the one that produced\n'
+    + '         this check: plugin.json disagreeing with the tag, which makes every version number\n'
+    + '         downstream - including the tag your projects\' CI clones - name the wrong tree.\n'
+    + `         ${run.html_url}\n`
+    + '         Fix in the system repo, then cut a new version with:\n'
+    + '           node scripts/ci/check-pretag.mjs v<next> --cut') });
+}
+
+/**
  * INSTALL SCOPE. Which record in the registry is holding this plugin up.
  *
  * The bootstrap installs mavci-core ONCE PER MACHINE at user scope
@@ -937,6 +1013,27 @@ function selftestHooks(out, registration) {
     { name: 'control-plane edit', input: { tool_name: 'Edit', tool_input: { file_path: '.mavci/control/state.json' } }, expect: 'deny' },
     { name: 'read .env', input: { tool_name: 'Bash', tool_input: { command: 'cat .env.local' } }, expect: 'deny' },
     { name: 'ordinary build', input: { tool_name: 'Bash', tool_input: { command: 'npm run build' } }, expect: 'allow' },
+
+    // Per-agent edit scope, driven by a PLUGIN-QUALIFIED agent_type - the form
+    // Claude Code actually sends (`mavci-core:mavci-architect`), not the bare
+    // form agent-scopes.json keys on.
+    //
+    // These two cases exist because the five above did not have an `agent_type`
+    // between them, so this self-test asserted nothing whatsoever about the
+    // per-agent scope control. On 2026-08-29 it printed "hook self-test passed
+    // (5 cases)" in a session where that control was denying every edit by every
+    // agent. Same shape as 0.1.2's zero registered hooks and 6.21's untested
+    // command invocation: the probe and the thing it claims to prove were never
+    // connected. NATIVE-CAPABILITIES 6.24.
+    //
+    // The first is the discriminating one - it is an ALLOW, and the broken build
+    // returned deny. The second proves the fix did not simply disable the scope.
+    { name: 'agent in scope (qualified)', expect: 'allow',
+      input: { tool_name: 'Edit', tool_input: { file_path: '.mavci/tasks/0001-probe.md' },
+        agent_type: 'mavci-core:mavci-architect' } },
+    { name: 'agent out of scope (qualified)', expect: 'deny',
+      input: { tool_name: 'Edit', tool_input: { file_path: 'app/page.tsx' },
+        agent_type: 'mavci-core:mavci-architect' } },
   ];
 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-selftest-'));
@@ -1037,6 +1134,9 @@ function main() {
     // Not gated on `connected`: a stale plugin is a toolchain fault, and it is most
     // dangerous in exactly the directory that is about to be scaffolded.
     checkDistribution(out, { network: !preflight });
+    // Same network gating as checkDistribution: a SessionStart hook must not
+    // make an API call on every session in every repo on the machine.
+    checkReleaseRun(out, { network: !preflight });
     // Also not gated on `connected`: a machine with no anchor is broken for
     // every project on it, and the directory about to be scaffolded is exactly
     // where that needs saying.
