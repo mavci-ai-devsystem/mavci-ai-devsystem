@@ -140,7 +140,11 @@ const SUITE = [
   ['scripts/ci/check-placeholders.mjs'],
   ['scripts/ci/check-skill-placeholders.mjs'],
   ['scripts/ci/check-packaging.mjs'],
-  ['scripts/ci/check-tags.mjs'],
+  // check-tags.mjs is deliberately NOT here. It asserts that the newest tag IS
+  // the mainline, which is a POST-tag condition: before the tag exists main is
+  // always one commit ahead of it, so running it here fails every release by
+  // construction. It runs after --cut instead, against the tag just created,
+  // and the tag is rolled back if it fails.
 ];
 
 for (const [script, ...args] of SUITE) {
@@ -175,7 +179,22 @@ if (!cut) {
 // Annotated, because check-tags.mjs requires it from v0.1.7 forward and a
 // lightweight tag silently breaks every `^{commit}` comparison downstream.
 git(['tag', '-a', wanted, '-m', `${wanted} - see docs/ROADMAP.md and docs/NATIVE-CAPABILITIES.md`]);
-console.log(`\ncreated annotated tag ${wanted} at ${head.slice(0, 7)} (local only).`);
+
+// Now that the tag exists, its own post-condition is checkable: annotated form,
+// and the newest tag IS the mainline. If it does not hold, roll the tag back -
+// it is local-only until pushed, so this is the last moment it is free to undo.
+try {
+  execFileSync(process.execPath, [path.join(ROOT, 'scripts/ci/check-tags.mjs')],
+    { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000 });
+} catch (err) {
+  git(['tag', '-d', wanted], { allowFail: true });
+  console.error(`\ncheck-tags.mjs rejected ${wanted} after it was created, so the tag was DELETED:\n`);
+  console.error(String(err.stdout ?? '').trim());
+  console.error('\nNothing was pushed. The repository is as it was.');
+  process.exit(2);
+}
+
+console.log(`\ncreated annotated tag ${wanted} at ${head.slice(0, 7)} (local only), and check-tags.mjs accepts it.`);
 console.log(`Push it, then WATCH THE RELEASE JOB - it is the last gate and nothing downstream reads it:`);
 console.log(`  git push origin ${wanted}`);
 console.log(`  gh run watch "$(gh run list --workflow release.yml --branch ${wanted} --limit 1 --json databaseId --jq '.[0].databaseId')"`);
