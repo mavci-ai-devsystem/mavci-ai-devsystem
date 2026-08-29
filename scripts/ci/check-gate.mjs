@@ -125,6 +125,24 @@ try {
 }
 
 /* --- 4. a violation must refuse to let the turn end ------------------- */
+/*
+ * WHAT THIS CAN AND CANNOT ASSERT - read before weakening it.
+ *
+ * CI cannot observe a turn actually being blocked. That needs a live Claude
+ * Code session choosing to honour the hook, and nothing here drives one. What
+ * CI can assert is the MECHANISM the docs guarantee: exit code 2. Exit-code-2
+ * table, verbatim: "`Stop` | Yes | Prevents Claude from stopping, continues
+ * the conversation" (code.claude.com/docs/en/hooks, CC 2.1.250).
+ *
+ * Until 0.1.10 this block asserted the PAYLOAD SHAPE ONLY. It passed on every
+ * release from 0.1.2 to 0.1.9 while the gate exited 0 and blocked nothing -
+ * the exact assertion that let one Gate 4 session record eight failing
+ * verdicts and never stop a turn. Shape is not effect. The status assertion
+ * below is the load-bearing one; do not drop it to make a refactor pass.
+ *
+ * STILL REQUIRED BY HAND, every release: plant a real violation in a real
+ * project, end a real turn, confirm the turn does not end. NATIVE-CAPABILITIES 4.5.
+ */
 {
   const tmp = makeProject(); cleanup.push(tmp);
   fs.mkdirSync(path.join(tmp, 'app', 'api', 'x'), { recursive: true });
@@ -133,11 +151,17 @@ try {
 
   const p = { hook_event_name: 'Stop', prompt_id: 'b1', session_id: 's' };
   runGate(tmp, p, { args: ['--mark-dirty'] });
-  const d = decision(runGate(tmp, p).stdout);
-  if (d.kind === 'continue' && /next\.route_force_dynamic/.test(d.reason)) {
-    ok('a violation refuses to end the turn, naming the check');
+  const r = runGate(tmp, p);
+  const d = decision(r.stdout);
+  if (r.status === 2) {
+    ok('a violation exits 2 - the documented mechanism that refuses the stop');
   } else {
-    bad(`violation: expected continue naming the check, got kind=${d.kind}`);
+    bad(`violation: expected exit 2, got status=${r.status}. The turn would NOT be blocked.`);
+  }
+  if (d.kind === 'continue' && /next\.route_force_dynamic/.test(d.reason)) {
+    ok('the payload names the failing check');
+  } else {
+    bad(`violation: expected payload naming the check, got kind=${d.kind}`);
   }
   const run = JSON.parse(fs.readFileSync(path.join(tmp, PATHS.gateRun), 'utf8'));
   if (run.completed && run.outcome === 'fail') ok('failing gate closes its sentinel');

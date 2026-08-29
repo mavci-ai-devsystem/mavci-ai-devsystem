@@ -572,8 +572,12 @@ const marketplaceForm = {
         + 'not resolve installs no plugin and registers no hook.', line);
     }
     if (s?.enabledPlugins?.[PLUGIN_ID] !== true) {
-      return finding(`the marketplace resolves but enabledPlugins["${PLUGIN_ID}"] is not true, `
-        + 'so the plugin is never loaded and nothing is enforced.',
+      return finding(`the marketplace resolves but this project does not set enabledPlugins["${PLUGIN_ID}"] to true. `
+        + 'This rule reads only .claude/settings.json, so it cannot see a user-scope or managed enablement and '
+        + 'must not claim that nothing is enforced: gate4c ran a whole session with three agents and eight hooks '
+        + 'registered from a user-scope anchor while this key was absent. What is established is narrower and still '
+        + 'serious - enforcement here rests on machine-level config that travels with nobody, so on a fresh clone, '
+        + "a teammate's checkout or CI, no hook registers and the failure is silent.",
       at('enabledPlugins') ?? line);
     }
     return [];

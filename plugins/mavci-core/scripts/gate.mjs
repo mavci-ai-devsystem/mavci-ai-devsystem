@@ -132,8 +132,24 @@ function sweepStaleMarkers(now = Date.now()) {
 }
 
 /**
- * Emit a Stop decision. `continue: true` is the verified mechanism that refuses
- * to let the turn end (4.5): the model is handed the failure and must fix it.
+ * Emit the Stop payload. NOTE: this payload alone does NOT block the turn.
+ *
+ * What the docs establish (code.claude.com/docs/en/hooks, CC 2.1.250):
+ *   - exit code 2 on Stop: "Prevents Claude from stopping, continues the
+ *     conversation". For a `type: "command"` hook this is the ONLY confirmed
+ *     block, and it is what every caller intending to block must use.
+ *   - `continue`/`stopReason` ARE correctly nested inside hookSpecificOutput -
+ *     that part of the original shape was right - but the reference's
+ *     decision-control table does not define what `continue: true` vs `false`
+ *     means for a command Stop hook. The global `continue: false` + `stopReason`
+ *     pair appears to HALT the session and show the reason to the operator,
+ *     which is the opposite of refusing a stop, so this deliberately does not
+ *     set it. Do not "fix" that without a verbatim doc quote: 0.1.9 shipped
+ *     seven releases on the inverted guess and never blocked once.
+ *   - `ok`/`reason`/`impossible` is the `type: "prompt"` hook format. This is a
+ *     `type: "command"` hook and cannot use it.
+ *
+ * See NATIVE-CAPABILITIES 4.5, corrected in 0.1.10.
  */
 function emitContinue(event, reason) {
   process.stdout.write(JSON.stringify({
@@ -349,8 +365,11 @@ async function gate(input) {
     process.exit(0);
   }
 
+  // Belt and braces, exactly as failClosed does. The payload is advisory; exit 2
+  // is what actually refuses the stop. Emitting without exiting 2 is what made
+  // this gate record failing verdicts throughout Gate 4 and never block once.
   emitContinue(event, `${detail}\n\nNot baselined, not waived. Fix these, then stop again.`);
-  process.exit(0);
+  process.exit(2);
 }
 
 /* ------------------------------------------------------------------ CLI */

@@ -221,6 +221,192 @@ Both are Gate 4, restarting from step 3 in a clean project **against v0.1.7**.
 an auto-recorded project pin and an untracked settings file in the other — and
 are not valid starting states.
 
+### Gate 4 enforcement step — FAILED on 0.1.9
+
+**A real standards violation never blocked a turn; a checker malfunction did.**
+`gate.mjs`'s violations path emitted its Stop payload and then `process.exit(0)`.
+The payload carries no decision Claude Code is documented to act on — 4.5
+asserted that `{"hookSpecificOutput":{...,"continue":true,"stopReason":"..."}}`
+"continues the conversation", and that claim was never verified — so exit 0 was
+the entire decision and the turn ended. `failClosed`, used for a timed-out,
+crashed or unreadable checker, followed the same payload with `process.exit(2)`,
+which the exit-code-2 table does guarantee. **So the gate blocked when it broke
+and passed when your code broke.** That is the inversion.
+
+Observed in gate4c, 2026-08-29: eight Stop-hook verdicts in one session, every
+one `"verdict": "fail"` carrying a `critical` blocker, and not one turn stopped.
+It shipped in every release from 0.1.2 through 0.1.9 — seven releases.
+
+`check-gate.mjs` had a case for this and it passed the whole time, because it
+asserted the payload's SHAPE and never the exit status. The acceptance test
+claimed the behaviour and never ran it. **An assertion that cannot fail is not
+coverage**, and this one hid a dead enforcement layer for seven releases.
+
+The assertion was not merely weak — it was **adjacent**. A correctly-shaped
+payload is a real thing to assert; it simply was not the thing that mattered.
+That is the sixth instance of the adjacent-but-wrong signal this Gate found, and
+the test that separates them is the one already written down: *what would a
+broken build look like, and would this say so?* A gate that emits the right JSON
+and exits 0 looks exactly like a gate that works.
+
+### 0.1.10 — cut mid-Gate, deliberately
+
+**Cut 2026-08-29 while Gate 4 was live. This is an exception to the rule below
+and is recorded as one.** The rule protects a Gate run from having the thing
+under test moved beneath it. Here the Gate's own finding was that the thing
+under test cannot produce the observation at all: no code path in 0.1.9's gate
+stops a turn, so the enforcement step is unrunnable on 0.1.9 and re-running it
+changes nothing. The rule was protecting a result that had already been
+produced. The step is recorded FAILED on 0.1.9 above, and re-runs against
+0.1.10.
+
+0.1.10 is one thing: **the gate can now stop a turn.** Contents: `exit 2` on the
+violations path; `check-gate.mjs` asserting exit status before shape; 4.5 and
+4.6 corrected, with `continue` marked UNVERIFIED rather than resolved;
+`settings.marketplace_form`'s claim narrowed to what the rule can actually see;
+`$comment2` likewise. Nothing else. The items previously logged here are NOT in
+it — see 0.1.11. Shipping an untested command surface and a schema migration
+alongside a critical gate fix is how the gate bug shipped in the first place.
+
+**How the exception was even detectable — record the method, not the incident.**
+The finding came from a controlled test designed to fail. A defect was planted
+deliberately, the rule expected to catch it was named in advance, and the rule
+was then read to confirm it actually covered the path before the test ran —
+which is how the first candidate defect was discarded: `next.route_force_dynamic`
+matches `app/api/**/route.ts` only and would never have fired on a page, so
+planting a missing `force-dynamic` there would have proved nothing and been
+scored as a pass. The substitute was chosen for coverage *and* for blast radius:
+criterion 9's module-scope client over criterion 10's service-role key, because
+if the gate did not hold, the defect left in the tree must not be the one that
+bypasses RLS. Only then was it run — and the gate's silence became evidence
+instead of reassurance. **Without that sequence the gate would have kept passing
+turns and the inversion would have reached the first real project.** Build the
+next Gate the same way: plant, predict, verify the rule covers the path, then
+run.
+
+**The rule, restated:** do not move the plugin mid-Gate — *unless the Gate's own
+finding is that the plugin under test cannot produce the observation the Gate
+exists to make*. Then the run is already over: record its result and cut. That
+is the only exception, and it requires a finding, not an inconvenience.
+
+### 0.1.11 — recorded, not built
+
+**None of these is built.** Items 1–4 were logged against 0.1.10 and moved when
+0.1.10 was cut as a single-purpose gate fix; 5 and 6 are from Gate 4c.
+
+1. **`doctor` must FAIL when a pin's version differs from the anchor's.** Gate 4c
+   found `mavci-core@mavci` holding two records — `{scope:"user", version:"0.1.9"}`
+   and a stale `{scope:"project", projectPath:"C:\Projelerim\gate4c", version:"0.1.7"}`
+   — and the project one won: **0.1.7 is what ran**, enforcing a Gate with a
+   superseded rule set. `doctor` printed `plugin 0.1.7` and
+   `[ok  ] … anchored at user scope (0.1.9)` three lines apart. Both lines are
+   correct — the banner is `pluginVersion()`, which reads the *running*
+   `PLUGIN_ROOT`, and the scope line reads the registry — and together they are
+   unreadable. Fix: compare `pluginVersion()` against every record's `version`;
+   **FAIL** on a mismatch, naming the pinned directory, the fact that the
+   reported and running versions disagree, and the scoped uninstall — because
+   `plugin uninstall --scope user` does not remove a pin, only `--scope project`
+   from the directory it names does. The anchor line must then name the pin as
+   the reason rather than list it as an OK detail. Two comments carry the wrong
+   claim and change with it: `checkInstallScope`'s "A pinned record ALONGSIDE a
+   user-scope one is normal and harmless", and 6.22's "harmless while the anchor
+   stands". Full finding: NATIVE-CAPABILITIES **6.25**, with 6.22 corrected.
+
+2. **The stale value outlives the pin, and it is the one CI follows.**
+   `control/state.json.plugin_version` is written **once**, by `init()` at
+   connect, and changed by nothing afterwards except `doctor --sync`. Every
+   other version stamp in the system is rewritten on its next run;  this one is
+   not. `templates/mavci-verify.yml` reads it and clones that tag:
+   `v=$(node -p "require('./.mavci/control/state.json').plugin_version")` →
+   `ref=v$v`. gate4c still records `0.1.7` — written by the shadowed run — while
+   0.1.9 is what loads, so the shadowing did not merely confuse one session: it
+   wrote a forward-looking value into the control plane that **persists after
+   the pin is removed** and steers this project's CI at a rule set the project
+   is no longer running. `checkVersionSkew` already names `--sync` as the fix and
+   already prints `(CI clones tag v<recorded>)`; what it does not say is the
+   consequence. The message must state that CI is pinned to a version this
+   project is not running, and that the value can have been written by a session
+   whose plugin was shadowed — nobody chose it. `checkHookRegistration` is the
+   precedent to copy, in this same file: it already FAILs on
+   `the registered hooks are from plugin X, not Y`.
+
+   **Audit of every other `pluginVersion()` writer — none inherits the defect,
+   and the reason is worth keeping.** Self-healing, rewritten on the next run,
+   so a stale value cannot survive: `integrity.sealed_by_plugin_version` (every
+   control write), `integrity.last_gate.plugin_version` (every gate),
+   `control/hook-run.json.plugin_version` (every SessionStart — and already
+   FAIL-checked at doctor.mjs:962), and `gate.mjs:226`, which reads
+   `plugin.json` directly per run rather than any recorded value. Backward-looking
+   provenance, where a stale value is the truth and must not be synced:
+   `baseline.json.created_by_plugin_version`, a waiver's
+   `created_by_plugin_version`, and a verdict's `plugin_version` — each records
+   which rule set produced that artefact. gate4c's two adhoc verdicts correctly
+   carry `0.1.7`. **`state.json.plugin_version` is the only field that is both
+   write-once and forward-looking**, which is exactly why it is the only one that
+   captured the shadowing.
+
+3. **Suppress the benign failure-level annotation on a green release run.**
+   `check-packaging.mjs`'s deliberate negative control removes `templates/` from a
+   staged copy and asserts the renderer fails; the `ENOENT …/mavci-core/templates/scaffold`
+   it provokes surfaces as a red ✗ annotation on a job that exits 0. It is new
+   because `check-packaging` only entered `release.yml` in `c78267c` — v0.1.7's
+   release ran without it and v0.1.8's died before reaching it, so **v0.1.9's is
+   the first release run ever to execute it**. A red mark on a green run trains
+   exactly the habit that let run 33265540461 go unread.
+
+5. **One task-lifecycle command surface — `--abandon`, activation, and a phase
+   transition that also moves the task record.** Gate 4c found three lifecycle
+   transitions the data model can represent and no command can express. A task
+   that died before writing a spec cannot be retired: `status` has no
+   `abandoned` (and `blocked` must NOT be pressed into meaning dead — it means
+   waiting on something), and `state.mjs` has no command that closes a task.
+   `active_task` is assigned by nothing — it appears once, in `--init`, set to
+   `null` — yet `mavci-builder` read it and cited it as evidence a task had not
+   been advanced. `--set-phase` moves the global phase while leaving the task
+   record at its old phase, producing **by sanctioned command** the exact
+   surface/control divergence we refused to create by hand for task 0001. A
+   fourth symptom: `recordVerdict` keys a verdict file by task id when it has
+   one and it never has one, so gate runs verifying a task's own artefacts land
+   as `adhoc-<timestamp>.json` with `"task_id": null` and are not attributable
+   to the task. Three patches would be wrong; this is one missing verb set.
+   Decisions already taken: **`--abandon` records who and why in the control
+   record**, not just a status flip — a terminal state with no reason is a
+   future mystery — and its schema fields must land in the same change because
+   `additionalProperties: false` rejects them otherwise. Note `writeControl`
+   runs `redactDeep`, so a reason quoting an error string that contains a key
+   comes back scrubbed: correct behaviour, documented so nobody reports it as
+   corruption. **`active_task` is deleted, not wired**: the fact is already held
+   per task by `status: "in_progress"` on the sanctioned path, and a second
+   writer for one fact is the failure this Gate found four times. Removing it
+   from `state.schema.json` is a breaking read under `additionalProperties:
+   false`, so it needs a migration step or a one-version allowance —
+   `state.schema_valid` is itself a rule and a stale `state.json` would light up
+   the checker rather than fail quietly. `mavci-builder.md`'s "phase, active
+   task, retry counters" (line 64) changes in the same commit, or the next
+   builder cites the dead field again. The invariant that replaces the pointer —
+   at most one task `in_progress` — is enforced at the transition, not
+   maintained as state.
+
+6. **`createTask` must not write a spec pointer to a file it never creates.**
+   Both gate4c tasks carried `spec: ".mavci/tasks/pending.md"` for a file that
+   does not exist, which is indistinguishable from a pointer to a deleted spec
+   and is what made an orphaned task unreadable to the next agent that opened
+   it. Write a real stub at that path with a watermark first line in the
+   `REVIEW REQUIRED` shape the legal pages already use — one convention rather
+   than two, greppable by the checker — and the builder must refuse to build
+   from a file carrying it. Not `spec: null`: null reports the spec's absence
+   but dead-ends the only reflex a reader has, which is to open the path the
+   pointer names. Cheapest item here, and the one that makes an orphaned task
+   self-describing with no tooling at all.
+
+4. **Recorded, no work — v0.1.6's protected-environment check is live, not dead
+   code.** `doctor`'s FAIL on a protected environment with no `supabase_ref`
+   (`9d62c45`, shipped in v0.1.6) fired for the first time against a real project
+   in gate4c, wording intact: *"This environment reads as protected and is not."*
+   Both risk-guard arms it protects were inert and the environment read as
+   protected. The `4 of 4` / `1 of 1` propagation counters in the version-skew
+   warning (6.21) also rendered as intended.
+
 ---
 
 ## Ask me before
