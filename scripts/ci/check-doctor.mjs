@@ -565,6 +565,67 @@ try {
   }
 }
 
+/* --- 11. an open guardian ticket is a LOST RUN and doctor must say so ---
+ *
+ * BROKEN BUILD THIS MUST CATCH: every version through 0.1.15, in which nothing
+ * anywhere read the ticket. `guardian-record.mjs`, `worklist.mjs` and the
+ * guardian skill each claimed "the gate sees it"; gate.mjs and release-gate.mjs
+ * contain no reference to it. A dispatch that produced no record was announced
+ * once, on stderr, and then never again.
+ *
+ * THE ASSERTION IS ON THE WORKLIST ID REACHING THE OUTPUT, not merely on doctor
+ * failing. Doctor already exits non-zero on a fresh fixture for other reasons,
+ * so an exit-status-only assertion passes against a doctor that never opens the
+ * file - the same half-of-it trap as check-gate.mjs asserting payload shape and
+ * never exit status.
+ */
+{
+  const tmp = makeProject(); cleanup.push(tmp);
+  const gdir = path.join(tmp, '.mavci', 'control', 'guardian');
+  fs.mkdirSync(gdir, { recursive: true });
+
+  const before = runDoctor(tmp);
+  if (!/wl-CI-LOST-RUN/.test(before.stdout)) {
+    ok('no ticket: doctor says nothing about a guardian run');
+  } else {
+    bad('doctor reported a lost guardian run with no ticket present');
+  }
+
+  fs.writeFileSync(path.join(gdir, 'ticket.json'), JSON.stringify({
+    schema_version: 1, worklist_id: 'wl-CI-LOST-RUN', project_id: MANIFEST.project_id,
+    worklist_path: '.mavci/control/guardian/wl-CI-LOST-RUN.json',
+    opened_at: '2026-01-01T00:00:00Z', trigger: 'manual', reviewed_ref: null, tree_state: null,
+  }, null, 2));
+
+  const lost = runDoctor(tmp);
+  if (/produced NO record/.test(lost.stdout) && /wl-CI-LOST-RUN/.test(lost.stdout)) {
+    ok('an open ticket with no record FAILS doctor, naming the worklist id');
+  } else {
+    bad('an open guardian ticket with no record must FAIL doctor and name the worklist id - '
+      + 'it is the only evidence that a dispatch was lost');
+  }
+  if (/\[FAIL\][^\n]*wl-CI-LOST-RUN/.test(lost.stdout) || /FAIL[^\n]*wl-CI-LOST-RUN/.test(lost.stdout)) {
+    ok('the lost run is reported at FAIL, not WARN');
+  } else {
+    bad('a lost provenance run reported below FAIL is a warning nobody acts on');
+  }
+
+  // With the record present the run is NOT lost. Without this the check above is
+  // satisfied by a doctor that fails whenever a ticket file exists at all.
+  fs.mkdirSync(path.join(gdir, 'records'), { recursive: true });
+  fs.writeFileSync(path.join(gdir, 'records', 'wl-CI-LOST-RUN.json'), JSON.stringify({
+    schema_version: 1, project_id: MANIFEST.project_id, plugin_version: '0.0.0',
+    run_at: '2026-01-01T00:00:00Z', worklist_id: 'wl-CI-LOST-RUN', verdict: 'pass',
+    fail_reason: null, coverage: { sites_total: 1, sites_answered: 1 }, answers: [],
+  }, null, 2));
+  const recorded = runDoctor(tmp);
+  if (!/produced NO record/.test(recorded.stdout)) {
+    ok('a ticket whose record exists is not reported as a lost run');
+  } else {
+    bad('doctor reported a lost run for a worklist whose record is on disk');
+  }
+}
+
 } finally {
   for (const d of cleanup) fs.rmSync(d, { recursive: true, force: true });
 }

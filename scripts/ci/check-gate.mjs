@@ -635,6 +635,78 @@ function assertDelivered(label, r, want) {
   }
 }
 
+/* --- N. the actor's write grant decides block vs release (finding 6) ---
+ *
+ * BROKEN BUILD THIS MUST CATCH: 0.1.15, where the gate blocked mavci-guardian
+ * ten times over `corpus-run/**` files. Guardian has `allow: []` in
+ * agent-scopes.json and no Edit tool at all, so every one of those blocks
+ * demanded an edit it had no grant to make.
+ *
+ * THE ASSERTION IS ON WHETHER THE TURN IS ALLOWED TO END, NOT ON THE REASON
+ * TEXT. Asserting the reason names the file passes against 0.1.15 - the reason
+ * was present, correct, and repeated ten times, which is exactly the failure.
+ * That is the check-gate.mjs trap from Gate 4 (payload asserted, exit status
+ * never), and it is the reason this block asserts `status` and `kind` first.
+ */
+{
+  const tmp = makeProject(); cleanup.push(tmp);
+  // A violation on a path no agent scope grants: not app/, src/, lib/, ...
+  fs.mkdirSync(path.join(tmp, 'corpus-run', 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(tmp, 'corpus-run', 'lib', 'supabase.ts'),
+    'export const k = process.env.SUPABASE_SERVICE_ROLE_KEY;\n');
+  state.seal(tmp);
+
+  const base = { hook_event_name: 'SubagentStop', session_id: 'actor-s' };
+
+  // (a) guardian writes nothing -> record and release, first time, no retry.
+  const g = { ...base, prompt_id: 'actor-guardian', agent_type: 'mavci-core:mavci-guardian' };
+  runGate(tmp, g, { args: ['--mark-dirty'] });
+  const rg = runGate(tmp, g);
+  const dg = decision(rg.stdout);
+  if (rg.status === 0 && dg.kind === 'message' && /RELEASED, NOT FIXED/.test(dg.reason)) {
+    ok('guardian (allow: []) is released on the FIRST stop, not blocked');
+  } else {
+    bad(`guardian should be released on a path it cannot write: exit=${rg.status} kind=${dg.kind} `
+      + `reason=${JSON.stringify((dg.reason ?? '').slice(0, 160))}`);
+  }
+  // The release must still SAY what was wrong and who owns it, or it is a
+  // silent pass - the 0.1.10 failure in the opposite direction.
+  if (/corpus-run\/lib\/supabase\.ts/.test(dg.reason ?? '') && /AUTHORITY:/.test(dg.reason ?? '')) {
+    ok('the release names the unreachable path and the actor who owns it');
+  } else {
+    bad('the release must name the path and carry an AUTHORITY note; it is a record, not a pass');
+  }
+
+  // (b) an agent that CAN write the path must still be blocked. Without this the
+  // release is indistinguishable from the gate having stopped working.
+  fs.mkdirSync(path.join(tmp, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(tmp, 'lib', 'leak.ts'),
+    'export const k = process.env.SUPABASE_SERVICE_ROLE_KEY;\n');
+  state.seal(tmp);
+  const b = { ...base, prompt_id: 'actor-builder', agent_type: 'mavci-builder' };
+  runGate(tmp, b, { args: ['--mark-dirty'] });
+  const rb = runGate(tmp, b);
+  const db = decision(rb.stdout);
+  if (rb.status === 2 && db.kind === 'block') {
+    ok('builder (allow: lib/**) is still BLOCKED on a path it can write');
+  } else {
+    bad(`builder must still be blocked on lib/: exit=${rb.status} kind=${db.kind}`);
+  }
+
+  // (c) an unknown agent_type must not buy a release. An unparsed or unmapped
+  // actor is an unknown grant, and an unknown grant that released would make
+  // every unrecognised payload a way past the gate.
+  const u = { ...base, prompt_id: 'actor-unknown', agent_type: 'some-unmapped-agent' };
+  runGate(tmp, u, { args: ['--mark-dirty'] });
+  const ru = runGate(tmp, u);
+  const du = decision(ru.stdout);
+  if (ru.status === 2 && du.kind === 'block') {
+    ok('an agent_type with no recorded scope is blocked, not released');
+  } else {
+    bad(`unknown agent_type must not be released: exit=${ru.status} kind=${du.kind}`);
+  }
+}
+
 } finally {
   for (const d of cleanup) fs.rmSync(d, { recursive: true, force: true });
 }

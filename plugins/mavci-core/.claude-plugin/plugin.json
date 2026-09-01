@@ -1,11 +1,18 @@
 {
   "name": "mavci-core",
   "displayName": "Mavci Core",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "Agents, standards enforcement, risk policy and project scaffolding for multi-tenant SaaS on Next.js 14 + Supabase + Stripe + Resend.",
   "author": {
     "name": "Mehmet Avci"
   },
   "license": "UNLICENSED",
-  "keywords": ["nextjs", "supabase", "stripe", "saas", "standards", "kvkk"]
+  "keywords": [
+    "nextjs",
+    "supabase",
+    "stripe",
+    "saas",
+    "standards",
+    "kvkk"
+  ]
 }

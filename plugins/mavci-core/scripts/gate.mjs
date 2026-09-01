@@ -36,6 +36,126 @@ import { abs, exists, readJsonOrNull } from './lib/fsx.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const VERIFY = path.join(HERE, 'verify.mjs');
+const AGENT_SCOPES = path.join(HERE, '..', 'agents', 'agent-scopes.json');
+
+/* ================================================ who is being blocked
+ *
+ * A BLOCKING REASON THE STOPPING ACTOR CANNOT ACT ON IS NOT A CORRECTION, IT IS
+ * A TRAP. 0.1.16, finding 6.
+ *
+ * gate4c, 0.1.15: `mavci-guardian` was dispatched into a project whose tree held
+ * an acceptance corpus the standards checker blocked on. Guardian holds Read,
+ * Grep and Glob - `agent-scopes.json` gives it `allow: []` and
+ * `native_constraint: true`, so `Edit` is absent from its context entirely. It
+ * could not fix one of those files if it decided to. The gate blocked it anyway,
+ * ten times, with "Fix these, then stop again." Sixteen verdict files in 137
+ * seconds, and the agent gave up at its retry ceiling having produced exactly
+ * the information it had after the first attempt.
+ *
+ * The retry ceiling caught it, so nothing ran away. That is not the same as the
+ * gate being right: ten turns bought nothing, and the remedy text instructed an
+ * actor to do something it had no grant to do. Worse, on those files the remedy
+ * was actively wrong - "move the reference into a server-only module" applied to
+ * a fixture means delete the defect the fixture exists to carry.
+ *
+ * This is the `authority` mechanism from `rules/index.mjs` - a remedy is an
+ * instruction to whoever can carry it out - applied to the GATE instead of to
+ * the rule. The rule knows what kind of actor a remedy needs. Only the gate
+ * knows which actor is actually standing there.
+ *
+ * SCOPE OF THE RELEASE, deliberately narrow. The gate records and releases only
+ * when EVERY blocking finding names a path outside the stopping actor's write
+ * grant. It does NOT release on `authority` alone: a project whose only blockers
+ * are `legal.pages_present` (authority `external`) must keep blocking, because
+ * the agent genuinely can act - by stopping and reporting - and releasing there
+ * would let legal debt through on a technicality. Path-outside-grant is the case
+ * where there is no action of any kind available to the actor.
+ */
+
+/**
+ * Glob subset used by agent-scopes.json and settings.json: `**`, `*`, literal.
+ *
+ * Scanned character by character rather than by chained `replace` calls. The
+ * chained form needs a placeholder to hold `**` while `*` is being substituted,
+ * and the obvious placeholder is a control character - which is invariant 3 of
+ * the system CLAUDE.md, "no NUL bytes". The first draft of this function used
+ * one and check-plugin.mjs caught it: a file holding a NUL shows as "Binary
+ * files differ" and is skipped silently by `grep -r`, so the gate's own actor
+ * logic would have become invisible to every audit that greps the tree. There is
+ * no placeholder here to get wrong.
+ */
+function globToRe(pattern) {
+  let re = '';
+  for (let i = 0; i < pattern.length; i += 1) {
+    const c = pattern[i];
+    if (c === '*') {
+      if (pattern[i + 1] === '*') { re += '.*'; i += 1; } else { re += '[^/]*'; }
+    } else if ('.+^${}()|[]\\?'.includes(c)) {
+      re += `\\${c}`;
+    } else {
+      re += c;
+    }
+  }
+  return new RegExp(`^${re}$`);
+}
+
+const matchesGlob = (p, pattern) => globToRe(pattern).test(p);
+
+/**
+ * The write grant of whoever is stopping.
+ *
+ * @returns {{label: string, known: boolean, canWrite: (p: string) => boolean}}
+ * `known:false` means we could not establish the grant, and the caller must then
+ * behave exactly as before. An unknown grant must never buy a release - that
+ * would turn every unparsed payload into a way past the gate.
+ */
+function stoppingActor(root, input) {
+  const agentType = typeof input?.agent_type === 'string' ? input.agent_type : null;
+
+  if (input?.hook_event_name === 'SubagentStop' && agentType) {
+    const bare = agentType.includes(':') ? agentType.slice(agentType.indexOf(':') + 1) : agentType;
+    const scopes = readJsonOrNull(AGENT_SCOPES);
+    const scope = scopes?.[bare];
+    if (scope && Array.isArray(scope.allow)) {
+      return {
+        label: bare,
+        known: true,
+        // An empty allow list is a real, knowable answer: this agent writes
+        // nothing. It is the whole reason guardian looped.
+        canWrite: (p) => scope.allow.some((g) => matchesGlob(p, g)),
+      };
+    }
+    // A subagent we do not have a scope for. Unknown, not unrestricted.
+    return { label: bare, known: false, canWrite: () => true };
+  }
+
+  // Main session. Its grant is the committed risk policy, whose Edit rules are
+  // written `Edit(./app/**)`. Read them rather than assuming the session can
+  // write anywhere: in gate4c the main session could not edit `corpus-run/**`
+  // either, and was told to fix it.
+  const settings = readJsonOrNull(abs(root, '.claude/settings.json'));
+  const allow = settings?.permissions?.allow;
+  if (!Array.isArray(allow)) return { label: 'the main session', known: false, canWrite: () => true };
+
+  const globs = allow
+    .map((r) => /^Edit\((?:\.\/)?(.+)\)$/.exec(typeof r === 'string' ? r : ''))
+    .filter(Boolean)
+    .map((m) => m[1]);
+  // `ask` rules are not a grant, but they are not a refusal either - the operator
+  // is present and can approve. Treat them as writable so the gate never releases
+  // on a path a human could clear from the same seat.
+  const askGlobs = (settings?.permissions?.ask ?? [])
+    .map((r) => /^Edit\((?:\.\/)?(.+)\)$/.exec(typeof r === 'string' ? r : ''))
+    .filter(Boolean)
+    .map((m) => m[1]);
+
+  if (!globs.length && !askGlobs.length) return { label: 'the main session', known: false, canWrite: () => true };
+  return {
+    label: 'the main session',
+    known: true,
+    canWrite: (p) => [...globs, ...askGlobs].some((g) => matchesGlob(p, g)),
+  };
+}
 
 /* ------------------------------------------------------------- plumbing */
 
@@ -575,6 +695,28 @@ async function gate(input) {
 
   const n = verdict.summary.blockers;
   const detail = `mavci: ${n} blocking standards violation${n === 1 ? '' : 's'}.\n- ${blocking.join('\n- ')}`;
+
+  /* ---- record and release when the actor cannot act (finding 6) --------
+   * Ahead of the retry ceiling, because the ceiling is a loop guard and this is
+   * a correctness question: the ceiling still spends GATE_MAX_CONTINUES turns
+   * discovering what the write grant already says. */
+  const actor = stoppingActor(root, input);
+  const failing = verdict.checks.filter((c) => c.status === 'fail' || c.status === 'error');
+  const unreachable = failing.filter((c) => c.path && !actor.canWrite(c.path));
+
+  if (actor.known && failing.length > 0 && unreachable.length === failing.length) {
+    const paths = [...new Set(unreachable.map((c) => c.path))].slice(0, 5);
+    emitMessage(event,
+      `${detail}\n\nRELEASED, NOT FIXED. Every blocking path is outside the write grant of `
+      + `${actor.label}, so there is no edit it could make and blocking would only spend turns: `
+      + `${paths.join(', ')}${paths.length < unreachable.length ? ', ...' : ''}. `
+      + 'The verdict is recorded under .mavci/control/verdicts/ and this turn is allowed to end. '
+      + 'AUTHORITY: not yours to complete - it needs the operator. Report it and stop. '
+      + 'The operator fixes it, waives it with `/mavci-core:waive <check_id> --path <file> '
+      + '--reason "..."`, declares the directory under `checks.fixtures` in .mavci/project.json '
+      + 'if it holds fixtures that carry a defect on purpose, or files it with /mavci-core:retro.');
+    process.exit(0);
+  }
 
   if (continues >= GATE_MAX_CONTINUES) {
     // Stop asking. An unsatisfiable gate must reach the operator, not spin.

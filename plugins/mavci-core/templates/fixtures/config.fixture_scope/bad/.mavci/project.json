@@ -1,0 +1,28 @@
+{
+  "schema_version": 2,
+  "project_id": "fixture",
+  "display_name": "Fixture",
+  "created": "2026-01-01T00:00:00Z",
+  "stack": { "framework": "nextjs-14-app-router", "language": "typescript", "db": "supabase-postgres", "auth": "supabase-auth", "payments": "stripe", "email": "resend", "ai": "anthropic", "package_manager": "npm" },
+  "tenancy": { "model": "shared-schema", "isolation": "rls", "tenant_column": "org_id" },
+  "deploy": { "target": "vercel", "prod_branch": "main", "site_url": "https://fixtures.example.com" },
+  "environments": { "prod": { "supabase_ref": "fixtureprod", "protected": true } },
+  "env_sources": { "runtime": "vercel-project-env", "required_keys": ["STRIPE_SECRET_KEY"], "never_read_by_agents": true },
+  "risk_tier": "standard",
+  "compliance": {
+    "jurisdictions": ["TR"], "required_pages": ["kvkk"], "locales": ["tr"],
+    "entity": {
+      "legal_name": "Ornek Yazilim Anonim Sirketi",
+      "address": "Ornek Mahallesi Ornek Caddesi No 1 Kadikoy Istanbul",
+      "email": "destek@example.com",
+      "mersis": "0000000000000000",
+      "kep": "ornek@hs01.kep.tr"
+    }
+  },
+  "agents": { "enabled": ["mavci-builder"] },
+  "standards": { "packs": ["nextjs-app-router", "supabase-multitenant-rls", "legal-tr-kvkk", "stripe-billing"] },
+  "checks": {
+    "fixtures": ["app/widgets"],
+    "exclude_paths": ["lib/**"]
+  }
+}

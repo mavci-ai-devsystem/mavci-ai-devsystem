@@ -199,6 +199,60 @@ function checkGuardianCorpus(root, out) {
 }
 
 /**
+ * THE READER FOR AN OPEN GUARDIAN TICKET. 0.1.16, finding 3.
+ *
+ * The ticket is written before guardian is dispatched and deleted on exactly one
+ * path: a record was written. So an open ticket is not ambiguous - it means a
+ * dispatch happened and produced no record, which is a LOST RUN.
+ *
+ * Until this check existed, nothing read the file. `guardian-record.mjs`,
+ * `worklist.mjs` and the guardian skill each stated that a stale ticket is "what
+ * the gate sees"; `gate.mjs` contains no reference to guardian or tickets, nor
+ * does `release-gate.mjs`, which reads records only. The entire signal was one
+ * stderr line from a hook, which dies with the terminal.
+ *
+ * FAIL, not WARN, and it names the worklist id. A warning about a lost
+ * provenance run is a warning nobody acts on, and the id is what makes it
+ * actionable - it says which enumeration went unanswered, so the operator can
+ * re-dispatch that worklist rather than re-scanning and getting a new one.
+ *
+ * Deliberately NOT gated on session age. An earlier draft only failed for a
+ * ticket older than the current session, so that a run dispatched and recorded
+ * within one session never flickered. But the writer deletes the ticket the
+ * moment it records, so a ticket visible to doctor at all is already a ticket no
+ * record closed - and the age test would have hidden exactly the case this exists
+ * to catch: a dispatch lost earlier in the session that is still running.
+ */
+function checkGuardianTicket(root, out) {
+  const ticket = readJsonOrNull(abs(root, PATHS.guardianTicket));
+  if (!ticket) return; // no dispatch outstanding: nothing to say
+
+  const id = ticket.worklist_id ?? '(worklist id not recorded in the ticket)';
+  const recorded = exists(abs(root, `${PATHS.guardianRecords}/${ticket.worklist_id}.json`));
+
+  if (recorded) {
+    // A record exists but the ticket survived: the unlink failed, or someone
+    // restored the file. The run is NOT lost, so this is a warning - but a
+    // lingering ticket would otherwise make every later run look lost.
+    out.push({ status: WARN, text: line(WARN,
+      `guardian ticket for ${id} is still open, but its record exists`,
+      'The writer deletes the ticket immediately after writing the record, so this means the '
+      + `delete failed. Remove ${PATHS.guardianTicket} once you have confirmed the record at `
+      + `${PATHS.guardianRecords}/${id}.json is the run you expect.`) });
+    return;
+  }
+
+  out.push({ status: FAIL, text: line(FAIL,
+    `guardian run for worklist ${id} was dispatched and produced NO record`,
+    'The ticket is written before guardian is dispatched and deleted only when a record is '
+    + 'written, so an open ticket with no record means the run was lost - guardian returned '
+    + 'nothing parseable, or was interrupted, or was never actually dispatched after the '
+    + 'ticket was opened. This is not a pass and it is not a silence: a provenance question '
+    + `was asked about ${ticket.project_id ?? 'this project'} and never answered. Re-dispatch `
+    + `that worklist, or delete ${PATHS.guardianTicket} if you have decided not to.`) });
+}
+
+/**
  * The locked identifiers (ARCHITECTURE section 12) must agree everywhere.
  * They are written into every project's committed settings and CI workflow, so a
  * value that drifts in one place and not another produces projects that install
@@ -1423,6 +1477,9 @@ function main() {
     if (connected) {
       checkManifestVersion(root, out);
       checkGuardianCorpus(root, out);
+      // Directly after the corpus: both answer "did guardian's judgement actually
+      // run", and a lost run is the case the corpus check cannot see.
+      checkGuardianTicket(root, out);
       checkIntegrity(root, out);
       checkSchemas(root, out);
       checkVersionSkew(root, out, { sync });

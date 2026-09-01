@@ -190,7 +190,16 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "exclude_paths": { "type": "array", "items": { "type": "string" } },
+        "exclude_paths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Paths dropped from the scan ENTIRELY, before any rule runs - including secrets.no_committed_secrets, which can otherwise be neither baselined nor waived. Intended for build output and vendored code. This is the widest control in the manifest: prefer checks.fixtures, which exempts named rules only. Entries covering a source root are a config.fixture_scope blocker."
+        },
+        "fixtures": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Repo-relative directories holding fixtures or an acceptance corpus - files that carry a defect on purpose. Exempt from next.no_service_role_client and next.env_centralised ONLY; never from the secrets check, and the files stay in the scan. Declared here rather than inferred from a directory name so the checker cannot be silenced by choosing a path. Validated by config.fixture_scope: no globs, no absolute paths, no '..', and no overlap with app, src, lib, components, supabase, .mavci, .github or .claude."
+        },
         "public_routes": {
           "type": "array",
           "items": { "type": "string" },

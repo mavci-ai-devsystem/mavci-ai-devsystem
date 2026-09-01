@@ -88,6 +88,21 @@ export const PATHS = {
    *  a malformed guardian record passed the standards checker entirely, and the
    *  ONLY thing that would have caught it was the writer that produced it. */
   guardianRecords: `${CONTROL_DIR}/guardian/records`,
+  /**
+   * The open-run marker. Written before guardian is dispatched, deleted on
+   * exactly one path: a record was written.
+   *
+   * So an open ticket means A DISPATCH HAPPENED AND PRODUCED NO RECORD, and
+   * until 0.1.16 NOTHING READ IT. Three components said otherwise in comments -
+   * guardian-record.mjs, worklist.mjs, and the guardian skill all claimed "the
+   * gate sees it" - and a grep for the path found exactly one consumer: the
+   * component that writes it. The only signal a run had been lost was a
+   * transient stderr line from a hook, in a session that then ended.
+   *
+   * `checkGuardianTicket` in doctor.mjs is that reader. This constant exists so
+   * the reader and the writer name the file once, rather than twice.
+   */
+  guardianTicket: `${CONTROL_DIR}/guardian/ticket.json`,
 };
 
 /**

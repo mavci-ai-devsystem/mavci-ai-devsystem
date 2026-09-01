@@ -118,7 +118,7 @@ unverified (6.16).
 
 ## Current state
 
-Phase 1 built: `architect`, `builder`, `verifier`; 13 checker rules; six scripts
+Phase 1 built: `architect`, `builder`, `verifier`; 15 checker rules; six scripts
 (`state`, `redact`, `verify`, `gate`, `risk-guard`, `doctor`) plus `retro` and
 `build-agents`; hooks; scaffold; CI. Not yet built, per plan: `guardian`,
 `scribe`, `/release`, `/research`, five standards packs, nine further rules.

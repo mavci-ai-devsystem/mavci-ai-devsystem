@@ -1,5 +1,5 @@
 /**
- * Mavci Core - the Phase 1 rule set. 13 checks.
+ * Mavci Core - the Phase 1 rule set. 15 checks.
  *
  * Every rule is a plain object with a `run(ctx)` returning findings. Adding a
  * rule is one entry plus a fixture pair; nothing else changes. That is the
@@ -69,6 +69,94 @@ export function authorityNote(who) {
 const isCode = (p) => /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(p);
 const under = (p, dir) => p === dir || p.startsWith(dir + '/');
 const inAny = (p, dirs) => dirs.some((d) => under(p, d));
+
+/* ------------------------------------------------------- fixture class
+ *
+ * A FIXTURE CARRIES THE DEFECT ON PURPOSE. That is what makes it a fixture, and
+ * a checker that cannot express it forces a choice between two wrong things:
+ * delete the defect the fixture exists to detect, or baseline it and record
+ * deliberate content as permanent project debt.
+ *
+ * The concept already existed for the SYSTEM repo - `noCommittedSecrets` skips
+ * `plugins/mavci-core/templates/fixtures` with the comment "fixtures carry fake
+ * keys on purpose" - and that was the whole defect: the exemption only ever
+ * matched a path inside this repository, so no downstream project could reach
+ * it. gate4c hit the deadlock it produces. Its guardian acceptance corpus lives
+ * in `corpus-run/`, every corpus file references `SUPABASE_SERVICE_ROLE_KEY`
+ * deliberately, so `next.no_service_role_client` blocked EVERY subagent stop in
+ * the repository - while `doctor` FAILed at SessionStart for having no corpus
+ * result. Neither state could produce one.
+ *
+ * FOUR CONSTRAINTS, and each one is load-bearing:
+ *
+ * 1. DECLARED IN THE MANIFEST, never inferred from a directory name. A path
+ *    called `fixtures/` or `corpus/` earning an exemption means the checker is
+ *    silenced by choosing a filename, which is not a control at all.
+ *
+ * 2. AN ALLOW-LIST OF RULES, not a blanket skip. `FIXTURE_EXEMPT_RULES` is the
+ *    whole list and it is checked inside the helper rather than at each call
+ *    site, so a rule cannot opt itself in by calling it.
+ *
+ * 3. `secrets.no_committed_secrets` CAN NEVER BE EXEMPTED. It is the one check
+ *    that is neither baselineable nor waivable, and a real key in a directory
+ *    someone declared as fixtures is still a real key. A fixture holds a
+ *    placeholder; if it holds a live value the finding is correct.
+ *
+ * 4. THE DECLARATION IS ITSELF CHECKED, by `config.fixture_scope` below. Without
+ *    it, `"fixtures": ["."]` turns the manifest into an off switch - which is
+ *    what `checks.exclude_paths` silently still was, and why that rule polices
+ *    both fields.
+ */
+
+/** The complete set of rules a project-declared fixture root may exempt. */
+export const FIXTURE_EXEMPT_RULES = new Set([
+  'next.no_service_role_client',
+  'next.env_centralised',
+]);
+
+/** Source roots a fixture root may never be, contain, or live inside. */
+const PROTECTED_ROOTS = ['app', 'src', 'lib', 'components', 'supabase', '.mavci', '.github', '.claude'];
+
+/** Why `dir` is unusable as a declared fixture root, or null when it is fine. */
+export function fixtureRootIssue(dir) {
+  if (typeof dir !== 'string' || dir.trim() === '') return 'is empty';
+  if (dir !== dir.trim()) return 'has leading or trailing whitespace';
+  if (dir === '.' || dir === './' || dir === '/') return 'is the repository root, which would exempt everything';
+  if (dir.startsWith('/') || /^[A-Za-z]:/.test(dir)) return 'is an absolute path';
+  if (dir.includes('\\')) return 'uses backslashes - declare repo-relative POSIX paths';
+  if (dir.split('/').includes('..')) return 'escapes the project with ".."';
+  if (/[*?[\]]/.test(dir)) return 'is a glob - declare a directory, not a pattern';
+  const clean = dir.replace(/\/+$/, '');
+  const hit = PROTECTED_ROOTS.find((r) => under(clean, r) || under(r, clean));
+  if (hit) return `overlaps the source root "${hit}"`;
+  return null;
+}
+
+/**
+ * Declared fixture roots that passed validation.
+ *
+ * An UNSAFE entry is ignored here and reported by `config.fixture_scope`. It must
+ * never take effect while its own finding is still being computed: a manifest
+ * declaring `fixtures: ["."]` would otherwise exempt the very rule that objects
+ * to it, and the off switch would switch off the check that catches the off
+ * switch.
+ */
+export function fixtureRoots(manifest) {
+  const raw = manifest?.checks?.fixtures;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((d) => fixtureRootIssue(d) === null).map((d) => d.replace(/\/+$/, ''));
+}
+
+/**
+ * Is `rel` exempt from `checkId` because the manifest declares it a fixture?
+ *
+ * Returns false for any rule outside `FIXTURE_EXEMPT_RULES` whatever the caller
+ * passes - constraints 2 and 3 are enforced here, once, not at each call site.
+ */
+export function isDeclaredFixture(ctx, rel, checkId) {
+  if (!FIXTURE_EXEMPT_RULES.has(checkId)) return false;
+  return inAny(rel, fixtureRoots(ctx.manifest));
+}
 
 /** app/api/**\/route.ts - the App Router handler convention. */
 const isApiRoute = (p) => /^app\/api\/.*\/route\.(ts|tsx|js|jsx)$/.test(p);
@@ -286,6 +374,7 @@ const noServiceRoleClient = {
       || isApiRoute(p) || /^lib\/env\.ts$/.test(p) || /^supabase\//.test(p);
     for (const rel of ctx.files) {
       if (!isCode(rel) || ALLOWED(rel)) continue;
+      if (isDeclaredFixture(ctx, rel, this.id)) continue; // fixtures carry the defect on purpose
       const text = ctx.readOrNull(rel);
       if (text === null) continue;
       const idx = text.indexOf('SUPABASE_SERVICE_ROLE_KEY');
@@ -316,6 +405,7 @@ const envCentralised = {
       || /^scripts\//.test(p) || /^middleware\.ts$/.test(p);
     for (const rel of ctx.files) {
       if (!isCode(rel) || ALLOWED(rel)) continue;
+      if (isDeclaredFixture(ctx, rel, this.id)) continue; // fixtures carry the defect on purpose
       const text = ctx.readOrNull(rel);
       if (text === null) continue;
       const blanked = blankSource(text);
@@ -813,6 +903,100 @@ const serviceRoleQueryScoped = {
   },
 };
 
+/* =================================================================== 15 */
+
+/**
+ * The rule that makes the fixture class a control rather than an off switch.
+ *
+ * Two manifest fields can remove code from the checker's reach, and until 0.1.16
+ * NEITHER was checked:
+ *
+ *   `checks.fixtures`      exempts declared roots from FIXTURE_EXEMPT_RULES only
+ *   `checks.exclude_paths` drops files from the scan ENTIRELY, before any rule
+ *                          runs - including `secrets.no_committed_secrets`, the
+ *                          one check that can be neither baselined nor waived
+ *
+ * `exclude_paths` is the older and by far the more dangerous of the two, and it
+ * shipped with no description, no constraint and no check on its contents. It is
+ * policed here rather than in its own rule because the two fields are one
+ * decision - "what does the checker not look at" - and splitting them would let
+ * a reader fix the narrow field while the wide one stayed open.
+ *
+ * Note what this rule does NOT do: it never silences anything itself, so it
+ * cannot be turned off by the mechanism it polices. `fixtureRoots` deliberately
+ * drops unsafe entries before they take effect, which is what stops
+ * `fixtures: ["."]` from exempting this check.
+ */
+const fixtureScope = {
+  id: 'config.fixture_scope',
+  severity: 'blocker',
+  always: true,
+  description: 'Manifest paths that narrow the checker must be scoped, and may never cover source roots.',
+  // `operator`: `.mavci/project.json` is `ask` in the canonical risk policy, so an
+  // agent cannot edit it unattended. An agent that "fixed" this by editing the
+  // manifest would be widening its own exemptions, which is the one edit it must
+  // never make silently.
+  authority: 'operator',
+  remedy: 'Narrow the declaration in .mavci/project.json to a directory that holds only fixtures. '
+    + `${authorityNote('the operator - the manifest is `ask` in the risk policy')}`,
+  run(ctx) {
+    const out = [];
+    const declared = ctx.manifest?.checks?.fixtures;
+
+    if (declared !== undefined && !Array.isArray(declared)) {
+      out.push({
+        check_id: this.id, severity: this.severity, path: '.mavci/project.json', line: null,
+        evidence: 'checks.fixtures is present but is not an array',
+        remedy: this.remedy,
+      });
+    }
+
+    for (const dir of Array.isArray(declared) ? declared : []) {
+      const issue = fixtureRootIssue(dir);
+      if (!issue) continue;
+      out.push({
+        check_id: this.id, severity: this.severity, path: '.mavci/project.json', line: null,
+        evidence: `checks.fixtures entry ${JSON.stringify(dir)} ${issue}`,
+        remedy: this.remedy,
+      });
+    }
+
+    // exclude_paths removes files from the scan entirely. A source root here is
+    // strictly worse than a fixture declaration covering the same path, because
+    // it takes the secrets check with it.
+    for (const pattern of ctx.manifest?.checks?.exclude_paths ?? []) {
+      if (typeof pattern !== 'string') continue;
+      const head = pattern.split(/[*?[]/)[0].replace(/\/+$/, '');
+      if (head === '' || PROTECTED_ROOTS.some((r) => under(head, r) || under(r, head))) {
+        out.push({
+          check_id: this.id, severity: this.severity, path: '.mavci/project.json', line: null,
+          evidence: `checks.exclude_paths entry ${JSON.stringify(pattern)} covers a source root - `
+            + 'excluded files are dropped before every rule, including secrets.no_committed_secrets',
+          remedy: 'Remove it, or narrow it to build output and vendored code. To keep deliberate '
+            + 'fixture defects out of the blockers, use checks.fixtures instead: it exempts named '
+            + `rules only and never the secrets check. ${authorityNote('the operator - the manifest is `ask` in the risk policy')}`,
+        });
+      }
+    }
+
+    // Keep the exemption VISIBLE. A warning, not a blocker: the declaration is
+    // legitimate, but an exemption nobody can see is how a narrow one becomes a
+    // wide one over time. Invisible debt is debt that never gets paid.
+    for (const dir of fixtureRoots(ctx.manifest)) {
+      const covered = ctx.files.filter((p) => under(p, dir) && isCode(p));
+      if (!covered.length) continue;
+      out.push({
+        check_id: this.id, severity: 'warning', path: dir, line: null,
+        evidence: `${covered.length} file(s) under this declared fixture root are exempt from `
+          + `${[...FIXTURE_EXEMPT_RULES].join(', ')}`,
+        remedy: 'No action needed if this directory holds only fixtures. If it holds shipping code, '
+          + 'remove it from checks.fixtures in .mavci/project.json.',
+      });
+    }
+    return out;
+  },
+};
+
 /* ------------------------------------------------------------------ export */
 
 export const RULES = [
@@ -830,6 +1014,7 @@ export const RULES = [
   stateSchemaValid,
   marketplaceForm,
   serviceRoleQueryScoped,
+  fixtureScope,
 ];
 
 export function rulesFor(manifest) {
