@@ -61,6 +61,15 @@ jobs:
       - name: Rule strings fit their caps, and remedies name who can act
         run: node scripts/ci/check-evidence-caps.mjs
 
+      # The escalation channel's own first run found two defects in it. The queue
+      # is a DIRECTORY and both readers - retro and doctor - tested one fixed path
+      # inside it, so the file that was actually queued was invisible and --clear
+      # would have orphaned it. And record() wrote its heading with U+002D while
+      # every hand-written heading used U+2014, so the parser counted machine
+      # findings, missed human ones, and would have written a second "# Finding 1".
+      - name: The queue is read as a directory, and the writer and parser agree
+        run: node scripts/ci/check-retro.mjs
+
       - name: Plugin structure
         run: node scripts/ci/check-plugin.mjs
 

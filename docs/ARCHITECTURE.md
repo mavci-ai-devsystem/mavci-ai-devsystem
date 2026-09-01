@@ -557,7 +557,7 @@ The system holds no list of projects and has no per-project configuration. Every
 │   └── 0007.json                   # descriptive only: title, spec path, artifacts[], notes[]
 ├── decisions/0003-tenant-isolation.md
 ├── lessons/2026-08-28-stripe-idempotency.md
-├── lessons/pending-system-change.md    # findings filed against the SYSTEM, section 10
+├── lessons/pending-system-change*.md   # findings filed against the SYSTEM, section 10
 │
 │   ── OPERATOR SURFACE (tier 2: agents denied, operator confirms) ──
 ├── project.json
@@ -1224,7 +1224,7 @@ does for `state.mjs`, and `check-risk-guard.mjs` asserts both directions.
 
 **Cost:** one command, one markdown file, one rule, one fixture, one version bump. No dashboard, no database, no scheduled job.
 
-**Guarantee it happens:** the ceiling handler (section 9) writes the lesson stub automatically, so the artifact exists before anyone decides to act. `doctor` reports unresolved `pending-system-change.md` files and every waiver granted in the last 30 days, so a queued lesson cannot be quietly forgotten.
+**Guarantee it happens:** the ceiling handler (section 9) writes the lesson stub automatically, so the artifact exists before anyone decides to act. `doctor` **names** every unresolved `pending-system-change*.md` in `.mavci/lessons/` and every waiver granted in the last 30 days, so a queued lesson cannot be quietly forgotten. Naming rather than counting is 0.1.13: the queue is a directory, 0.1.12 tested one path inside it, and the file that was actually queued had been written by hand under another name and was invisible.
 
 **A remedy names who can carry it out.** From 0.1.12 a rule declares
 `authority: 'agent' | 'operator' | 'external'`, and anything other than `agent`

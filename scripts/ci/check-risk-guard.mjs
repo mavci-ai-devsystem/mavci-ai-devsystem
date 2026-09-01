@@ -171,6 +171,15 @@ const CASES = [
   ['deny', { ...bash('node scripts/retro.mjs --clear'), agent_type: 'mavci-verifier' }, 'an agent deletes the queued findings'],
   ['allow', bash('node scripts/retro.mjs --apply'), 'the OPERATOR applies'],
   ['deferToUser', bash('node scripts/retro.mjs --clear'), 'the operator clears - deliberate act'],
+  // 0.1.13 gave --clear an argument, because the queue is a directory and a bare
+  // --clear could delete one file while another stayed queued with nothing left
+  // pointing at it. The authority is unchanged, and these two say so: a flag
+  // matcher that stopped recognising the flag once it took an operand would hand
+  // an agent the one deletion it must never make.
+  ['deny', { ...bash('node scripts/retro.mjs --clear pending-system-change-0.1.12.md'), agent_type: 'mavci-verifier' },
+    'an agent deletes a NAMED queued file'],
+  ['deferToUser', bash('node scripts/retro.mjs --clear pending-system-change-0.1.12.md'),
+    'the operator clears a named file'],
 
   // must NOT be blocked - a guard that blocks everything is useless
   ['allow', bash('npm run build'), 'ordinary build'],

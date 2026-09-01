@@ -330,7 +330,10 @@ async function main() {
   process.exit(verdict.summary.blockers > 0 ? 2 : 0);
 }
 
-if (process.argv[1] && process.argv[1].endsWith('verify.mjs')) {
+// basename, not endsWith: a file named check-<this>.mjs ends with this
+// script's name, so the endsWith form ran the CLI the moment a self-test
+// imported the module. It cost one debugging session on check-retro.mjs.
+if (process.argv[1] && path.basename(process.argv[1]) === 'verify.mjs') {
   main().catch((err) => {
     // The runner itself failed. Exit 2 so CI fails; gate.mjs turns this into a block.
     console.error(`verify.mjs crashed: ${err.stack ?? err.message}`);

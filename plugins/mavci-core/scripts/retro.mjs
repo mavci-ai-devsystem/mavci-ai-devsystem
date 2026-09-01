@@ -37,13 +37,24 @@
  * repo's CLAUDE.md, and a command that did them would be the agent editing what
  * governs it through a longer pipe.
  *
+ * THE QUEUE IS A DIRECTORY (0.1.13, from this command's own first run)
+ * `--record` writes to one canonical file, but `.mavci/lessons/` holds whatever
+ * anyone put there - and what was actually there, the first time this ran, was
+ * `pending-system-change-0.1.12.md`, written by hand before the command existed.
+ * 0.1.12 read one fixed path in two places: here and `doctor.checkLessons`. So
+ * `doctor` answered "is anything queued?" by testing a path it had chosen in
+ * advance, and `--clear` would have deleted the applied file and left the open
+ * one behind with the only pointer to it gone. Every reader now enumerates the
+ * directory, and every message names the files it found.
+ *
  * CLI
  *   --record "<title>" --finding "<text>" [--target <p>] [--check <id>]
  *                                         [--assertion "<text>"] [--broken-build "<text>"]
- *   --list       one line per queued finding
- *   --show       the whole pending file
- *   --apply      copy into the system repo clone and print the next steps
- *   --clear      delete the pending file (after it has been applied)
+ *   --list             one line per queued file, then one per finding in it
+ *   --show             every queued file, each under its own path
+ *   --apply            copy them all into the system repo clone, print next steps
+ *   --clear [<name>]   delete a queued file (after it has been applied). The name
+ *                      is required whenever more than one is queued.
  */
 
 import fs from 'node:fs';
@@ -57,16 +68,94 @@ import { pluginVersion, projectRoot } from './state.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-/** The one filename doctor already watches for (`checkLessons`). Spelled once. */
-export const PENDING = `${PATHS.lessons}/pending-system-change.md`;
+/** Every queued file starts with this. `--record` appends to the bare form. */
+export const PENDING_STEM = 'pending-system-change';
+
+/** The file `--record` writes. One canonical target for machine writes; it is
+ *  the only member of the queue this command creates, and never the only one
+ *  it must read. */
+export const PENDING = `${PATHS.lessons}/${PENDING_STEM}.md`;
 
 /**
- * A finding heading, so `--list` can count them and `--apply` can name them.
- * Deliberately a literal marker rather than "any h1": the file is prose that a
- * human also edits by hand, and a parser that guesses at structure would report
- * a different count than the reader sees.
+ * Every queued findings file, repo-relative POSIX, sorted.
+ *
+ * `doctor` imports this rather than composing a path of its own. Two readers
+ * each deciding for themselves what the queue is IS the 0.1.13 defect, and the
+ * fix is one definition, not two matching ones.
  */
-const FINDING_RE = /^# Finding (\d+) - (.+)$/gm;
+export function queuedLessons(root) {
+  let names;
+  try {
+    names = fs.readdirSync(abs(root, PATHS.lessons));
+  } catch (err) {
+    // No lessons directory means nothing has ever been filed - that is an empty
+    // queue, and reporting it as one is correct. Anything else (permissions, a
+    // file where the directory should be) means the queue COULD NOT BE READ,
+    // which is not the same fact and must not be returned as if it were.
+    // Invariant 5: an unchecked control is not a working control.
+    if (err?.code === 'ENOENT') return [];
+    throw err;
+  }
+  return names
+    .filter((n) => n.startsWith(PENDING_STEM) && n.toLowerCase().endsWith('.md'))
+    .sort()
+    .map((n) => `${PATHS.lessons}/${n}`);
+}
+
+/** What distinguishes one queued file from another: '' or e.g. '-0.1.12'. */
+function queueSuffix(relPath) {
+  return path.basename(relPath).slice(PENDING_STEM.length).replace(/\.md$/i, '');
+}
+
+/* ------------------------------------------------- the finding heading
+ * ONE definition, used to write and to read. `record()` builds a heading with
+ * `findingHeading`; `parseFindings` matches a pattern built from the same
+ * pieces. Change the separator and both change together, or neither does.
+ *
+ * That is the 0.1.13 fix, and the shape of it matters more than the character
+ * that provoked it. 0.1.12 wrote `# Finding 3 - x` with U+002D and matched on
+ * a literal that required U+002D, while every heading a human had typed used
+ * U+2014. The parser therefore counted machine-written findings, missed human
+ * ones, reported zero for a file holding two, and would have appended a second
+ * `# Finding 1` under an existing one. Widening the regex to accept both dashes
+ * fixes the COUNT and leaves the disagreement in place - the next divergence in
+ * spacing or wording lands exactly the same way.
+ *
+ * Normalisation happens ON READ and never on write. The queue is prose a human
+ * edits; rewriting their punctuation to suit a parser edits evidence nobody
+ * asked to be edited. `parseFindings` matches against a normalised COPY and
+ * then slices the title out of the original - the dash table is one BMP code
+ * unit to one, so the copy is index-for-index the same length as the source.
+ */
+const FINDING_PREFIX = '# Finding';
+const FINDING_SEP = ' - ';
+const rx = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const FINDING_RE = new RegExp(`^${rx(FINDING_PREFIX)} (\\d+)${rx(FINDING_SEP)}(.+)$`, 'gm');
+
+/**
+ * U+2010..U+2015 (hyphen, non-breaking hyphen, figure/en/em dash, horizontal
+ * bar), the minus sign, the hyphen bullet, and the small and full-width forms.
+ * Every one is a single BMP code unit, which is what keeps the normalised copy
+ * index-for-index aligned with the source. Written as escapes on purpose: a
+ * literal class here would be eight look-alike glyphs in a file whose invariant
+ * is that a reviewer can read it.
+ */
+const DASHES = /[\u2010-\u2015\u2212\u2043\uFE58\uFE63\uFF0D]/g;
+
+export function findingHeading(n, title) {
+  return `${FINDING_PREFIX} ${n}${FINDING_SEP}${title}`;
+}
+
+/** @returns {{n: number, title: string}[]} - titles verbatim from the source. */
+export function parseFindings(text) {
+  const norm = text.replace(DASHES, '-');
+  const found = [];
+  for (const m of norm.matchAll(FINDING_RE)) {
+    const start = m.index + m[0].length - m[2].length;
+    found.push({ n: Number(m[1]), title: text.slice(start, start + m[2].length) });
+  }
+  return found;
+}
 
 function die(msg, code = 1) {
   console.error(`retro: ${msg}`);
@@ -84,7 +173,7 @@ function arg(name, fallback = undefined) {
 
 function nextFindingNumber(text) {
   let n = 0;
-  for (const m of text.matchAll(FINDING_RE)) n = Math.max(n, Number(m[1]));
+  for (const f of parseFindings(text)) n = Math.max(n, f.n);
   return n + 1;
 }
 
@@ -128,7 +217,7 @@ export function record(root, { title, finding, target, check, assertion, brokenB
     ``,
     `---`,
     ``,
-    `# Finding ${n} - ${clean(title)}`,
+    findingHeading(n, clean(title)),
     ``,
     `Filed: ${nowIso()}, plugin ${pluginVersion()}.`,
   ];
@@ -194,10 +283,34 @@ function systemRepo() {
   return null;
 }
 
+/**
+ * What --apply would carry, decided before anything is written.
+ *
+ * Separate from `apply` for two reasons. It is the whole decision - which files
+ * go, and under what name - so it is what a self-test needs to assert, and
+ * asserting it does not require letting a test write into a real system repo.
+ * And it lets the collision check run over the WHOLE queue first: applying two
+ * files one at a time and dying on the second leaves the operator half applied,
+ * with no way to tell from the tree which half.
+ *
+ * The destination keeps the queued file's own suffix, so the two that provoked
+ * this - `pending-system-change.md` and `pending-system-change-0.1.12.md` - land
+ * as `<project>-<date>.md` and `<project>-<date>-0.1.12.md` rather than one
+ * silently overwriting the other.
+ */
+export function applyPlan(root, { projectId, stamp } = {}) {
+  const id = projectId ?? readJsonOrNull(abs(root, PATHS.manifest))?.project_id ?? 'unknown-project';
+  const day = stamp ?? nowIso().slice(0, 10);
+  return queuedLessons(root).map((rel) => ({
+    src: rel,
+    destName: `${id}-${day}${queueSuffix(rel)}.md`,
+  }));
+}
+
 function apply(root) {
-  const src = abs(root, PENDING);
-  if (!exists(src)) {
-    die(`nothing to apply: ${PENDING} does not exist. File a finding first with `
+  const plan = applyPlan(root);
+  if (!plan.length) {
+    die(`nothing to apply: no ${PENDING_STEM}*.md in ${PATHS.lessons}. File a finding first with `
       + `\`${COMMAND_PREFIX}retro\`.`, 1);
   }
   const repo = systemRepo();
@@ -213,24 +326,27 @@ function apply(root) {
   }
 
   const projectId = readJsonOrNull(abs(root, PATHS.manifest))?.project_id ?? 'unknown-project';
-  const stamp = nowIso().slice(0, 10);
   const destDir = path.join(repo, 'docs', 'lessons');
-  const destName = `${projectId}-${stamp}.md`;
-  const dest = path.join(destDir, destName);
 
-  if (exists(dest)) {
-    die(`${path.relative(repo, dest)} already exists in the system repo. A second apply on the same `
-      + 'day would overwrite the first, and a lesson is evidence. Rename or merge it by hand.', 1);
+  // Every destination checked before any of them is written.
+  const clash = plan.filter((x) => exists(path.join(destDir, x.destName)));
+  if (clash.length) {
+    die(`${clash.map((x) => path.join('docs', 'lessons', x.destName)).join(', ')} already exists in `
+      + 'the system repo. A second apply on the same day would overwrite the first, and a lesson is '
+      + 'evidence. Rename or merge it by hand. Nothing was applied.', 1);
   }
 
   fs.mkdirSync(destDir, { recursive: true });
-  const provenance = `<!-- Applied by ${COMMAND_PREFIX}retro --apply on ${nowIso()}\n`
-    + `     from project ${projectId}, plugin ${pluginVersion()}.\n`
-    + `     Copied verbatim below this line. Paths inside are relative to the project it was\n`
-    + `     filed from, not to this repository. -->\n\n`;
-  fs.writeFileSync(dest, provenance + fs.readFileSync(src, 'utf8'));
-
-  console.log(`applied to ${path.join('docs', 'lessons', destName)} in ${repo}\n`);
+  for (const x of plan) {
+    const provenance = `<!-- Applied by ${COMMAND_PREFIX}retro --apply on ${nowIso()}\n`
+      + `     from project ${projectId}, plugin ${pluginVersion()}, queued as ${x.src}.\n`
+      + `     Copied verbatim below this line. Paths inside are relative to the project it was\n`
+      + `     filed from, not to this repository. -->\n\n`;
+    fs.writeFileSync(path.join(destDir, x.destName),
+      provenance + fs.readFileSync(abs(root, x.src), 'utf8'));
+    console.log(`applied ${x.src} -> ${path.join('docs', 'lessons', x.destName)} in ${repo}`);
+  }
+  console.log('');
   console.log('Next, in the system repo, and none of it done for you:');
   console.log(`  1. read it, and decide which findings become changes`);
   console.log(`  2. for each one: write the assertion FIRST and watch it fail against this build`);
@@ -238,10 +354,11 @@ function apply(root) {
   console.log(`  4. bump plugins/mavci-core/.claude-plugin/plugin.json - nothing reaches any`);
   console.log(`     project until that number changes`);
   console.log(`  5. commit, push, tag`);
-  console.log(`\nThen, back here: \`${COMMAND_PREFIX}retro --clear\` to retire the queued file.`);
+  console.log(`\nThen, back here, once per file:`);
+  for (const x of plan) console.log(`  ${COMMAND_PREFIX}retro --clear ${path.basename(x.src)}`);
   console.log('That deletion is an operator act and the risk guard refuses it to an agent: it is the');
   console.log('record of an unfixed problem, and it must not disappear because a turn went badly.');
-  return dest;
+  return plan.map((x) => path.join(destDir, x.destName));
 }
 
 /* ----------------------------------------------------------------- CLI */
@@ -269,28 +386,60 @@ function main() {
   }
 
   if (argv.includes('--list')) {
-    const text = readTextOrNull(abs(root, PENDING));
-    if (!text) { console.log(`nothing queued (${PENDING} does not exist)`); return; }
-    const found = [...text.matchAll(FINDING_RE)];
-    console.log(`${found.length} finding(s) queued in ${PENDING}:`);
-    for (const m of found) console.log(`  ${m[1]}. ${m[2]}`);
+    const files = queuedLessons(root);
+    if (!files.length) { console.log(`nothing queued (no ${PENDING_STEM}*.md in ${PATHS.lessons})`); return; }
+    for (const f of files) {
+      const text = readTextOrNull(abs(root, f));
+      if (text === null) { console.log(`${f}: UNREADABLE - it is queued and its contents are unknown`); continue; }
+      const found = parseFindings(text);
+      console.log(`${f}: ${found.length} finding(s)`);
+      for (const x of found) console.log(`  ${x.n}. ${x.title}`);
+    }
     return;
   }
 
   if (argv.includes('--show')) {
-    const text = readTextOrNull(abs(root, PENDING));
-    if (!text) { console.log(`nothing queued (${PENDING} does not exist)`); return; }
-    process.stdout.write(text);
+    const files = queuedLessons(root);
+    if (!files.length) { console.log(`nothing queued (no ${PENDING_STEM}*.md in ${PATHS.lessons})`); return; }
+    for (const f of files) {
+      const text = readTextOrNull(abs(root, f));
+      process.stdout.write(`\n===== ${f} =====\n`);
+      process.stdout.write(text === null ? '(unreadable)\n' : text);
+    }
     return;
   }
 
   if (argv.includes('--apply')) { apply(root); return; }
 
+  // --clear names its target whenever there is more than one thing it could
+  // mean. 0.1.12 deleted the canonical file unconditionally, so applying and
+  // clearing with a hand-written file also queued removed the record of one
+  // problem and left the other with nothing pointing at it - doctor watched the
+  // same fixed path, so it went quiet too. A bare --clear is now only allowed
+  // where it is unambiguous.
   if (argv.includes('--clear')) {
-    const p = abs(root, PENDING);
-    if (!exists(p)) { console.log('nothing to clear'); return; }
-    fs.rmSync(p);
-    console.log(`cleared ${PENDING}`);
+    const files = queuedLessons(root);
+    if (!files.length) { console.log('nothing to clear'); return; }
+    const asked = arg('--clear');
+    if (asked === true || asked === undefined) {
+      if (files.length > 1) {
+        die(`${files.length} files are queued, so --clear needs to be told which:\n`
+          + files.map((f) => `  ${COMMAND_PREFIX}retro --clear ${path.basename(f)}`).join('\n')
+          + '\nNothing was deleted. Clearing one and leaving the rest is fine; clearing one WITHOUT '
+          + 'knowing the rest are there is how the record of an unfixed problem disappears.', 1);
+      }
+      fs.rmSync(abs(root, files[0]));
+      console.log(`cleared ${files[0]}`);
+      return;
+    }
+    const target = files.find((f) => path.basename(f) === path.basename(String(asked)));
+    if (!target) {
+      die(`${asked} is not queued. Queued now:\n${files.map((f) => `  ${f}`).join('\n')}`, 1);
+    }
+    fs.rmSync(abs(root, target));
+    const left = queuedLessons(root);
+    console.log(`cleared ${target}`);
+    if (left.length) console.log(`still queued: ${left.map((f) => path.basename(f)).join(', ')}`);
     return;
   }
 
@@ -299,12 +448,17 @@ function main() {
     '  --record "<title>" --finding "<text>" [--target <path>] [--check <id>]',
     '                     [--assertion "<text>"] [--broken-build "<text>"]',
     '                                 file a finding against the system (agents may do this)',
-    '  --list                         one line per queued finding',
-    '  --show                         print the queued file',
-    '  --apply                        carry it into the system repo   (operator only)',
-    '  --clear                        delete the queued file          (operator only)',
+    '  --list                         every queued file, and the findings in it',
+    '  --show                         print every queued file',
+    '  --apply                        carry them into the system repo  (operator only)',
+    '  --clear [<name>]               delete one queued file           (operator only)',
+    '                                 the name is required when more than one is queued',
   ].join('\n'));
   process.exit(2);
 }
 
-if (process.argv[1] && process.argv[1].endsWith('retro.mjs')) main();
+// basename, not endsWith. `scripts/ci/check-retro.mjs` ends with "retro.mjs",
+// so the endsWith form ran the CLI - printing usage and exiting 2 - the moment
+// the self-test imported this module. The house form is copied from state.mjs;
+// it is wrong there too, and harmless only because no file is named to collide.
+if (process.argv[1] && path.basename(process.argv[1]) === 'retro.mjs') main();

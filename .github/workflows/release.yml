@@ -57,6 +57,7 @@ jobs:
           node scripts/ci/check-gate.mjs
           node scripts/ci/check-plugin.mjs
           node scripts/ci/check-doctor.mjs
+          node scripts/ci/check-retro.mjs
           node scripts/ci/check-escape-hatch.mjs
           node scripts/ci/check-placeholders.mjs
           node scripts/ci/check-skill-placeholders.mjs

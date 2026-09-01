@@ -395,6 +395,30 @@ if (!exists(path.join(agentsDir, 'agent-scopes.json'))) {
   }
 }
 
+/* --- the main guard --------------------------------------------------
+ *
+ * Every script here ends with a guard so it can be imported without running its
+ * CLI, and the house form compared with `endsWith`. `scripts/ci/check-retro.mjs`
+ * ends with "retro.mjs", so writing retro's first self-test ran retro's CLI on
+ * import - usage printed, exit 2, before a single assertion. The guard was doing
+ * what it was written to do, on a filename nobody had imagined.
+ *
+ * It is a suffix test standing in for an identity test, which is the same shape
+ * as the parser that matched one dash character: it works until something
+ * legitimate sits just outside it. Compare the basename.
+ */
+{
+  const dir = path.join(ROOT, 'plugins', 'mavci-core', 'scripts');
+  for (const name of fs.readdirSync(dir).filter((n) => n.endsWith('.mjs'))) {
+    const src = fs.readFileSync(path.join(dir, name), 'utf8');
+    if (/process\.argv\[1\][^\n]*\.endsWith\(/.test(src)) {
+      failures.push(`${name} guards main() with process.argv[1].endsWith(...). A file named `
+        + `check-${name} ends with that string, so importing this module from its own self-test `
+        + `runs its CLI. Compare path.basename(process.argv[1]) instead.`);
+    }
+  }
+}
+
 /* --- text-only source tree -------------------------------------------- */
 /*
  * No file under plugins/ or scripts/ may contain a NUL byte.

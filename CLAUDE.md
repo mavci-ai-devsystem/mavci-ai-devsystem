@@ -558,6 +558,122 @@ alone would have gone green on a guard that had stopped denying anything, and th
 whole change is a *relaxation*: that is precisely the direction where one-sided
 evidence is worthless. Both directions, every time a control is loosened.
 
+### 0.1.13 — the escalation channel could not read its own queue
+
+**Cut 2026-09-01, from `/mavci-core:retro`'s own first run.** 0.1.12 shipped the
+channel and the first real use of it found two defects inside it, both the shape
+of the eight before: a mechanism present, correct-looking, and never connected to
+the thing it claimed to cover. Built first, before anything else in this release,
+for the reason item 4 came first in 0.1.12 — **the escalation channel has to work
+before the findings it carries mean anything.**
+
+**1 — the queue is a directory, and both readers tested one path inside it.**
+`doctor.mjs:911` and `retro.mjs:61` each composed
+`.mavci/lessons/pending-system-change.md` for themselves. So doctor answered *is
+anything queued?* with *does the name I picked in advance exist?* — and what was
+actually queued was `pending-system-change-0.1.12.md`, written by hand before the
+command existed. It was invisible. `--clear` would have deleted the applied file
+and left the open one with the only pointer to it gone, silently, because doctor
+watched the same fixed path.
+
+`queuedLessons()` in `retro.mjs` is now the one definition of the queue and
+`doctor` imports it. `--list`, `--show`, `--apply` and `--clear` all enumerate;
+`--apply` checks every destination before writing any of them, and keeps each
+file's suffix so two files from one project on one day cannot collide; `--clear`
+requires a name whenever more than one is queued.
+
+**The assertion is that doctor NAMES the file, not that it WARNs.** Asserting on
+the warning passes against the broken build — and against a build that counts
+files without saying which, which is the same defect one step later. "Something
+is queued somewhere" is not a pointer.
+
+**2 — the writer and the parser disagreed on a character.** `record()` wrote
+`# Finding 3 - x` with U+002D; every hand-written heading used U+2014. The parser
+counted machine-written findings, missed human ones, reported zero for a file
+holding two, and would have appended a **second `# Finding 1`** under an existing
+one. Reproduced exactly by the negative control: `filed finding 1`.
+
+**Widening the regex was the wrong half, and that is the point.** Accepting both
+dashes fixes the count and leaves the disagreement standing for the next
+divergence in spacing or wording. `findingHeading()` now writes the heading and
+`FINDING_RE` is built from the same pieces, so the two change together or neither
+does; reading normalises the dash family to U+002D on a **copy**, and the title
+is sliced out of the original by index. Normalising on write would have edited a
+human's punctuation inside the file that is the evidence — that is asserted
+separately, and the negative control fires exactly one failure.
+
+**3 — `doctor` FAILs when the active `gh` account cannot own the system repo.**
+This machine holds two `gh` accounts, the active one was `globalmvpllc-oss`, and
+every git and gh call against `SYSTEM_REPO` returned `Repository not found`. A
+private repo is invisible to an account without access and GitHub does not
+distinguish *you may not see this* from *this does not exist*; nothing in the
+message mentions accounts. The operator nearly recreated a repository that had
+never gone anywhere. `checkGhAccount` runs **before** `checkReleaseRun`, which is
+the check that makes that exact 404 and explains it as "gh is unavailable,
+unauthenticated, or offline" — three wrong answers for one right one.
+
+It compares logins and nothing else: no network, no rate limit, and it answers
+the only question the 404 leaves open. Two things it deliberately does not
+overclaim — the remedy is `gh auth login`, not `gh auth switch --user <owner>`,
+when the owner has never authenticated here (switch errors for an account that is
+not logged in, which is the adjacent-but-wrong remedy), and the failure says
+outright that it compared names and cannot see whether some other account holds a
+collaborator grant.
+
+**Found while fixing 1 and 2, and worth more than either.** The house main guard
+compares `process.argv[1].endsWith('<script>.mjs')`. `scripts/ci/check-retro.mjs`
+ends with `retro.mjs`, so writing retro's first self-test ran retro's CLI on
+import — usage printed, exit 2, before one assertion executed. **A suffix test
+standing in for an identity test**, which is finding 2 in a different costume: it
+works until something legitimate sits just outside it. It is the eleventh
+instance of that shape, and the first to occur **inside a test harness** — the
+self-test invoked the thing it was testing before one assertion ran, so the
+harness could not have reported anything, in either direction.
+
+All five guards now compare the basename, not the one that collided: an identity
+test that is wrong in four places and right in one is the same defect on a delay,
+waiting for the next `check-<script>.mjs` to be written. `check-plugin.mjs` fails
+any script that reintroduces the suffix form, naming the `check-<script>.mjs`
+that would collide.
+
+**Coverage.** `check-retro.mjs` is new — 0.1.12 shipped the channel with no
+behavioural self-test at all, only the risk guard's authority cases. Every
+assertion in it was watched failing against 0.1.12 first, and three negative
+controls confirm the braces are independently load-bearing: a parser blind to
+U+2014 fails four assertions and not the round trip; normalising on write fails
+exactly one; unwiring `checkGhAccount` fails only the wiring assertion while all
+four decision assertions stay green. One assertion went green against the broken
+build on its first run and was rewritten — it matched `does not exist`, which is
+also what `nothing queued (…/pending-system-change.md does not exist)` says.
+
+**The rule this makes explicit — a component that reports on others needs a test
+that exercises it, not only checks that construct it.** 0.1.12's escalation
+channel shipped with no behavioural self-test. It was not untested in the loose
+sense: `check-command-refs.mjs` asserted every command it names resolves, the
+risk guard's authority cases covered who may call `--apply` and `--clear`, and
+`check-schemas.mjs` covered the records it writes. Every one of those checks
+asks *is this thing built correctly?* Not one of them asks *does it answer
+correctly?* — and the first real run found it reporting **zero findings in a
+file holding two**, and a queue reader that could not see the one file actually
+queued. Both defects were fully present, and fully invisible, behind a green
+build.
+
+The distinction is the whole rule. A check that constructs a component proves it
+exists and is well-formed; only a test that runs it against known input and
+compares the answer can catch a component that is well-formed and wrong. That
+gap is widest exactly where it matters most — in a component whose output is *a
+report about other components*, because its answer is what everyone else reads
+instead of looking. A miscounting reporter does not fail; it reassures. **That
+is why `check-retro.mjs` exists**, and why it is behavioural throughout: it
+files findings and reads the count back, enumerates a queue with a file in it,
+and asserts what doctor NAMES rather than that doctor WARNs.
+
+It applies forward without amendment. `guardian` and `/release` are both
+reporters, both unbuilt, and neither ships on construction checks alone. This is
+the same shape as the gate's — *the gate can report a violation and cannot
+report itself* — one level out: a reporter's own correctness is the one thing
+its own reports never cover.
+
 ### Carried forward — still not built
 
 **Items 1–4 and 5–6 below remain unbuilt; item 7 is held deliberately, for the

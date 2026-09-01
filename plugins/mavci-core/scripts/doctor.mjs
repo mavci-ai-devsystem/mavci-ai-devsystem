@@ -36,6 +36,10 @@ import {
   pluginVersion, verifyIntegrity, validateAll, expiredWaivers, expiringWaivers, projectRoot,
   stampHookRun, lastHookRun, lastGate,
 } from './state.mjs';
+// The queue is a directory, and retro.mjs is the one place that says what is in
+// it. doctor used to compose its own path to the same file, which is how it came
+// to answer "is anything queued?" by testing a name nobody had used.
+import { queuedLessons, parseFindings, PENDING_STEM } from './retro.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(HERE, '..');
@@ -301,6 +305,106 @@ function checkDistribution(out, { network = true } = {}) {
     return;
   }
   out.push({ status: OK, text: line(OK, `marketplace clone current with origin/${branch} (${head.slice(0, 7)})`) });
+}
+
+/* ------------------------------------------------- which GitHub account
+ * A PERMISSION ERROR THAT READS AS ABSENCE.
+ *
+ * `gh` holds more than one account and switches between them globally. With the
+ * wrong one active, every git and gh call against the system repo comes back
+ * `Repository not found` - because a private repository is invisible to an
+ * account without access, and GitHub deliberately does not distinguish "you may
+ * not see this" from "this does not exist". Nothing in that message mentions
+ * accounts. Observed on 2026-09-01: the operator very nearly recreated a
+ * repository that had never gone anywhere.
+ *
+ * This runs BEFORE checkReleaseRun on purpose. That check makes exactly the API
+ * call that 404s here, and reports it as "release job NOT CHECKED - gh is
+ * unavailable, unauthenticated, or offline", which is three wrong explanations
+ * for one right one.
+ *
+ * Compares logins, and nothing else. It needs no network, cannot be confused by
+ * a rate limit, and answers the only question the 404 leaves open. What it
+ * cannot see is whether some OTHER account has been granted access, so the
+ * failure says so rather than asserting a state it has not established.
+ */
+
+/** @returns {{active: string|null, logins: string[]}|null} null = could not check. */
+function readGhAccounts() {
+  const gh = (args) => {
+    try {
+      return execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 });
+    } catch (err) {
+      // `gh auth status` exits 1 when any account has a token problem, and older
+      // versions print to stderr. Both still carry the account list.
+      const text = (err?.stdout?.toString() ?? '') + (err?.stderr?.toString() ?? '');
+      return text || null;
+    }
+  };
+
+  const raw = gh(['auth', 'status', '--json', 'hosts']);
+  if (raw) {
+    try {
+      const hosts = JSON.parse(raw).hosts?.['github.com'] ?? [];
+      const logins = hosts.map((h) => h.login).filter(Boolean);
+      if (logins.length) return { active: hosts.find((h) => h.active)?.login ?? null, logins };
+    } catch { /* not JSON: a gh too old for --json. Fall through. */ }
+  }
+
+  // Fallback, for a gh that predates `--json` on this command. The human form is
+  // what the operator is told to run by hand, so parsing it costs nothing new -
+  // and a version-gated check that silently stops running is the failure mode
+  // this whole file exists to avoid.
+  const text = gh(['auth', 'status']);
+  if (!text) return null;
+  const logins = [];
+  let active = null;
+  for (const chunk of text.split(/Logged in to \S+ account /).slice(1)) {
+    const login = chunk.match(/^([\w.-]+)/)?.[1];
+    if (!login) continue;
+    logins.push(login);
+    if (/Active account:\s*true/.test(chunk)) active = login;
+  }
+  return logins.length ? { active, logins } : null;
+}
+
+/** The decision, separated from the probe so it can be asserted on directly. */
+export function ghAccountFinding(accounts, owner = SYSTEM_REPO.split('/')[0]) {
+  if (!accounts) {
+    return { status: WARN, text: line(WARN, 'active gh account NOT CHECKED',
+      'gh is unavailable, or too old to report its accounts. This is unknown, not passing:\n'
+      + `         with the wrong account active, every call against ${SYSTEM_REPO} returns\n`
+      + '         "Repository not found", which reads as the repo being deleted.\n'
+      + '         Check by hand: gh auth status') };
+  }
+
+  const { active, logins } = accounts;
+  if (active === owner) {
+    // All three outcomes say "active gh account" so that the self-test can prove
+    // the check RAN without controlling which way it went. A wiring assertion
+    // that only recognises the failure is a wiring assertion that passes on a
+    // machine where the check was deleted.
+    return { status: OK, text: line(OK, `the active gh account is ${active}, which owns ${SYSTEM_REPO}`) };
+  }
+
+  const others = logins.filter((l) => l !== active);
+  const fix = logins.includes(owner)
+    ? `gh auth switch --user ${owner}`
+    : `gh auth login   (as ${owner} - it is not authenticated on this machine at all)`;
+  return { status: FAIL, text: line(FAIL,
+    active ? `the active gh account is ${active}, not ${owner}` : `no gh account is active; ${SYSTEM_REPO} needs ${owner}`,
+    `${SYSTEM_REPO} is private, so from another account every git and gh call against it\n`
+    + '         returns "Repository not found" - a permission error worded as absence. Nothing\n'
+    + '         in that message mentions accounts, and it reads as the repo having been deleted.\n'
+    + `         Fix: ${fix}`
+    + (others.length ? `\n         Also authenticated here: ${others.join(', ')}` : '')
+    + '\n         doctor compares logins. If the active account is a collaborator with access,\n'
+    + '         this line is wrong - and it is the only thing checkable without a network call.') };
+}
+
+function checkGhAccount(out, { network = true } = {}) {
+  if (!network) return;
+  out.push(ghAccountFinding(readGhAccounts()));
 }
 
 /**
@@ -907,9 +1011,39 @@ function findFile(root, re) {
   return seen.find((p) => re.test(p)) ?? null;
 }
 
+/**
+ * Queued system changes, NAMED.
+ *
+ * 0.1.12 tested one path: `.mavci/lessons/pending-system-change.md`. The file
+ * that was actually queued the first time this ran was
+ * `pending-system-change-0.1.12.md`, written by hand before `retro` existed, and
+ * doctor was silent about it - because it was answering "is anything queued?"
+ * with "does the name I picked in advance exist?".
+ *
+ * So this lists what is there rather than reporting that something is. Naming
+ * the file is the whole point of the line: "a system change is queued" tells the
+ * operator nothing they can act on, and `--clear` has no way to know which file
+ * they meant either.
+ */
 function checkLessons(root, out) {
-  const p = abs(root, `${PATHS.lessons}/pending-system-change.md`);
-  if (!exists(p)) return;
+  let files;
+  try {
+    files = queuedLessons(root);
+  } catch (err) {
+    out.push({ status: WARN, text: line(WARN, 'queued system changes NOT CHECKED',
+      `${PATHS.lessons} exists and could not be listed: ${err.message}\n`
+      + '         Unknown, not empty. A finding filed here is the record of an unfixed problem,\n'
+      + '         and doctor is the only thing that keeps saying so.') });
+    return;
+  }
+  if (!files.length) return;
+
+  const named = files.map((f) => {
+    const text = readTextOrNull(abs(root, f));
+    if (text === null) return `${f}   (UNREADABLE - queued, contents unknown)`;
+    return `${f}   (${parseFindings(text).length} finding(s))`;
+  });
+
   // "or delete it" used to end this line with no actor named. Deleting the
   // record of an unfixed problem is an operator act, and a remedy that does not
   // say so reads as an option to whoever is stuck - the same defect as "then
@@ -918,13 +1052,14 @@ function checkLessons(root, out) {
   // sent to; saying it here is cheaper than that.
   out.push({
     status: WARN,
-    text: line(WARN, 'a system change is queued and unapplied',
-      `${PATHS.lessons}/pending-system-change.md`
-      + `\n         Apply it in the system repo with ${COMMAND_PREFIX}retro --apply, then clear it`
-      + `\n         with ${COMMAND_PREFIX}retro --clear.`
+    text: line(WARN, `${files.length} system change file(s) queued and unapplied`,
+      named.join('\n         ')
+      + `\n         Apply them in the system repo with ${COMMAND_PREFIX}retro --apply, then clear`
+      + `\n         each with ${COMMAND_PREFIX}retro --clear <name>.`
       + '\n         AUTHORITY: both are the operator\'s and the risk guard refuses them to an'
       + '\n         agent. Filing is not fixing, and clearing without applying loses the only'
-      + '\n         record that the problem exists.'),
+      + '\n         record that the problem exists.'
+      + `\n         Every ${PATHS.lessons}/${PENDING_STEM}*.md is counted, whoever wrote it.`),
   });
 }
 
@@ -1184,6 +1319,9 @@ function main() {
     // Not gated on `connected`: a stale plugin is a toolchain fault, and it is most
     // dangerous in exactly the directory that is about to be scaffolded.
     checkDistribution(out, { network: !preflight });
+    // Before checkReleaseRun, which is the check that 404s on a wrong account
+    // and calls it "gh is unavailable, unauthenticated, or offline".
+    checkGhAccount(out, { network: !preflight });
     // Same network gating as checkDistribution: a SessionStart hook must not
     // make an API call on every session in every repo on the machine.
     checkReleaseRun(out, { network: !preflight });
@@ -1240,4 +1378,7 @@ function main() {
   process.exit(fails.length ? 1 : 0);
 }
 
-main();
+// Guarded so the self-test can import the decision functions above without
+// running a whole report. basename, not endsWith: `check-doctor.mjs` ends with
+// "doctor.mjs" and would otherwise run main() on import.
+if (process.argv[1] && path.basename(process.argv[1]) === 'doctor.mjs') main();

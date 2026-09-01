@@ -451,6 +451,119 @@ try {
   }
 }
 
+/* --- 10. which gh account is active -----------------------------------
+ *
+ * A PERMISSION ERROR THAT READS AS ABSENCE. `gh` switches accounts globally,
+ * and against a private repo the wrong one returns `Repository not found` -
+ * indistinguishable from a deleted repository, and mentioning no account
+ * anywhere. Observed 2026-09-01: the operator nearly recreated a repo that had
+ * never gone anywhere.
+ *
+ * The decision is asserted directly, because the probe cannot be steered from
+ * here on every platform - and then the wiring is asserted separately, because
+ * a correct decision function nothing calls is the defect this whole file is
+ * about.
+ */
+{
+  const doctor = await import(pathToFileURL(DOCTOR).href);
+  const OWNER = SYSTEM_REPO.split('/')[0];
+  const OTHER = 'globalmvpllc-oss';   // the account that was actually active
+  // Asserted on the rendered line, which is what the operator reads. doctor's
+  // status constants are internal, and a check that imported them would agree
+  // with itself rather than with the report.
+  const decide = (accounts) => doctor.ghAccountFinding(accounts, OWNER).text;
+
+  // 10a. the healthy case
+  {
+    const r = decide({ active: OWNER, logins: [OWNER, OTHER] });
+    if (r.startsWith('  [ok') && r.includes(OWNER)) ok('the owner being active reads as OK');
+    else bad(`active owner did not report OK: ${r}`);
+  }
+
+  // 10b. the observed case: wrong account active, owner authenticated here
+  {
+    const r = decide({ active: OTHER, logins: [OWNER, OTHER] });
+    const named = r.includes(OTHER) && r.includes(OWNER);
+    const remedy = r.includes(`gh auth switch --user ${OWNER}`);
+    const explains = /Repository not found/.test(r);
+    if (r.startsWith('  [FAIL]') && named && remedy) {
+      ok('a mismatched active account FAILS, names both accounts, and prints gh auth switch');
+    } else {
+      bad(`mismatched account: named=${named} remedy=${remedy}, line was ${r.split('\n')[0]}. A WARN `
+        + 'here is not enough - every call against the system repo is failing and saying nothing true.');
+    }
+    if (explains) {
+      ok('the failure explains that "Repository not found" is the symptom, not evidence of deletion');
+    } else {
+      bad('the failure does not connect the account to the 404. Without that sentence the operator '
+        + 'reads "Repository not found" and concludes the repo is gone.');
+    }
+  }
+
+  // 10c. the owner is not authenticated at all. `gh auth switch --user X` fails
+  //      when X has never logged in, so the switch remedy is the adjacent-but-
+  //      wrong one here: it sends the operator to a command that errors.
+  {
+    const r = decide({ active: OTHER, logins: [OTHER] });
+    if (r.startsWith('  [FAIL]') && /gh auth login/.test(r) && !r.includes('gh auth switch')) {
+      ok('an owner who is not authenticated here gets gh auth login, not a switch that would fail');
+    } else {
+      bad(`owner absent: expected FAIL with gh auth login and no switch remedy, got: ${r}`);
+    }
+  }
+
+  // 10d. could not check is never a pass (invariant 5)
+  {
+    const r = decide(null);
+    if (r.startsWith('  [WARN]') && /NOT CHECKED/.test(r)) {
+      ok('gh being unavailable is reported as unknown, never as a passing account check');
+    } else {
+      bad(`unreadable gh state: expected WARN NOT CHECKED, got: ${r.split('\n')[0]}`);
+    }
+  }
+
+  // 10e. WIRING. The three outcomes share the phrase "active gh account", so
+  //      this proves the check ran without having to control which way it went.
+  {
+    const tmp = makeProject(); cleanup.push(tmp);
+    const r = runDoctor(tmp);
+    if (/active gh account/.test(r.stdout)) {
+      ok('doctor reports on the active gh account in its own run');
+    } else {
+      bad('doctor never mentions the active gh account. The decision function is correct and '
+        + 'nothing calls it, which is exactly the shape this file exists to catch.');
+    }
+  }
+
+  // 10f. END TO END, with a gh that answers. execFileSync resolves a PATH entry
+  //      directly on POSIX; on Windows a .cmd shim cannot be spawned without a
+  //      shell, so the substitution is skipped there and said out loud rather
+  //      than passed over.
+  if (process.platform !== 'win32') {
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-fakegh-'));
+    cleanup.push(bin);
+    const hosts = JSON.stringify({ hosts: { 'github.com': [
+      { login: OTHER, active: true }, { login: OWNER, active: false },
+    ] } });
+    fs.writeFileSync(path.join(bin, 'gh'),
+      `#!/bin/sh\nif [ "$1" = "auth" ]; then printf '%s' '${hosts}'; exit 0; fi\nexit 1\n`);
+    fs.chmodSync(path.join(bin, 'gh'), 0o755);
+
+    const tmp = makeProject(); cleanup.push(tmp);
+    const r = runDoctor(tmp, { env: { PATH: `${bin}${path.delimiter}${process.env.PATH}` } });
+    if (r.status === 1
+        && new RegExp(`the active gh account is ${OTHER}, not ${OWNER}`).test(r.stdout)
+        && r.stdout.includes(`gh auth switch --user ${OWNER}`)) {
+      ok('doctor run against a wrong-account gh exits 1 and prints the switch command');
+    } else {
+      bad(`end to end: expected exit 1 naming ${OTHER}, got status=${r.status}`);
+    }
+  } else {
+    console.log('  --   end-to-end gh substitution skipped on win32 (a .cmd shim cannot be spawned '
+      + 'without a shell); 10a-10e still ran');
+  }
+}
+
 } finally {
   for (const d of cleanup) fs.rmSync(d, { recursive: true, force: true });
 }

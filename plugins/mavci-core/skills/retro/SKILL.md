@@ -23,7 +23,9 @@ substitution failed for pattern`, `Shell command permission check failed for
 pattern`, or a node error.
 
 Absent is not "nothing is queued". Say so in your first line and read
-`.mavci/lessons/pending-system-change.md` yourself before appending to it.
+`.mavci/lessons/` yourself before appending to it — the queue is that whole
+directory, not one file. Anything named `pending-system-change*.md` is queued,
+whoever wrote it and whatever they called it.
 
 ## This command is deliberately reachable by an agent
 
@@ -101,10 +103,14 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/retro.mjs" --record "<title>" \
 
 ## For the operator
 
-`--apply` copies the queued file into the system repository's `docs/lessons/`
+`--apply` copies every queued file into the system repository's `docs/lessons/`
 and prints the next steps. It does not commit, bump `plugin.json`, push or tag —
 nothing reaches any project until the version is bumped by hand, and that is
 deliberate.
 
-`--clear` deletes the queued file. Do it after applying, never instead of it:
-the file is the record of an unfixed problem.
+`--clear <name>` deletes one queued file. Do it after applying, never instead of
+it: the file is the record of an unfixed problem. The name is required whenever
+more than one file is queued, and that is 0.1.13's finding rather than caution —
+0.1.12 deleted one fixed path and `doctor` watched the same one, so clearing an
+applied file while a hand-written one was still open removed the only thing
+pointing at the open one.

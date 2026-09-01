@@ -704,4 +704,7 @@ async function main() {
   }
 }
 
-if (process.argv[1] && process.argv[1].endsWith('state.mjs')) main();
+// basename, not endsWith: a file named check-<this>.mjs ends with this
+// script's name, so the endsWith form ran the CLI the moment a self-test
+// imported the module. It cost one debugging session on check-retro.mjs.
+if (process.argv[1] && path.basename(process.argv[1]) === 'state.mjs') main();
