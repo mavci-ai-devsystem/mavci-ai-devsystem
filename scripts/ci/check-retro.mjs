@@ -64,6 +64,7 @@ function run(script, cwd, args) {
   try {
     const stdout = execFileSync(process.execPath, [script, ...args], {
       cwd, encoding: 'utf8', timeout: 120_000,
+      stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, CLAUDE_PROJECT_DIR: cwd, CLAUDE_CODE_SESSION_ID: '', CLAUDE_PID: '' },
     });
     return { out: stdout, status: 0 };

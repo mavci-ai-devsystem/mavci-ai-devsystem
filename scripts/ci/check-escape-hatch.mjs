@@ -90,7 +90,8 @@ try {
   let code = 0;
   try {
     out = execFileSync(process.execPath, [path.join(SCRIPTS, 'verify.mjs'), '--format=human'],
-      { cwd: tmp, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: tmp } });
+      { cwd: tmp, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, CLAUDE_PROJECT_DIR: tmp } });
   } catch (err) {
     out = (err.stdout?.toString() ?? '') + (err.stderr?.toString() ?? '');
     code = err.status ?? 1;

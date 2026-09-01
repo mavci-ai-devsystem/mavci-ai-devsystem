@@ -11,7 +11,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   MARKETPLACE_NAME, PLUGIN_NAME, PLUGIN_ID, COMMAND_PREFIX, BAD_COMMAND_PREFIX,
 } from '../../plugins/mavci-core/scripts/config.mjs';
@@ -415,6 +415,55 @@ if (!exists(path.join(agentsDir, 'agent-scopes.json'))) {
       failures.push(`${name} guards main() with process.argv[1].endsWith(...). A file named `
         + `check-${name} ends with that string, so importing this module from its own self-test `
         + `runs its CLI. Compare path.basename(process.argv[1]) instead.`);
+    }
+  }
+}
+
+/* --- a check must not annotate its own green run ----------------------
+ *
+ * `execFileSync` forwards a child's stderr to the parent unless `stdio` says
+ * otherwise. Several checks fail a child ON PURPOSE - that is what a negative
+ * control is - and `render.mjs` reports its failures with `::error::`. So
+ * check-packaging's deliberate ENOENT was travelling up into the runner log and
+ * GitHub was rendering it as a red annotation on a release job that exited 0.
+ *
+ * v0.1.9's release run carried it, and so did every release run after. A red
+ * mark on a green run is not cosmetic: it trains the habit that let run
+ * 33265540461 - a real failure - go unread for a release. The rule is therefore
+ * on the call, not on the one script that happened to trip it: pin stdio and a
+ * child's output belongs to the check that spawned it, whatever it prints.
+ *
+ * Scanned on blanked source, so a paren inside a string cannot end the call
+ * early. jsscan is documented "not a parser"; the arm that matters here is that
+ * an unreadable call FAILS rather than passing unexamined.
+ */
+{
+  const { blankSource } = await import(
+    pathToFileURL(path.join(ROOT, 'plugins', 'mavci-core', 'scripts', 'lib', 'jsscan.mjs')).href);
+  const dir = path.join(ROOT, 'scripts', 'ci');
+  for (const name of fs.readdirSync(dir).filter((n) => n.endsWith('.mjs'))) {
+    const src = fs.readFileSync(path.join(dir, name), 'utf8');
+    const blanked = blankSource(src);
+    for (const m of blanked.matchAll(/exec(?:File)?Sync\s*\(/g)) {
+      let depth = 0;
+      let end = -1;
+      for (let i = m.index + m[0].length - 1; i < blanked.length; i++) {
+        if (blanked[i] === '(') depth++;
+        else if (blanked[i] === ')') { depth--; if (depth === 0) { end = i; break; } }
+      }
+      const line = src.slice(0, m.index).split('\n').length;
+      if (end === -1) {
+        failures.push(`${name}:${line} has an exec*Sync call whose arguments could not be read `
+          + 'to the closing paren, so it cannot be shown to pin stdio. Refusing rather than assuming.');
+        continue;
+      }
+      if (!/\bstdio\b/.test(src.slice(m.index, end))) {
+        failures.push(`${name}:${line} calls exec*Sync without pinning stdio. Node forwards the `
+          + "child's stderr to this process by default, so a child failed on purpose - or one that "
+          + 'prints ::error:: - annotates the CI job red on a run that passes. Pass '
+          + "stdio: ['ignore', 'pipe', 'pipe'] (or 'pipe' first when the call passes input), and read "
+          + 'err.stdout / err.stderr instead.');
+      }
     }
   }
 }

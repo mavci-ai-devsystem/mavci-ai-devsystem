@@ -48,7 +48,7 @@ const failures = [];
 const ANNOTATED_FROM = '0.1.7';
 
 const git = (...args) =>
-  execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim();
+  execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
 const gitOrNull = (...args) => {
   try { return git(...args); } catch { return null; }

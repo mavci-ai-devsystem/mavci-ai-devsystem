@@ -70,6 +70,15 @@ jobs:
       - name: The queue is read as a directory, and the writer and parser agree
         run: node scripts/ci/check-retro.mjs
 
+      # The pre-tag gate is the door that is supposed to be the ONLY door, and it
+      # was narrower than the one behind it: it ran 13 of release.yml's 17 checks
+      # under a comment claiming it ran all of them. The suite is now DERIVED from
+      # release.yml, so writer and reader change together; this asserts the
+      # derivation itself, including that release.yml cannot grow a step the gate
+      # neither runs nor declares.
+      - name: The pre-tag gate runs what the release job runs
+        run: node scripts/ci/check-pretag.mjs --selftest
+
       - name: Plugin structure
         run: node scripts/ci/check-plugin.mjs
 

@@ -346,7 +346,7 @@ function assertDelivered(label, r, want) {
   try {
     stdout = execFileSync(process.execPath, [GUARD], {
       input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'npm run build' }, cwd: tmp, prompt_id: 'next' }),
-      encoding: 'utf8', timeout: 15000,
+      encoding: 'utf8', timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'],
     });
   } catch (err) { stdout = err.stdout?.toString() ?? ''; }
 
@@ -363,7 +363,7 @@ function assertDelivered(label, r, want) {
   try {
     denyOut = execFileSync(process.execPath, [GUARD], {
       input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'rm -rf /' }, cwd: tmp, prompt_id: 'next' }),
-      encoding: 'utf8', timeout: 15000,
+      encoding: 'utf8', timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'],
     });
   } catch (err) { denyOut = err.stdout?.toString() ?? ''; }
   try {
@@ -616,7 +616,7 @@ function assertDelivered(label, r, want) {
     fs.utimesSync(oldTurn, old, old);
 
     const r = execFileSync(process.execPath, [GATE, '--sweep-markers'],
-      { encoding: 'utf8', timeout: 30_000 });
+      { encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'] });
 
     const goneStale = !fs.existsSync(stale);
     const goneTurn = !fs.existsSync(oldTurn);

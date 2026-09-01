@@ -674,6 +674,90 @@ the same shape as the gate's — *the gate can report a violation and cannot
 report itself* — one level out: a reporter's own correctness is the one thing
 its own reports never cover.
 
+### 0.1.14 — the only door was narrower than the one behind it
+
+**Cut 2026-09-01.** Found by reading the release pipeline immediately after
+0.1.13's own green run, not by anything failing. `check-pretag.mjs` carried a
+hardcoded array of checks under a comment claiming it was *"everything
+release.yml would run"*. It ran **13 of release.yml's 17**. Absent:
+`redact.mjs --selftest`, `check-retro.mjs`, `check-escape-hatch.mjs` and
+`check-command-invocation.mjs`. Only `check-tags.mjs` had its absence explained;
+the other four read as decisions and were omissions, **and those two are
+indistinguishable when an exclusion is expressed by not appearing in a list.**
+
+`check-retro.mjs` is how it happened: added to `release.yml` in 0.1.13 and to
+that array never. Two lists, one edit. **A gate that admits what the next gate
+rejects is not a gate** — it is a slower way of finding out. This one is the
+door that `check-pretag`'s own header calls *the only door*, and it was narrower
+than the one behind it. Nothing was shipped broken by it, which is the only
+reason this is a finding rather than an incident: every missing check was
+passing anyway. That is luck, not a control.
+
+**1 — the suite is derived, not listed.** `deriveReleaseSuite()` reads
+`release.yml` and the suite IS what `release.yml` runs. Adding a check to the
+workflow adds it to the gate with no second edit. Same move as
+`findingHeading()` and `FINDING_RE` sharing their pieces in 0.1.13: writer and
+reader change together or neither does. Deriving was possible, so the fallback
+the operator authorised — a check that fails when the two lists differ — was not
+needed and not built; a check comparing two lists still leaves two lists.
+
+**2 — and the half that makes drift impossible rather than merely unlikely.** A
+step the gate can neither run nor name is a **failure**, not a skip. So
+`release.yml` cannot grow a step this gate silently ignores: either it is a
+`node <script>.mjs` check, and is run automatically, or it goes in
+`EXCLUDED_STEPS` with a reason. The four exclusions are declared with their
+reasons and **printed on every pass** — a gate that does not name what it did
+not check is asserting more than it verified. Each is asserted to still name a
+real step, so a renamed step fails here rather than leaving a stale exemption
+that quietly excuses its replacement.
+
+**3 — the gate had no behavioural test at all, which is why it could drift.**
+This is 0.1.13's rule applied to the component that most needed it: a reporter
+tested only by construction. `--selftest`, nine assertions, wired into both
+workflows. Four negative controls, each failing independently: a derivation
+blind to block-form `run: |` fails five assertions and names all 17 orphans; a
+renamed exclusion fails exactly one; an undeclared shell step fails exactly one;
+a workflow naming a script that does not exist fails exactly one.
+
+**The self-test's own first gap is the more useful record.** Assertion 4 tested
+the undeclared arm against a *fixture* only, so adding a shell step to the real
+`release.yml` changed nothing — the control fired zero failures. That is the
+blind spot this whole release is about, reproduced one level down inside the
+test written to prevent it, and it was visible only because the control was run
+rather than assumed. Assertion 3b tests the real file, and the control then
+fires.
+
+**4 — `check-pretag` executed its entire gate on import.** It had no main guard
+in any form, so its self-test could not exist: importing it ran it. 0.1.13 fixed
+five `endsWith` guards in `plugins/mavci-core/scripts/`; this file is in
+`scripts/ci/` and had no guard to fix. **A suffix test standing in for an
+identity test and no test at all are the same defect at different depths**, and
+the second is why this gate went untested for its whole life.
+
+**5 — a check must not annotate its own green run.** Carried-forward item 3,
+closed. `execFileSync` forwards a child's stderr to the parent unless `stdio`
+says otherwise; `check-packaging`'s section 3 fails `render.mjs` **on purpose**,
+and `render.mjs` reports failures with `::error::`. So the deliberate ENOENT
+travelled into the runner log and GitHub rendered it as a red ✗ on a release job
+exiting 0 — on every release run from v0.1.9 to v0.1.13. Reproduced locally,
+byte-for-byte against run 33505830491, and removed by one pinned `stdio`.
+
+Fixed as a class, not an instance: **nine call sites across seven CI scripts**
+forwarded child stderr, and a new rule in `check-plugin.mjs` fails any
+`exec*Sync` in `scripts/ci/` that does not pin `stdio`. Verified safe before
+changing anything — every one of those catch blocks already reads `err.stdout` /
+`err.stderr`, so capturing silences no diagnostic. `check-escape-hatch:108` is
+left inheriting deliberately: it is reporting a real failure.
+
+The rule scans **blanked** source via the repo's own `jsscan`, and an
+unreadable call is a failure rather than an unexamined pass. Zero false
+positives across all 19 CI scripts on its first run — which, after 0.1.12's
+five-false-positives-per-true-one, was the thing to check before trusting it.
+
+**A red mark on a green run is not cosmetic.** It trains precisely the habit
+that let run 33265540461 — a real failure — go unread for an entire release.
+That is the argument for spending a release on it.
+
 ### Carried forward — still not built
 
 **Items 1–4 and 5–6 below remain unbuilt; item 7 is held deliberately, for the
@@ -740,7 +824,10 @@ nobody will notice, which is also the argument for not deferring it twice.
    write-once and forward-looking**, which is exactly why it is the only one that
    captured the shadowing.
 
-3. **Suppress the benign failure-level annotation on a green release run.**
+3. **CLOSED in 0.1.14 — suppress the benign failure-level annotation on a green
+   release run.** Fixed as a class: nine unpinned `exec*Sync` call sites, plus a
+   `check-plugin.mjs` rule that fails any of them in `scripts/ci/`. The original
+   entry follows, because its reasoning is why it was worth a release.
    `check-packaging.mjs`'s deliberate negative control removes `templates/` from a
    staged copy and asserts the renderer fails; the `ENOENT …/mavci-core/templates/scaffold`
    it provokes surfaces as a red ✗ annotation on a job that exits 0. It is new

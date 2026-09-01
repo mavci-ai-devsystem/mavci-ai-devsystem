@@ -55,6 +55,7 @@ function runDoctor(cwd, { args = [], env = {}, input = '' } = {}) {
   try {
     const stdout = execFileSync(process.execPath, [DOCTOR, ...args], {
       cwd, input, encoding: 'utf8', timeout: 60_000,
+      stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, CLAUDE_PROJECT_DIR: cwd, CLAUDE_CODE_SESSION_ID: '', CLAUDE_PID: '', ...env },
     });
     return { stdout, status: 0 };

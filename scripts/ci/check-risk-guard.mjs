@@ -248,6 +248,7 @@ function runGuard(input) {
   try {
     stdout = execFileSync(process.execPath, [GUARD], {
       input: JSON.stringify({ ...input, cwd: tmp }), encoding: 'utf8', timeout: 15000,
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
   } catch (err) { stdout = err.stdout?.toString() ?? ''; }
   if (!stdout.trim()) return { decision: 'allow', reason: '' };

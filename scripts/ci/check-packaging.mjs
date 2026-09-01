@@ -61,7 +61,14 @@ function render({ plugin, proj }) {
     const stdout = execFileSync(
       process.execPath,
       [path.join(plugin, 'scripts', 'render.mjs'), '--scaffold', '--config'],
+      // stdio pinned: section 3 fails render.mjs ON PURPOSE, and render.mjs
+      // reports failures with `::error::`. execFileSync forwards a child's
+      // stderr to the parent by default, so that deliberate failure was landing
+      // in the runner log and GitHub was rendering it as a red annotation on a
+      // release job that exited 0. A red mark on a green run trains exactly the
+      // habit that let run 33265540461 go unread.
       { cwd: proj, encoding: 'utf8', timeout: 60_000,
+        stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env, CLAUDE_PROJECT_DIR: proj } });
     return { code: 0, stdout };
   } catch (err) {
