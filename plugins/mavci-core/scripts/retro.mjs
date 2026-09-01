@@ -198,7 +198,7 @@ function header(root) {
  * in a way nobody predicted. `.mavci/lessons/` is committed to the project
  * repository, so an unredacted paste here is a committed secret.
  */
-export function record(root, { title, finding, target, check, assertion, brokenBuild }) {
+export function record(root, { title, finding, target, check, assertion, brokenBuild, agent }) {
   if (!title || title === true) die(`--record needs a title: --record "<title>" --finding "<what you saw>"`);
   if (!finding || finding === true) die('--record needs --finding "<what you saw>". A title alone is not a report.');
 
@@ -220,6 +220,21 @@ export function record(root, { title, finding, target, check, assertion, brokenB
     findingHeading(n, clean(title)),
     ``,
     `Filed: ${nowIso()}, plugin ${pluginVersion()}.`,
+    ``,
+    // PROVENANCE. A finding written by the main session and one written by a haiku
+    // agent are different evidence, and an operator applying this queue changes how
+    // every downstream project is built. The value is not self-declared: risk-guard
+    // denies an agent's --record unless --agent names the caller it actually is, so
+    // an agent can neither file anonymously nor file as somebody else.
+    agent && agent !== true
+      ? `Filed by: **${clean(String(agent))}** (agent). Provenance enforced at the risk guard, `
+        + `not self-declared. Weigh it accordingly before applying.`
+      // NOT "the main session". The guard allows an agent to file without declaring
+      // itself - the channel must never close - so an absent value means UNKNOWN, and
+      // asserting the operator wrote it would be a false attribution on the one field
+      // an operator uses to decide how much scrutiny a finding needs.
+      : `Filed by: not recorded. Either the main session, or an agent that did not declare `
+        + `itself - the queue cannot tell. Treat it as unattributed.`,
   ];
   if (target && target !== true) parts.push(``, `Target: \`${clean(target)}\``);
   if (check && check !== true) parts.push(``, `Check: \`${clean(check)}\``);
@@ -379,6 +394,7 @@ function main() {
       check: arg('--check'),
       assertion: arg('--assertion'),
       brokenBuild: arg('--broken-build'),
+      agent: arg('--agent'),
     });
     console.log(`filed finding ${number} in ${rel}`);
     console.log('It is queued, not fixed. doctor reports it every run until an operator applies it.');

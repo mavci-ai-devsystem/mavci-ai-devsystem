@@ -41,6 +41,53 @@ jobs:
       - name: Scaffold a project and verify it, using nothing but node
         run: node scripts/ci/check-escape-hatch.mjs
 
+      # Prediction 2a of the guardian design: guardian has two properties and only
+      # one of them needs a model. The worklist, the enumeration and the coverage
+      # arithmetic are node scripts with no model in the loop, so they belong HERE -
+      # in the workflow that runs with Claude Code absent and zero dependencies.
+      # Whether guardian ANSWERS correctly is an operator-run corpus and cannot live
+      # in CI; that is stated as the residual rather than papered over.
+      - name: Guardian's deterministic half runs without Claude Code
+        run: node scripts/ci/check-service-role-sites.mjs
+
+      # Guardian's coverage subtraction, its floor, and both negative controls.
+      # sites_total === 0 is not_checked BEFORE any subtraction: with an empty
+      # worklist the arithmetic reports perfect coverage of nothing, and a pass there
+      # would be the most expensive lie this system can tell.
+      - name: Guardian coverage arithmetic and the empty-worklist floor
+        run: node scripts/ci/check-guardian.mjs
+
+      # Built BEFORE guardian, so guardian is written into a system that already
+      # refuses to trust it. The case a "refuses on absent, stale or failing" spec
+      # misses: a record that exists, is current, and says pass over an EMPTY
+      # worklist. Refused by an explicit branch, and the verdict is an allow-list so
+      # a sixth enum value refuses by default rather than falling through.
+      - name: Release refuses on every guardian record that establishes nothing
+        run: node scripts/ci/check-release-gate.mjs
+
+      # The corpus's deterministic half. Whether guardian ANSWERS each case right
+      # needs a model; that every expectation maps to a real enumerated site, and
+      # that both controls exist - a degenerate-pass case with nothing to find, and
+      # a case whose origin cannot be determined - does not.
+      - name: Corpus has both controls and no expectation guardian will never be asked
+        run: node scripts/ci/check-corpus.mjs
+
+      # scribe.json promises this check by name, which under this repo's own rule is
+      # a debt until it exists. Two things beyond existence: a citation that resolves
+      # to the WRONG thing fails (a task id carrying another task's title, a verdict
+      # for a different run, a sha on another branch), and a document that cites
+      # NOTHING fails - it passes referential integrity trivially and is the
+      # fabricated-prose case the haiku tier accepts as its exposure.
+      - name: Scribe citations resolve, and a document that cites nothing fails
+        run: node scripts/ci/check-scribe-refs.mjs --selftest
+
+      # Same defect as check-command-refs, different namespace. A /mavci-core:<name>
+      # that does not resolve was covered since 0.1.12; a check-*.mjs named in a
+      # comment as the thing that guarantees a property was not - and one had dangled
+      # in rules/index.mjs since 0.1.12, taking an audit and a git log to resolve.
+      - name: Every .mjs named in shipped code exists
+        run: node scripts/ci/check-script-refs.mjs
+
       - name: Agent definitions are plain markdown usable without the plugin
         run: |
           for f in plugins/mavci-core/agents/*.md; do

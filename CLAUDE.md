@@ -489,7 +489,12 @@ which was false both times it fired. `check-risk-guard.mjs` asserts both halves;
 the `allow` half failed four times against 0.1.11 and the `deny` half never
 regressed. 80 cases now, up from 62.
 
-**6 — remedy authority is in the rule text, and in a check.** A rule declares
+**6 — remedy authority is in the rule text, and in a check.** That check is
+**`check-evidence-caps.mjs` PART 2**, not a separate file. Both properties are
+answered by reading `rules/index.mjs` and neither needs a project, so they share
+one script. Named here because `rules/index.mjs` referred to a
+`check-remedy-authority.mjs` that was never committed, and an audit had to open
+`git log` to find out which of the two cases it was. One name for one check. A rule declares
 `authority: 'agent' | 'operator' | 'external'`, and anything but `agent` must
 carry an `AUTHORITY:` note naming who can act. Four rules declare one.
 

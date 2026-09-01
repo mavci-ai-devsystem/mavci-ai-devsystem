@@ -34,7 +34,7 @@ import {
 import { abs, exists, readJson, readJsonOrNull, readTextOrNull, todayIso } from './lib/fsx.mjs';
 import {
   pluginVersion, verifyIntegrity, validateAll, expiredWaivers, expiringWaivers, projectRoot,
-  stampHookRun, lastHookRun, lastGate,
+  stampHookRun, lastHookRun, lastGate, MANIFEST_SCHEMA_VERSION,
 } from './state.mjs';
 // The queue is a directory, and retro.mjs is the one place that says what is in
 // it. doctor used to compose its own path to the same file, which is how it came
@@ -106,6 +106,96 @@ function checkConnected(root, out) {
   }
   out.push({ status: OK, text: line(OK, 'project connected') });
   return true;
+}
+
+/**
+ * A manifest at an older schema_version is a FAIL, not a warning, and it is checked
+ * before anything that reads the manifest's contents.
+ *
+ * Every other check that reads `.mavci/project.json` - protected environments, the CI
+ * token, the marketplace form - assumes the shape it expects. Against a v1 manifest
+ * those either crash or, worse, read a field that has moved and report on nothing.
+ * `assertValid` already refuses a v1 manifest at every write path; without this check
+ * doctor's own output would be the one place that failed to mention why.
+ *
+ * FAIL rather than WARN because the field that moved is `tenancy`: v1 fused schema
+ * layout and enforcement into `shared-schema-rls`, and which tenant-isolation rules
+ * run at all depends on the split value. A project sitting on v1 is not running the
+ * checks it believes it is.
+ */
+function checkManifestVersion(root, out) {
+  const m = readJsonOrNull(abs(root, PATHS.manifest));
+  if (!m) return;
+  const v = m.schema_version;
+  if (v === MANIFEST_SCHEMA_VERSION) {
+    out.push({ status: OK, text: line(OK, `manifest schema_version ${v}`) });
+    return;
+  }
+  out.push({ status: FAIL, text: line(FAIL,
+    `manifest is schema_version ${v}, this build requires ${MANIFEST_SCHEMA_VERSION}`,
+    'Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/state.mjs" --migrate-manifest`. '
+    + 'v1 fused tenancy.model and the isolation mechanism into one value; the split decides '
+    + 'which tenant-isolation rules run, so until it is migrated this project is not running '
+    + 'the checks it appears to. The migration maps "shared-schema-rls" to isolation "rls" '
+    + 'because that is what the old value asserted - NOT because anything verified it. If the '
+    + 'project reaches its data through a service-role client, correct it to "application-filters" '
+    + 'afterwards: that turns supabase.rls_enabled off and the scoped-query rule on, which is '
+    + 'more checking, not less.') });
+}
+
+/**
+ * Guardian's acceptance corpus. Design prediction 2b, and 3c of the build order.
+ *
+ * Guardian's MACHINERY is asserted in CI (check-guardian.mjs). Whether guardian
+ * ANSWERS correctly needs a model and cannot run there. The fallback is an
+ * operator-run corpus - and the move that stops that decaying into nothing is that
+ * its ABSENCE IS A FAILURE, not a silence.
+ *
+ * Same construction as the hook receipt in 0.1.12: `control/hook-run.json` is an
+ * artefact only a real run can produce, and doctor treats its absence as a FAIL
+ * rather than inferring health from the scripts behaving. A corpus result is the
+ * same kind of artefact.
+ *
+ * THE KEY IS THE PLUGIN VERSION, NOT A DATE, and the distinction is the whole
+ * point. A corpus passed against 0.1.14 tells you nothing about 0.1.16's guardian -
+ * the agent definition, the worklist, the rule feeding it and the prompt can all
+ * have changed between them. A date-keyed record would let a recent result satisfy
+ * a version it never examined. `recorded_for` must EQUAL the running plugin
+ * version; newer is as wrong as older, because it is evidence about a different
+ * component.
+ */
+function checkGuardianCorpus(root, out) {
+  const running = pluginVersion();
+  const rec = readJsonOrNull(abs(root, PATHS.guardianCorpus));
+
+  if (!rec) {
+    out.push({ status: FAIL, text: line(FAIL,
+      `no guardian acceptance corpus result for plugin ${running}`,
+      "Guardian's judgement is the one thing here that no deterministic check can verify, so "
+      + 'the corpus is the only evidence it works - and an absent result is a FAIL, never a '
+      + 'silence. The operator runs the guardian acceptance corpus and records the outcome '
+      + `at ${PATHS.guardianCorpus}. Until then, a `
+      + 'passing guardian verdict on this project rests on nothing.') });
+    return;
+  }
+  if (rec.recorded_for !== running) {
+    out.push({ status: FAIL, text: line(FAIL,
+      `guardian corpus was recorded for plugin ${rec.recorded_for}, not the running ${running}`,
+      'Version, not date: the corpus is evidence about the guardian that ran it. The agent '
+      + 'definition, the worklist, the rule that feeds it and the prompt can all differ between '
+      + 'versions, so a result from another version has not examined this one - whether it is '
+      + 'older or newer. The operator re-runs the corpus against this version.') });
+    return;
+  }
+  if (rec.result !== 'pass') {
+    out.push({ status: FAIL, text: line(FAIL,
+      `guardian corpus for plugin ${running} did not pass (result: ${rec.result})`,
+      "The corpus is the acceptance test for guardian's judgement. A failing corpus means "
+      + "guardian's findings are not trustworthy on this version.") });
+    return;
+  }
+  out.push({ status: OK, text: line(OK, `guardian corpus passed for plugin ${running}`,
+    `${rec.cases_total ?? '?'} case(s), recorded ${rec.run_at ?? 'at an unstated time'}`) });
 }
 
 /**
@@ -1331,6 +1421,8 @@ function main() {
     checkInstallScope(out);
     const connected = checkConnected(root, out);
     if (connected) {
+      checkManifestVersion(root, out);
+      checkGuardianCorpus(root, out);
       checkIntegrity(root, out);
       checkSchemas(root, out);
       checkVersionSkew(root, out, { sync });

@@ -52,6 +52,10 @@ export function pluginVersion() {
   return readJson(path.join(PLUGIN_ROOT, '.claude-plugin', 'plugin.json')).version;
 }
 
+/** Manifest schema version this build writes and requires. Bumped for the
+ *  tenancy.model/isolation split; see migrateManifest. */
+export const MANIFEST_SCHEMA_VERSION = 2;
+
 export function projectRoot() {
   return process.env.CLAUDE_PROJECT_DIR || process.cwd();
 }
@@ -480,6 +484,57 @@ export function lastHookRun(root) {
 
 /* ------------------------------------------------------------------ init */
 
+/* ------------------------------------------------------- manifest migration
+ * v1 -> v2: tenancy.model/isolation split (finding 17).
+ *
+ * v1 fused schema layout and enforcement mechanism into one token, so a project
+ * whose isolation is application-code filters under a service-role key had to
+ * declare `shared-schema-rls` - a false premise in the file every rule reads.
+ *
+ * REFUSED ON READ, NOT SILENTLY UPGRADED. The manifest is operator surface. A read
+ * path that rewrites it converts "your declaration is wrong" into "your declaration
+ * changed while you were not looking", and the value being rewritten is the one that
+ * decides whether the tenant-isolation rules run at all. `assertValid` fails a v1
+ * manifest; doctor names this command; the operator runs it.
+ *
+ * `shared-schema-rls` maps to isolation `rls` because that is what it asserted. It
+ * does NOT map to what the project actually does - this migration cannot know that,
+ * and must not guess. A project whose isolation is really application filters comes
+ * out of here declaring `rls`, which is the same false premise it went in with, and
+ * the operator has to correct it. That is deliberate: a migration that silently
+ * downgraded an isolation claim would be inventing a security posture.
+ */
+export function migrateManifest(root = projectRoot()) {
+  const p = abs(root, PATHS.manifest);
+  if (!exists(p)) throw new Error(`no manifest at ${PATHS.manifest}`);
+  const m = readJson(p);
+  const from = m.schema_version;
+  if (from === MANIFEST_SCHEMA_VERSION) return { changed: false, from, to: from, notes: [] };
+  if (from !== 1) throw new Error(`cannot migrate manifest schema_version ${from}; expected 1`);
+
+  const notes = [];
+  const legacy = m.tenancy?.model;
+  const MAP = {
+    'shared-schema-rls': { model: 'shared-schema', isolation: 'rls' },
+    'schema-per-tenant': { model: 'schema-per-tenant', isolation: 'none' },
+    'single-tenant': { model: 'single-tenant', isolation: 'none' },
+  };
+  if (!(legacy in MAP)) throw new Error(`unrecognised v1 tenancy.model "${legacy}"`);
+  m.tenancy = { ...m.tenancy, ...MAP[legacy] };
+  notes.push(`tenancy.model "${legacy}" -> model "${m.tenancy.model}", isolation "${m.tenancy.isolation}"`);
+  if (legacy === 'shared-schema-rls') {
+    notes.push('CHECK THIS: isolation was set to "rls" because that is what the old value '
+      + 'asserted, not because anything verified it. If this project reaches its data through '
+      + 'a service-role client, isolation is "application-filters" and RLS is not what '
+      + 'protects it. Correcting that turns supabase.rls_enabled off and the scoped-query '
+      + 'rule on - it does not reduce checking.');
+  }
+  m.schema_version = MANIFEST_SCHEMA_VERSION;
+  assertValid(m, schemas().project, PATHS.manifest);
+  writeJsonAtomic(p, m);
+  return { changed: true, from, to: MANIFEST_SCHEMA_VERSION, notes };
+}
+
 export function init(root, manifest) {
   assertValid(manifest, schemas().project, PATHS.manifest);
   fs.mkdirSync(abs(root, PATHS.controlTasks), { recursive: true });
@@ -534,10 +589,17 @@ export function validateAll(root) {
   // shape is ever checked.
   check(PATHS.unverified, 'unverified');
 
-  for (const dir of [PATHS.controlTasks, PATHS.verdicts, PATHS.tasks]) {
+  // guardianRecords joins the sweep for the reason hook-run and unverified did:
+  // a control file with no schema check is a control file nothing validates. It
+  // matters more here than for either of those, because a guardian record is the
+  // evidence a release gate reads - and until this line existed, the only thing
+  // that would have caught a malformed one was the writer that produced it.
+  for (const dir of [PATHS.controlTasks, PATHS.verdicts, PATHS.tasks, PATHS.guardianRecords]) {
     const d = abs(root, dir);
     if (!exists(d)) continue;
-    const schemaName = dir === PATHS.controlTasks ? 'control-task' : dir === PATHS.verdicts ? 'verdict' : 'task';
+    const schemaName = dir === PATHS.controlTasks ? 'control-task'
+      : dir === PATHS.verdicts ? 'verdict'
+      : dir === PATHS.guardianRecords ? 'guardian' : 'task';
     for (const f of fs.readdirSync(d)) {
       if (f.endsWith('.json')) check(`${dir}/${f}`, schemaName);
     }
@@ -634,6 +696,13 @@ async function main() {
         console.log(`waived ${check_id} at ${filePath} until ${addDaysIso(Number(days))}`);
         return;
       }
+      case '--migrate-manifest': {
+        const r = migrateManifest(root);
+        if (!r.changed) { console.log(`manifest already at schema_version ${r.to}`); return; }
+        console.log(`manifest migrated: schema_version ${r.from} -> ${r.to}`);
+        for (const n of r.notes) console.log(`  ${n}`);
+        return;
+      }
       case '--init': {
         const manifestPath = arg('--init');
         const src = manifestPath === true || !manifestPath ? PATHS.manifest : manifestPath;
@@ -686,6 +755,7 @@ async function main() {
       default:
         die([
           'usage: state.mjs <command>',
+          '  --migrate-manifest             upgrade .mavci/project.json to the current schema (operator)',
           '  --init [manifest-path]         create the control plane for a validated manifest',
           '  --baseline-init                record every current violation as pre-existing (connect only)',
           '  --validate                     schema-check every state file and the seal',

@@ -19,13 +19,14 @@
     "summary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["pass", "fail", "waived", "baselined", "error", "blockers"],
+      "required": ["pass", "fail", "waived", "baselined", "error", "not_checked", "blockers"],
       "properties": {
         "pass": { "type": "integer", "minimum": 0 },
         "fail": { "type": "integer", "minimum": 0 },
         "waived": { "type": "integer", "minimum": 0 },
         "baselined": { "type": "integer", "minimum": 0 },
         "error": { "type": "integer", "minimum": 0 },
+        "not_checked": { "type": "integer", "minimum": 0, "description": "Rules that ran correctly over an EMPTY INPUT SET. Deliberately a separate tally from `pass`: a probe with nothing to probe is not a passing probe (finding 5). Required, so a build that computes the other five and silently drops this one fails here rather than reporting a smaller universe." },
         "blockers": { "type": "integer", "minimum": 0 }
       }
     }
@@ -37,7 +38,7 @@
       "required": ["check_id", "status", "severity"],
       "properties": {
         "check_id": { "type": "string", "pattern": "^[a-z0-9]+([.][a-z0-9_]+)+$" },
-        "status": { "type": "string", "enum": ["pass", "fail", "waived", "baselined", "error"] },
+        "status": { "type": "string", "enum": ["pass", "fail", "waived", "baselined", "error", "not_checked"] },
         "severity": { "type": "string", "enum": ["critical", "blocker", "warning", "info"] },
         "path": { "type": ["string", "null"] },
         "line": { "type": ["integer", "null"], "minimum": 1 },

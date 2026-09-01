@@ -65,7 +65,13 @@ jobs:
           node scripts/ci/check-packaging.mjs
           node scripts/ci/check-command-invocation.mjs
           node scripts/ci/check-command-refs.mjs
+          node scripts/ci/check-script-refs.mjs
           node scripts/ci/check-evidence-caps.mjs
+          node scripts/ci/check-service-role-sites.mjs
+          node scripts/ci/check-guardian.mjs
+          node scripts/ci/check-release-gate.mjs
+          node scripts/ci/check-corpus.mjs
+          node scripts/ci/check-scribe-refs.mjs --selftest
           node scripts/ci/check-pretag.mjs --selftest
 
       # The release gate that would have stopped v0.1.2. A hooks.json Claude Code

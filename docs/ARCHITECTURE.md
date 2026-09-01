@@ -77,8 +77,8 @@ Five agents at `plugins/mavci-core/agents/<name>.md`, generated from `agent-defs
 |---|---|---|---|---|
 | `mavci-architect` | `opus` | plan | No (hook-enforced) | Planning errors are the most expensive class: a wrong data model or tenancy boundary is paid for across the life of the SaaS. Volume is low — once per feature. On a Max subscription this is the cheapest place to spend the best model. |
 | `mavci-builder` | `sonnet` | build | **Yes** | Highest-volume agent by an order of magnitude, working against a written spec, preloaded standards, and a verifier that fails the task. Quality is guaranteed by the verification layer, not the tier. Putting the highest-volume agent on Opus exhausts a weekly limit fastest for the least marginal gain. **Escape hatch:** `CLAUDE_CODE_SUBAGENT_MODEL=opus` for a session, or one line in `agent-defs/builder.yaml`. |
-| `mavci-verifier` | `sonnet` | verify | No (**natively enforced**) | Deterministic work is done by `verify.mjs` at zero token cost. The agent interprets a failing build and attributes it. Bounded reasoning. |
-| `mavci-guardian` | `opus` | verify / release gate | No (**natively enforced**) | Multi-tenant isolation, RLS correctness, Stripe webhook idempotency, KVKK and ToS completeness, ad-policy. A miss here is a data breach, a legal exposure, or a payment bug. Runs once per release. |
+| `mavci-verifier` | `sonnet` | verify | No via `Edit`/`Write` (native); **`Bash` hook-only** | Deterministic work is done by `verify.mjs` at zero token cost. The agent interprets a failing build and attributes it. Bounded reasoning. |
+| `mavci-guardian` | `opus` | verify / release gate | No — **fully contained** (no `Bash`) | Multi-tenant isolation, RLS correctness, Stripe webhook idempotency, KVKK and ToS completeness, ad-policy. A miss here is a data breach, a legal exposure, or a payment bug. Runs once per release. |
 | `mavci-scribe` | `haiku` | any | No (hook-enforced) | Changelogs, ADRs, task summaries, SEO copy, lessons. Mechanical, high-volume, low-stakes. The tier that makes the roster affordable. |
 
 ### 1.1 How each agent is actually constrained — corrected
@@ -87,11 +87,48 @@ The previous revision implied all four non-builder agents were natively constrai
 
 | Agent | Native constraint | Hook-only constraint | Consequence |
 |---|---|---|---|
-| `mavci-verifier` | `disallowedTools: Edit, Write, NotebookEdit` — **the tools are absent from its context.** Nothing it can do restores them. | — | Cannot modify anything, including under `disableAllHooks`. |
-| `mavci-guardian` | Same. | — | Same. |
+| `mavci-verifier` | `disallowedTools: Edit, Write, NotebookEdit` — **those tools are absent from its context** and nothing it can do restores them. | **It also has `Bash`.** A shell reaches the filesystem whatever the file-tool grant is; only `risk-guard.mjs`'s write-target matching (0.1.12) stands between it and app code. | Cannot modify anything **via the file tools**, ever. **Can** reach the filesystem via `Bash`, and under `disableAllHooks` nothing constrains that. |
+| `mavci-guardian` | `disallowedTools: Edit, Write, NotebookEdit` **and no `Bash`.** It holds `Read`, `Grep`, `Glob` and no filesystem write path of any kind. | — | **Fully natively contained.** Cannot modify anything by any route, including under `disableAllHooks`. It returns its report as its final message; a `SubagentStop` handler reads `last_assistant_message` (4.23) and writes the record. |
 | `mavci-architect` | **None.** It has `Edit` and `Write`, because it must write task specs to `.mavci/tasks/`. | Path restriction to `.mavci/tasks/**`, `.mavci/decisions/**` is enforced **only** by `risk-guard.mjs` on `PreToolUse`. | If hooks are disabled, the architect can edit application code. The prompt says not to; nothing stops it. |
 | `mavci-scribe` | **None.** Has `Edit`/`Write` for `docs/**`, `README.md`, `.mavci/lessons/**`, and SEO metadata. | Path restriction hook-only, same as architect. | Same exposure. |
 | `mavci-builder` | **None** by design — it is the agent that writes code. | Denied `.mavci/control/**`, `.env*`, `.claude/settings.json` by deny rules **and** hook. | The deny rules survive hook loss; the phase gate does not. |
+
+**`disallowedTools` constrains the tools, not the agent.** Removing `Edit` and
+`Write` from an agent's context is real and it survives `disableAllHooks` — but it
+bounds one route to the filesystem, not the agent's reach. An agent holding `Bash`
+can write a file with `node -e`, a heredoc, or a redirect, and no tool grant
+prevents it. Calling that "natively enforced" is the same overclaim as a docstring
+asserting a behaviour nobody ran: correct about the mechanism named, wrong about
+the property claimed.
+
+**The asymmetry between the verifier and guardian is deliberate, and it is a design
+outcome rather than an inconsistency to tidy up.** The two agents sit at opposite
+ends of the containment range on purpose:
+
+- `mavci-verifier` **must execute** — it runs `verify.mjs`, `npx tsc --noEmit`, the
+  build and the test command. Execution requires a shell, a shell reaches the
+  filesystem, and no tool grant undoes that. It holds the weaker containment
+  because its job forced the compromise, and the cost is written next to the grant
+  in `agent-defs/verifier.json`.
+- `mavci-guardian` **only reads and reasons.** Its worklist is enumerated for it,
+  its input is files it was pointed at, and its output is a message. Nothing about
+  the job requires a shell, so nothing forced a compromise — and it is therefore
+  granted the strongest containment available, on the most capable model, in the one
+  component whose judgement nothing deterministic can check.
+
+The rule that produces this, stated so the next reader applies it rather than
+flattening it: **an agent gets the strongest containment its job permits, and where
+the job forces a weaker one, the reason is recorded beside the grant.** A future
+revision that gives guardian `Bash` "for consistency", or removes it from the
+verifier "for symmetry", would be breaking both halves of that.
+
+What actually contains an agent with `Bash` is `risk-guard.mjs`'s **write-target
+matching** — the 0.1.12 rewrite that resolves redirection targets and the operand
+positions of known writers, refuses an unrecognised command carrying an unquoted
+control path, and refuses any interpreter doing arbitrary I/O. That is a real
+control and it is **hook-only**: it is defeated by `disableAllHooks`, which is an
+operator action rather than something an agent can reach. What merely *narrows* an
+agent is the tool grant and the prompt.
 
 **Stated plainly: the phase gate and the architect/scribe path restrictions are hook-enforced only.** They are defeated by `disableAllHooks`, which is a deliberate operator action, not something an agent can do. The control plane (section 4.2) is the layer that survives hook loss, because it is backed by a permission deny rule, and that is exactly why the governing state was moved there.
 
@@ -1132,7 +1169,7 @@ Three tiers. Every tier-3 operation is enforced **twice**: a `permissions.deny` 
 
 Four phases: `plan`, `build`, `verify`, `release`. Three independent mechanisms.
 
-**1. Tool grants.** Only `mavci-builder` writes `app/**`, `lib/**`, `supabase/**`. The verifier and guardian have `disallowedTools: Edit, Write, NotebookEdit` and **physically cannot** change code while judging it — the only natively enforced boundaries in the roster (1.1).
+**1. Tool grants.** Only `mavci-builder` writes `app/**`, `lib/**`, `supabase/**`. The verifier and guardian have `disallowedTools: Edit, Write, NotebookEdit`, so they cannot change code **through the file tools** while judging it — the only natively enforced boundaries in the roster (1.1). Both also hold `Bash`, which reaches the filesystem regardless; that route is held by `risk-guard.mjs` write-target matching and is hook-only (1.1).
 
 **2. A phase hook.** `risk-guard.mjs` on `PreToolUse` for `Edit|Write` reads `control/state.json`, denies edits to application paths whenever `phase != "build"`, and applies each agent's `edit_scope` using `agent_type` from the hook payload (4.9). Hook-only, and section 1.1 says so.
 

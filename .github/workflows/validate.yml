@@ -48,6 +48,13 @@ jobs:
       - name: Every command reference resolves to a real skill
         run: node scripts/ci/check-command-refs.mjs
 
+      # Same defect as check-command-refs, different namespace. A /mavci-core:<name>
+      # that does not resolve was covered since 0.1.12; a check-*.mjs named in a
+      # comment as the thing that guarantees a property was not - and one had dangled
+      # in rules/index.mjs since 0.1.12, taking an audit and a git log to resolve.
+      - name: Every .mjs named in shipped code exists
+        run: node scripts/ci/check-script-refs.mjs
+
       # One 583-character evidence string took the whole checker offline for a
       # project. The cap lived only in verdict.schema.json, so it fired at
       # writeControl - after the run, inside the gate - and `verify.mjs --record`,
@@ -60,6 +67,47 @@ jobs:
       # do one thing it cannot and one thing it must not.
       - name: Rule strings fit their caps, and remedies name who can act
         run: node scripts/ci/check-evidence-caps.mjs
+
+      # The first BEHAVIOURAL rule, and the enumeration it shares with guardian's
+      # worklist. `sites_total` is fixed at enumeration time, which makes coverage
+      # decidable by subtraction and makes the enumeration the thing nothing else
+      # checks. Two negative controls pull in opposite directions: removing an
+      # exclusion class makes the residue fire, and WIDENING one leaves the residue
+      # at zero while coverage silently drops - which is how the control gets
+      # defeated in practice, so that assertion is on sites_total, not residue.
+      - name: Service-role site enumeration, both outputs, and both directions of miss
+        run: node scripts/ci/check-service-role-sites.mjs
+
+      # Guardian's coverage subtraction, its floor, and both negative controls.
+      # sites_total === 0 is not_checked BEFORE any subtraction: with an empty
+      # worklist the arithmetic reports perfect coverage of nothing, and a pass there
+      # would be the most expensive lie this system can tell.
+      - name: Guardian coverage arithmetic and the empty-worklist floor
+        run: node scripts/ci/check-guardian.mjs
+
+      # Built BEFORE guardian, so guardian is written into a system that already
+      # refuses to trust it. The case a "refuses on absent, stale or failing" spec
+      # misses: a record that exists, is current, and says pass over an EMPTY
+      # worklist. Refused by an explicit branch, and the verdict is an allow-list so
+      # a sixth enum value refuses by default rather than falling through.
+      - name: Release refuses on every guardian record that establishes nothing
+        run: node scripts/ci/check-release-gate.mjs
+
+      # The corpus's deterministic half. Whether guardian ANSWERS each case right
+      # needs a model; that every expectation maps to a real enumerated site, and
+      # that both controls exist - a degenerate-pass case with nothing to find, and
+      # a case whose origin cannot be determined - does not.
+      - name: Corpus has both controls and no expectation guardian will never be asked
+        run: node scripts/ci/check-corpus.mjs
+
+      # scribe.json promises this check by name, which under this repo's own rule is
+      # a debt until it exists. Two things beyond existence: a citation that resolves
+      # to the WRONG thing fails (a task id carrying another task's title, a verdict
+      # for a different run, a sha on another branch), and a document that cites
+      # NOTHING fails - it passes referential integrity trivially and is the
+      # fabricated-prose case the haiku tier accepts as its exposure.
+      - name: Scribe citations resolve, and a document that cites nothing fails
+        run: node scripts/ci/check-scribe-refs.mjs --selftest
 
       # The escalation channel's own first run found two defects in it. The queue
       # is a DIRECTORY and both readers - retro and doctor - tested one fixed path

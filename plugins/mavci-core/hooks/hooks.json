@@ -7,7 +7,9 @@
           {
             "type": "command",
             "command": "node",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/risk-guard.mjs"],
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/risk-guard.mjs"
+            ],
             "timeout": 20,
             "statusMessage": "mavci: risk policy"
           }
@@ -19,14 +21,15 @@
           {
             "type": "command",
             "command": "node",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/risk-guard.mjs"],
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/risk-guard.mjs"
+            ],
             "timeout": 20,
             "statusMessage": "mavci: risk policy"
           }
         ]
       }
     ],
-
     "PostToolUse": [
       {
         "matcher": "Edit|Write|NotebookEdit",
@@ -34,13 +37,20 @@
           {
             "type": "command",
             "command": "node",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs", "--mark-dirty"],
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs",
+              "--mark-dirty"
+            ],
             "timeout": 10
           },
           {
             "type": "command",
             "command": "node",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs", "--changed", "--advisory"],
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs",
+              "--changed",
+              "--advisory"
+            ],
             "async": true,
             "timeout": 60,
             "statusMessage": "mavci: checking standards"
@@ -49,48 +59,64 @@
             "type": "command",
             "if": "Edit(./.mavci/**)",
             "command": "node",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/redact.mjs", "--sweep"],
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/redact.mjs",
+              "--sweep"
+            ],
             "timeout": 20
           }
         ]
       }
     ],
-
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
             "command": "node",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"],
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"
+            ],
             "timeout": 30,
             "statusMessage": "mavci: standards gate"
           }
         ]
       }
     ],
-
     "SubagentStop": [
       {
         "hooks": [
           {
             "type": "command",
             "command": "node",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"],
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"
+            ],
             "timeout": 30,
             "statusMessage": "mavci: standards gate"
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/guardian-record.mjs"
+            ],
+            "timeout": 20,
+            "statusMessage": "mavci: guardian record"
           }
         ]
       }
     ],
-
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
             "command": "node",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/doctor.mjs", "--preflight"],
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/doctor.mjs",
+              "--preflight"
+            ],
             "timeout": 20
           }
         ]

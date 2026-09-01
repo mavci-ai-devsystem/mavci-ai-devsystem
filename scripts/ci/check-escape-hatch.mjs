@@ -34,12 +34,12 @@ const render = await import(pathToFileURL(path.join(SCRIPTS, 'render.mjs')).href
  */
 
 const MANIFEST = {
-  schema_version: 1,
+  schema_version: 2,
   project_id: 'escape-hatch-proof',
   display_name: 'Escape Hatch Proof',
   created: '2026-01-01T00:00:00Z',
   stack: { framework: 'nextjs-14-app-router', language: 'typescript', db: 'supabase-postgres', auth: 'supabase-auth', payments: 'stripe', email: 'resend', ai: 'anthropic', package_manager: 'npm' },
-  tenancy: { model: 'shared-schema-rls', tenant_column: 'org_id' },
+  tenancy: { model: 'shared-schema', isolation: 'rls', tenant_column: 'org_id' },
   deploy: { target: 'vercel', prod_branch: 'main', site_url: 'https://escape-hatch-proof.example.com' },
   environments: { prod: { supabase_ref: 'prodref', protected: true }, local: { protected: false } },
   env_sources: { runtime: 'vercel-project-env', local_file: '.env.local', required_keys: ['NEXT_PUBLIC_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'RESEND_API_KEY'], never_read_by_agents: true },

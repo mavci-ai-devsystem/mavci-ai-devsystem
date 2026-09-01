@@ -44,6 +44,33 @@
     ],
     "native_constraint": false
   },
+  "mavci-guardian": {
+    "phase": "verify",
+    "allow": [],
+    "deny": [
+      "**"
+    ],
+    "native_constraint": true
+  },
+  "mavci-scribe": {
+    "phase": "any",
+    "allow": [
+      "docs/**",
+      "README.md",
+      "CHANGELOG.md",
+      ".mavci/decisions/**",
+      ".mavci/tasks/**",
+      "app/**/metadata.ts",
+      "app/**/opengraph-image.tsx"
+    ],
+    "deny": [
+      ".mavci/control/**",
+      ".mavci/lessons/**",
+      ".env*",
+      ".claude/**"
+    ],
+    "native_constraint": false
+  },
   "mavci-verifier": {
     "phase": "verify",
     "allow": [],

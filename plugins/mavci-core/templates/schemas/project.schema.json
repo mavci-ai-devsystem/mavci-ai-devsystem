@@ -12,7 +12,7 @@
   ],
   "properties": {
     "$schema": { "type": "string" },
-    "schema_version": { "type": "integer", "const": 1 },
+    "schema_version": { "type": "integer", "const": 2, "description": "2: tenancy.model/isolation split (finding 17). A v1 manifest fuses them as `shared-schema-rls` and is REFUSED rather than silently upgraded - the manifest is operator surface, and a rewrite of the file every rule reads is not something a read path should do behind the operator. `state.mjs --migrate-manifest` converts it; doctor names that command." },
     "project_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,63}$" },
     "display_name": { "type": "string", "minLength": 1, "maxLength": 120 },
     "created": { "type": "string", "format": "date-time" },
@@ -36,9 +36,19 @@
     "tenancy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["model"],
+      "description": "Two ORTHOGONAL axes, deliberately separate. `model` is the schema layout; `isolation` is the mechanism that actually keeps tenants apart. The pre-migration enum fused them into `shared-schema-rls`, which forced a project whose isolation is application-code filters to declare RLS - a false premise in the file every rule reads (finding 17). `isolation: application-filters` RAISES scrutiny rather than lowering it: it declares there is no database backstop, so one missing predicate is a cross-tenant breach with nothing behind it.",
+      "required": ["model", "isolation"],
       "properties": {
-        "model": { "type": "string", "enum": ["shared-schema-rls", "schema-per-tenant", "single-tenant"] },
+        "model": {
+          "type": "string",
+          "enum": ["shared-schema", "schema-per-tenant", "single-tenant"],
+          "description": "Schema layout only. Says nothing about enforcement."
+        },
+        "isolation": {
+          "type": "string",
+          "enum": ["rls", "application-filters", "none"],
+          "description": "What actually enforces the boundary. `rls`: row level security policies, enforced by the database. `application-filters`: every query carries a tenant predicate written by hand, and a service-role key bypasses RLS - there is NO database backstop. `none`: single-tenant or no tenant boundary. supabase.rls_enabled runs only when this is `rls`; declaring `application-filters` turns ON supabase.service_role_query_scoped instead."
+        },
         "tenant_column": { "type": "string", "pattern": "^[a-z_][a-z0-9_]*$" }
       }
     },

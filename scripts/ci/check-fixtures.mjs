@@ -31,12 +31,12 @@ const { runChecks } = await load('verify.mjs');
 const state = await load('state.mjs');
 
 const BASE_MANIFEST = {
-  schema_version: 1,
+  schema_version: 2,
   project_id: 'fixture',
   display_name: 'Fixture',
   created: '2026-01-01T00:00:00Z',
   stack: { framework: 'nextjs-14-app-router', language: 'typescript', db: 'supabase-postgres', auth: 'supabase-auth', payments: 'stripe', email: 'resend', ai: 'anthropic', package_manager: 'npm' },
-  tenancy: { model: 'shared-schema-rls', tenant_column: 'org_id' },
+  tenancy: { model: 'shared-schema', isolation: 'rls', tenant_column: 'org_id' },
   deploy: { target: 'vercel', prod_branch: 'main', site_url: 'https://fixtures.example.com' },
   environments: { prod: { supabase_ref: 'fixtureprod', protected: true } },
   env_sources: { runtime: 'vercel-project-env', required_keys: ['STRIPE_SECRET_KEY'], never_read_by_agents: true },
@@ -55,6 +55,34 @@ const BASE_MANIFEST = {
   standards: { packs: ['nextjs-app-router', 'supabase-multitenant-rls', 'legal-tr-kvkk', 'stripe-billing'] },
 };
 
+/**
+ * A rule may need a manifest the BASE cannot express.
+ *
+ * `tenancy.isolation` made two rules mutually exclusive by declaration:
+ * `supabase.rls_enabled` runs only when isolation is `rls`, and
+ * `supabase.service_role_query_scoped` runs only when it is `application-filters`.
+ * One manifest cannot satisfy both, and before the split nothing in this harness had
+ * to care - every rule keyed off `standards.packs`, which is a list.
+ *
+ * The fix is a per-rule PATCH rather than a second base manifest, so a rule that
+ * needs a different declaration says so in one place and inherits everything else.
+ * A rule with no entry here uses BASE_MANIFEST unchanged.
+ *
+ * This is not a test seam in production code: the patch lives in the harness, and a
+ * rule that needs one is declaring a real precondition of its own behaviour.
+ */
+const MANIFEST_PATCH = {
+  'supabase.service_role_query_scoped': {
+    tenancy: { model: 'shared-schema', isolation: 'application-filters', tenant_column: 'company_id' },
+  },
+};
+
+/** BASE_MANIFEST with any per-rule patch applied. */
+function manifestFor(ruleId) {
+  const patch = MANIFEST_PATCH[ruleId];
+  return patch ? { ...BASE_MANIFEST, ...patch } : BASE_MANIFEST;
+}
+
 function copyTree(from, to) {
   if (!fs.existsSync(from)) return;
   for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
@@ -69,7 +97,7 @@ async function runFixture(checkId, variant) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-fx-'));
   try {
     fs.mkdirSync(path.join(tmp, '.mavci'), { recursive: true });
-    fs.writeFileSync(path.join(tmp, '.mavci', 'project.json'), JSON.stringify(BASE_MANIFEST, null, 2));
+    fs.writeFileSync(path.join(tmp, '.mavci', 'project.json'), JSON.stringify(manifestFor(checkId), null, 2));
     // Legal checks need a kvkk page to exist for every OTHER fixture, or every
     // fixture fails on legal.pages_present and the signal is lost.
     if (checkId !== 'legal.pages_present' && checkId !== 'legal.kvkk_structure') {
@@ -77,7 +105,7 @@ async function runFixture(checkId, variant) {
       copyTree(good, tmp);
     }
     fs.writeFileSync(path.join(tmp, '.gitignore'), 'node_modules\n.env*\n');
-    state.init(tmp, BASE_MANIFEST);
+    state.init(tmp, manifestFor(checkId));
     copyTree(path.join(FX, checkId, variant), tmp);
     // Reseal after the copy. A fixture that writes into .mavci/control/ would
     // otherwise break the integrity seal as a side effect, so its bad/ case would
@@ -145,9 +173,9 @@ for (const rule of RULES) {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-fx-state-'));
     try {
       fs.mkdirSync(path.join(tmp, '.mavci'), { recursive: true });
-      fs.writeFileSync(path.join(tmp, '.mavci', 'project.json'), JSON.stringify(BASE_MANIFEST, null, 2));
+      fs.writeFileSync(path.join(tmp, '.mavci', 'project.json'), JSON.stringify(manifestFor(rule.id), null, 2));
       copyTree(path.join(FX, 'legal.kvkk_structure', 'good'), tmp);
-      state.init(tmp, BASE_MANIFEST);
+      state.init(tmp, manifestFor(rule.id));
 
       const clean = (await runChecks(tmp, { scope: 'full' })).findings.filter((f) => f.check_id === rule.id);
       if (clean.length) failures.push(`${rule.id}: fired on a freshly sealed control plane`);

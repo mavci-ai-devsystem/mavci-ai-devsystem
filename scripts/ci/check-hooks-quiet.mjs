@@ -86,6 +86,14 @@ const HOOKS = [
     { hook_event_name: 'SubagentStop', session_id: 'quiet-s', prompt_id: 'quiet-p' }],
   ['SessionStart doctor.mjs --preflight', 'doctor.mjs', ['--preflight'],
     { hook_event_name: 'SessionStart', session_id: 'quiet-s' }],
+  // The highest-volume hook in the system: SubagentStop fires for every subagent in
+  // every repository on the machine, and almost none of them are guardian. The
+  // payload here is a NON-guardian stop, which is the overwhelmingly common case and
+  // the one that must cost nothing - guardian-record.mjs decides it from agent_type
+  // before touching the filesystem at all.
+  ['SubagentStop guardian-record.mjs', 'guardian-record.mjs', [],
+    { hook_event_name: 'SubagentStop', session_id: 'quiet-s', agent_type: 'Explore',
+      last_assistant_message: 'done' }],
 ];
 
 /**

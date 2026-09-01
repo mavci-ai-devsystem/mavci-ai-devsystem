@@ -70,6 +70,24 @@ export const PATHS = {
   gateRun: `${CONTROL_DIR}/gate-run.json`,
   hookRun: `${CONTROL_DIR}/hook-run.json`,
   unverified: `${CONTROL_DIR}/unverified.json`,
+  /**
+   * The operator-run guardian acceptance corpus result.
+   *
+   * KEYED ON PLUGIN VERSION, NEVER ON A DATE. Guardian's correctness is the one
+   * property in this system that no deterministic check can establish, so the
+   * evidence is a human reading a corpus run - and that evidence is about the
+   * guardian that ran, not about the calendar. A corpus passed against 0.1.14 says
+   * nothing about 0.1.16's guardian: the agent definition, the worklist, the rule
+   * that feeds it and the prompt can all have changed. A date-keyed record would
+   * let a recent result satisfy a version it never examined, which is the same
+   * defect as a stale plugin_version steering CI (carried-forward item 2) with the
+   * staleness moved one field over.
+   */
+  guardianCorpus: `${CONTROL_DIR}/guardian-corpus.json`,
+  /** One file per guardian run, sealed. Swept by state.schema_valid: until it was,
+   *  a malformed guardian record passed the standards checker entirely, and the
+   *  ONLY thing that would have caught it was the writer that produced it. */
+  guardianRecords: `${CONTROL_DIR}/guardian/records`,
 };
 
 /**
@@ -100,7 +118,14 @@ export const CONTROL_GLOBS = [
  */
 export const PHASES = ['plan', 'build', 'verify', 'release'];
 export const TASK_STATUS = ['pending', 'in_progress', 'done', 'failed', 'blocked'];
-export const CHECK_STATUS = ['pass', 'fail', 'waived', 'baselined', 'error'];
+/**
+ * `not_checked` is NOT a pass and NOT a failure. It is the state where a rule ran
+ * correctly over an EMPTY INPUT SET - a probe with nothing to probe (finding 5).
+ * Invariant 5 says a failed probe is never reported as a pass; this is narrower and
+ * more dangerous, because nothing looks wrong. It is excluded from the passing tally
+ * in summarise(), so a rule that examined nothing can never inflate a clean run.
+ */
+export const CHECK_STATUS = ['pass', 'fail', 'waived', 'baselined', 'error', 'not_checked'];
 export const SEVERITIES = ['critical', 'blocker', 'warning', 'info'];
 export const VERDICTS = ['pass', 'fail'];
 export const RISK_TIERS = ['sandbox', 'standard', 'regulated'];

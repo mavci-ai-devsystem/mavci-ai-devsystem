@@ -14,6 +14,7 @@
 
 import path from 'node:path';
 import { blankSource, blankComments, depthMap, matchAll } from '../lib/jsscan.mjs';
+import { scanProject } from '../lib/sitescan.mjs';
 import { lineOf } from '../lib/fsx.mjs';
 import { MARKETPLACE_NAME, PLUGIN_ID, SYSTEM_REPO } from '../config.mjs';
 
@@ -41,7 +42,7 @@ import { MARKETPLACE_NAME, PLUGIN_ID, SYSTEM_REPO } from '../config.mjs';
  *   external   needs someone outside the system entirely: a lawyer, a
  *              provider's console.
  *
- * `check-remedy-authority.mjs` asserts that every rule and every finding whose
+ * `check-evidence-caps.mjs` (PART 2) asserts that every rule and every finding whose
  * authority is not `agent` carries the note, and that the note names an actor.
  * The rule and its note are written in one place so they cannot drift, which is
  * the 0.1.5 lesson: a value spelled once, derived everywhere.
@@ -57,7 +58,7 @@ export const AUTHORITY_LEVELS = ['agent', 'operator', 'external'];
  * is the actor and the instruction to stop; the reason lives in the surrounding
  * remedy text, where it is specific and worth its length.
  *
- * `AUTHORITY:` is a literal marker, not prose, because check-remedy-authority.mjs
+ * `AUTHORITY:` is a literal marker, not prose, because check-evidence-caps.mjs
  * greps for it. A rule that declares an authority and phrases the note its own
  * way would pass a human read and fail the check, which is the right way round.
  */
@@ -365,12 +366,56 @@ const rlsEnabled = {
   id: 'supabase.rls_enabled',
   severity: 'blocker',
   packs: ['supabase-multitenant-rls'],
-  description: 'Every table created in a migration must have row level security enabled.',
+  description: 'Every table CREATED IN A MIGRATION has row level security enabled. '
+    + 'This rule can only see tables it watched being created: a schema built in the Supabase '
+    + 'dashboard or with psql is invisible to it, and it reports not_checked rather than pass '
+    + 'when it finds no table definitions. It runs only when tenancy.isolation is "rls".',
+  // Named once, used by all three not_checked paths, so the "what settles it" answer
+  // cannot drift between them (0.1.13: one definition, not two matching ones).
+  notCheckedRemedy: 'WHAT SETTLES IT: run `select relname, relrowsecurity from pg_class '
+    + "where relnamespace = 'public'::regnamespace;` against the project, or read the table "
+    + 'editor. This rule reads files and cannot reach the database. AUTHORITY: not yours to '
+    + 'complete - it needs the operator, with database access. Report it and stop.',
   remedy: 'Add `ALTER TABLE <name> ENABLE ROW LEVEL SECURITY;` in the same migration. '
     + 'Without RLS every authenticated user can read every tenant\'s rows.',
   run(ctx) {
+    const isolation = ctx.manifest?.tenancy?.isolation ?? null;
+
+    // ISOLATION IS NOT `rls`: this rule is the wrong question, and saying so is the
+    // point. It must NOT silently skip - `application-filters` declares there is no
+    // database backstop, which is a reason for MORE checking, not less (finding 17).
+    // A manifest field that quietly switches a rule off is a switch that turns the
+    // checker down, and the projects that most need checking are the ones that set it.
+    if (isolation && isolation !== 'rls') {
+      return [{
+        check_id: this.id, severity: 'warning', not_checked: true,
+        path: null, line: null,
+        evidence: `tenancy.isolation is "${isolation}", so row level security is not what `
+          + 'separates tenants here and this rule cannot answer the question that matters.',
+        remedy: 'WHAT SETTLES IT: supabase.service_role_query_scoped, which is enabled by this '
+          + 'same declaration and reports whether every service-role query carries a tenant '
+          + 'predicate - and, where tenant tables are reachable by a browser-held key, the '
+          + 'table-level GRANTs for the anon and authenticated roles, which are not visible '
+          + 'from this repository. Neither is checked by this rule.',
+      }];
+    }
+
     const migrations = ctx.files.filter((p) => /^supabase\/migrations\/.*\.sql$/.test(p));
-    if (!migrations.length) return [];
+
+    // NO MIGRATIONS AT ALL, or none that create a table: an empty input set. The old
+    // code returned [] here and scored a PASS - finding 5, measured green on a live
+    // multi-tenant SaaS whose schema was built in a dashboard. A declaration of
+    // `isolation: rls` makes this MORE misleading, not less: the manifest asserts RLS
+    // is the mechanism and the repository contains no evidence either way.
+    if (!migrations.length) {
+      return [{
+        check_id: this.id, severity: 'warning', not_checked: true,
+        path: null, line: null,
+        evidence: 'no supabase/migrations/*.sql, so no table definitions were inspected. '
+          + 'tenancy.isolation declares "rls" and nothing here confirms or denies it.',
+        remedy: this.notCheckedRemedy,
+      }];
+    }
 
     // RLS may be enabled in a later migration than the CREATE, so collect across all of them.
     const enabled = new Set();
@@ -387,6 +432,20 @@ const rlsEnabled = {
       for (const m of matchAll(sql, /\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["']?(?:public\.)?["']?(\w+)/i)) {
         created.push({ name: m.groups[0].toLowerCase(), path: rel, line: lineOf(text, m.index) });
       }
+    }
+
+    // Migrations exist but none CREATES a table - the chatbot's actual condition: two
+    // files, both ALTER TABLE only. `created` is empty, the filter below runs over
+    // nothing, and the rule used to return [] and score a pass.
+    if (!created.length) {
+      return [{
+        check_id: this.id, severity: 'warning', not_checked: true,
+        path: null, line: null,
+        evidence: `${migrations.length} migration file(s) present, but none contains a CREATE TABLE, `
+          + 'so no table was inspected. Tables created through the Supabase dashboard or psql '
+          + 'never appear here and are invisible to this rule.',
+        remedy: this.notCheckedRemedy,
+      }];
     }
 
     const seen = new Set();
@@ -683,6 +742,77 @@ const marketplaceForm = {
   },
 };
 
+
+/* =================================================================== 14 */
+
+/**
+ * The first BEHAVIOURAL rule: it asks what a handler does, not what a file
+ * contains. Findings 9 and 11 are the argument for it; the live bug in
+ * docs/chatbot-widget-connect-plan.md section 0a is its first real input.
+ *
+ * ONE SCAN, TWO OUTPUTS. `scanProject` enumerates every service-role query site
+ * once. This rule projects the sites with NO tenant predicate into findings. The
+ * same scan projects the sites WITH one into guardian's worklist (worklistFrom).
+ * Two passes would let the count the operator sees differ from the count guardian
+ * is graded against.
+ */
+const serviceRoleQueryScoped = {
+  id: 'supabase.service_role_query_scoped',
+  severity: 'blocker',
+  packs: ['supabase-multitenant-rls'],
+  // THE BOUNDARY, IN THE SHIPPED TEXT. It belongs here and not only in a design
+  // document, because the person reading it at 2am reads the description. The
+  // precedent is legal.kvkk_structure, whose description says "STRUCTURAL CHECK
+  // ONLY" for the same reason: the check is real, and a green tick is not the
+  // claim a reader would otherwise take from it.
+  description: 'Every service-role query against a tenant table carries a tenant filter. '
+    + 'CHECKS PRESENCE, NOT PROVENANCE - it verifies that a tenant predicate exists, and '
+    + 'CANNOT verify that the value it compares against is trustworthy. A filter built from '
+    + 'an unauthenticated request body passes this check and is still a cross-tenant read. '
+    + 'That question needs dataflow analysis and is deliberately not attempted here; it is '
+    + "that question is mavci-guardian's, via the worklist this scan produces.",
+  remedy: 'Add a tenant predicate to this query. The service-role key bypasses row level '
+    + "security, so an unfiltered read or write reaches every tenant's rows with nothing "
+    + 'behind it.',
+  run(ctx) {
+    // Runs only where the manifest says filters ARE the mechanism. That declaration
+    // turns this rule ON - it is the "more checking, not less" half of finding 17.
+    if (ctx.manifest?.tenancy?.isolation !== 'application-filters') return [];
+
+    const scan = scanProject(ctx, { tenantColumn: ctx.manifest?.tenancy?.tenant_column ?? null });
+    const out = [];
+
+    // THE ENUMERATION'S OWN CONTROL, and it is not the coverage subtraction.
+    // A `.from(` this scanner could neither classify as a site nor name as an
+    // exclusion means it does not recognise the shape - and a scanner that quietly
+    // enumerates a smaller universe produces a worklist guardian answers completely
+    // and a verdict that reads as full coverage of the wrong set. 0.1.14's rule for
+    // release.yml, applied here: neither run nor named is a FAILURE, not a skip.
+    if (scan.residue !== 0) {
+      out.push({
+        check_id: this.id, severity: 'blocker', path: null, line: null,
+        evidence: `${scan.residue} service-role query site(s) could not be classified or named. `
+          + `Scanner saw ${scan.coarse} candidate(s), enumerated ${scan.sites.length}, excluded `
+          + `${scan.excluded.length} with a stated reason. The remainder is unrecognised.`,
+        remedy: 'This is a gap in the scanner, not in your code, and the worklist it produces '
+          + 'would understate coverage. File it with /mavci-core:retro. Do not proceed on the '
+          + 'assumption that the enumerated sites are all of them.',
+      });
+    }
+
+    for (const site of scan.sites) {
+      if (site.has_tenant_filter) continue;   // -> guardian's worklist, not a finding here
+      out.push({
+        check_id: this.id, severity: this.severity, path: site.path, line: site.line,
+        evidence: `${site.writes ? 'write' : 'read'} on "${site.table}" through the service-role `
+          + 'client with no tenant predicate',
+        remedy: this.remedy,
+      });
+    }
+    return out;
+  },
+};
+
 /* ------------------------------------------------------------------ export */
 
 export const RULES = [
@@ -699,6 +829,7 @@ export const RULES = [
   kvkkStructure,
   stateSchemaValid,
   marketplaceForm,
+  serviceRoleQueryScoped,
 ];
 
 export function rulesFor(manifest) {

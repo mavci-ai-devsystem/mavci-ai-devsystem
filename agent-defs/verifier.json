@@ -20,7 +20,8 @@
     "Write",
     "NotebookEdit"
   ],
-  "_note_disallowedTools": "The ONLY natively enforced boundary in the roster. Edit, Write and NotebookEdit are absent from its context entirely, so it cannot fix what it is judging even if it decides to. An agent that can repair the thing it is grading will grade its own repair.",
+  "_note_tools": "Bash is REQUIRED and is not incidental: this agent runs verify.mjs --record, npx tsc --noEmit, npm run build and the project test command. Those are its job. Read/Grep/Glob cannot run a type check. Keep the grant, and know what it costs - see _note_disallowedTools.",
+  "_note_disallowedTools": "Edit, Write and NotebookEdit are absent from this agent's context entirely, so it cannot fix what it is judging through the file tools even if it decides to - an agent that can repair the thing it is grading will grade its own repair. That much is natively enforced and survives disableAllHooks. It is NOT full containment, and the roster used to claim it was: this agent also holds Bash, and a shell reaches the filesystem regardless of which file tools exist - node -e, a heredoc, a redirect. The only thing standing between Bash and application code is risk-guard.mjs write-target matching (0.1.12), which is HOOK-ONLY and is defeated by disableAllHooks. disallowedTools constrains the tools, not the agent. See ARCHITECTURE 1.1.",
   "standards_packs": [
     "nextjs-app-router",
     "supabase-multitenant-rls"

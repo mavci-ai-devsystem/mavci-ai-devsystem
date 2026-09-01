@@ -23,6 +23,44 @@ deliberate: a lesson edited to fit its new home stops being evidence.
                                       built from. Also the Phase 2 design
                                       constraint for Guardian and /release.
 
+    pending-system-change-0.1.15.md   NO ORIGIN PROJECT. plugin 0.1.14,
+                                      2026-09-01. Read-only pre-connect analyses
+                                      of TWO real repositories, neither connected
+                                      nor written to: protoolhub-main (1-4) and
+                                      AI-Chatbot-Widget-SaaS (5-7).
+                                      1, 2, 5 are mechanism: the credential
+                                      scanner filters by extension, walk()
+                                      ignores .gitignore, and rls_enabled passes
+                                      on an empty input set. 3 is scope - the
+                                      system models exactly one stack. 4 is the
+                                      channel gap that made this file manual.
+                                      6 is the CLASS the second project revealed:
+                                      rules match spellings, not meanings, in six
+                                      places. 7 and 8 are the publication gap in
+                                      three tiers - working tree vs HEAD vs the
+                                      remote. 8 is the only finding here with a
+                                      realised cost: a 404 that reads as absence
+                                      had already caused two history restarts and
+                                      left ten commits on one disk.
+
+## The exception to "copied from its origin"
+
+`pending-system-change-0.1.15.md` was **authored here**, not copied. It has no
+origin project, and the paths inside it are relative to this repository except
+where they name `protoolhub-main` or `AI-Chatbot-Widget-SaaS` explicitly.
+
+That is not a lapse in the rule above; it is the rule meeting a case it did not
+anticipate. The findings are about a repository that was analysed **before**
+`/mavci-core:connect` and deliberately never written to, so there was no
+`.mavci/lessons/` to copy from and there must not have been one. `retro --record`
+writes under `projectRoot()`'s control plane, which does not exist until connect
+step 4 — the step these findings explain the failure of.
+
+So the escalation channel was unavailable precisely because the findings were
+found early enough to be cheap. That is Finding 4 in the file itself, and it is
+why this promotion was manual for a second time, for a different reason than the
+first.
+
 ## Why this copy was manual
 
 `/mavci-core:retro` — the command whose whole job is to carry a finding out of a

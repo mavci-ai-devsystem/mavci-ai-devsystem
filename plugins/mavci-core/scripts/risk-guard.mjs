@@ -622,6 +622,7 @@ function main() {
         '--reseal': 're-seal the control plane, which launders any tampering that preceded it',
         '--init': 're-initialise the control plane',
         '--baseline-init': 'record a new baseline, which retires every current violation at once',
+        '--migrate-manifest': 'rewrite the project manifest, whose tenancy.isolation value decides which tenant-isolation rules run at all',
       };
 
       const flags = cmd.match(/--[a-z-]+/g) ?? [];
@@ -676,6 +677,49 @@ function main() {
       };
       const flags = cmd.match(/--[a-z-]+/g) ?? [];
       const privileged = flags.filter((f) => f in RETRO_PRIVILEGED);
+
+      /* --- PROVENANCE, AND IT IS ENFORCED RATHER THAN SELF-DECLARED ---------
+       *
+       * A queue an operator is about to apply mixes findings written by the main
+       * session with findings written by an agent, and until now nothing told them
+       * apart - retro's own header said "by whoever hit it". Those are different
+       * evidence: a finding a human hit and wrote up, and a finding a haiku agent
+       * produced, warrant different scrutiny before they change how every
+       * downstream project is built.
+       *
+       * The guard is the only place this is CHECKABLE. `retro.mjs` cannot know who
+       * ran it (its own header says so), so a self-declared `--agent` flag would be
+       * provenance an agent could simply omit. Here, `agent_type` is in the hook
+       * payload: an agent filing a finding must declare itself, and must declare
+       * ITSELF - the flag is compared against the caller. An agent cannot file
+       * anonymously and cannot file as the operator or as another agent.
+       */
+      if (agent && flags.includes('--record')) {
+        const m = cmd.match(/--agent[= ]+([A-Za-z0-9:_-]+)/);
+        const declared = m ? m[1] : null;
+        const bare = declared && declared.includes(':') ? declared.slice(declared.indexOf(':') + 1) : declared;
+        // NEVER DENY AN OMITTED FLAG. Caught by check-risk-guard.mjs, which already
+        // asserted that an agent can always file: 0.1.12 item 1 exists because seven
+        // messages told a trapped agent to run a command that did not exist, and a
+        // channel an agent cannot reach is the trap. A provenance requirement that
+        // can refuse a report reintroduces it - an agent that is blocked, and forgets
+        // one flag, is blocked from saying so.
+        //
+        // PROVENANCE MUST NEVER COST THE CHANNEL. So an omission is a NOTICE and the
+        // call proceeds; only an active misdeclaration is refused, because an agent
+        // naming a different caller is not a trapped agent, it is a wrong record.
+        if (!declared) {
+          notice(`mavci: file findings with \`--agent ${agent}\` so the queue records who wrote `
+            + 'them. This one is being filed unattributed, which is allowed - reporting is never '
+            + 'blocked - but an operator applying it will not know an agent authored it.');
+        }
+        if (declared && bare !== agent) {
+          deny(`${agent} declared \`--agent ${declared}\`, which is not itself. Provenance on a `
+            + 'finding is evidence about who produced it; declaring another caller would make it '
+            + 'evidence about nobody.');
+        }
+      }
+
       if (agent && privileged.length) {
         deny(`${agent} may not run \`retro.mjs ${privileged[0]}\`. That would `
           + `${RETRO_PRIVILEGED[privileged[0]]}. File the finding with \`--record\` and stop - `

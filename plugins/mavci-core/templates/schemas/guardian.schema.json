@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "guardian.schema.json",
+  "title": "Mavci guardian record",
+  "description": "One guardian run. NOT verdict.schema.json: a guardian record is a non-deterministic judgement and must not enter the file CI treats as the deterministic audit trail. Written only by the SubagentStop handler - guardian holds no Bash and no Write and cannot produce this itself.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "project_id", "plugin_version", "run_at", "worklist_id", "verdict", "fail_reason", "coverage", "answers"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "project_id": { "type": "string" },
+    "plugin_version": { "type": "string" },
+    "run_at": { "type": "string", "format": "date-time" },
+    "reviewed_ref": { "type": ["string", "null"] },
+    "tree_state": { "type": ["string", "null"], "enum": ["clean", "dirty", null] },
+    "worklist_id": { "type": "string" },
+    "trigger": { "type": "string", "enum": ["connect", "release", "manual"] },
+    "verdict": { "type": "string", "enum": ["pass", "fail", "not_checked"] },
+    "fail_reason": {
+      "type": ["string", "null"],
+      "enum": ["empty_worklist", "no_report", "coverage_incomplete", "duplicate_answers", "unknown_sites", "undetermined", "malformed_answer", "findings", null]
+    },
+    "detail": { "type": ["string", "null"], "maxLength": 2000 },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sites_total", "sites_answered"],
+      "description": "sites_total is fixed at enumeration, before guardian runs. That is what makes coverage decidable by subtraction, and it is why the release gate recomputes the verdict against these numbers rather than trusting the verdict field.",
+      "properties": {
+        "sites_total": { "type": "integer", "minimum": 0 },
+        "sites_answered": { "type": "integer", "minimum": 0 },
+        "unanswered": { "type": "array", "items": { "type": "string" } },
+        "duplicates": { "type": "array", "items": { "type": "string" } },
+        "unrecognised": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "answers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["site_id", "origin"],
+        "properties": {
+          "site_id": { "type": ["string", "null"] },
+          "origin": { "type": ["string", "null"], "enum": ["verified_session", "internal_constant", "derived_verified", "request_input", "unknown", null] },
+          "evidence": { "type": ["string", "null"], "maxLength": 500 },
+          "reason_if_unknown": { "type": ["string", "null"], "maxLength": 500 }
+        }
+      }
+    }
+  }
+}

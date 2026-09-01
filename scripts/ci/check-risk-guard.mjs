@@ -148,6 +148,14 @@ const CASES = [
   ['deny', { ...bash('node scripts/state.mjs --reseal'), agent_type: 'mavci-builder' }, 'builder launders a tamper by resealing'],
   ['deny', { ...bash('node scripts/state.mjs --baseline-init'), agent_type: 'mavci-builder' }, 'builder re-baselines everything'],
   ['deny', { ...bash('node scripts/state.mjs --init'), agent_type: 'mavci-builder' }, 'builder re-initialises the control plane'],
+  ['deny', { ...bash('node scripts/state.mjs --migrate-manifest'), agent_type: 'mavci-builder' }, 'builder rewrites the manifest whose isolation value decides which tenant rules run'],
+  ['deny', { ...bash('node scripts/state.mjs --migrate-manifest'), agent_type: 'mavci-guardian' }, 'guardian rewrites the manifest it is judged against'],
+  // PROVENANCE MUST NEVER COST THE CHANNEL (0.1.12 item 1). An agent that omits
+  // --agent is filing unattributed, which is allowed; an agent that names a
+  // DIFFERENT caller is producing a wrong record, which is not.
+  ['deny', { ...bash('node scripts/retro.mjs --record "x" --finding "y" --agent mavci-builder'), agent_type: 'mavci-scribe' }, 'scribe files a finding AS the builder'],
+  ['allow', { ...bash('node scripts/retro.mjs --record "x" --finding "y" --agent mavci-scribe'), agent_type: 'mavci-scribe' }, 'scribe files a finding as ITSELF'],
+  ['allow', { ...bash('node scripts/retro.mjs --record "x" --finding "y"'), agent_type: 'mavci-guardian' }, 'guardian files unattributed - never blocked from reporting'],
   ['deny', { ...bash('timeout 5 node scripts/state.mjs --reset-attempts 0001'), agent_type: 'mavci-builder' }, 'wrapper does not launder it'],
   ['deny', { ...bash('echo hi && node scripts/state.mjs --set-phase build'), agent_type: 'mavci-builder' }, 'compound does not launder it'],
   ['deny', { ...bash('node scripts/state.mjs --some-future-flag'), agent_type: 'mavci-builder' }, 'unrecognised subcommand fails closed'],
@@ -155,6 +163,12 @@ const CASES = [
   ['allow', { ...bash('node scripts/state.mjs --validate'), agent_type: 'mavci-verifier' }, 'verifier validates state'],
   ['allow', { ...bash('node scripts/state.mjs --baseline-prune'), agent_type: 'mavci-builder' }, 'pruning only retires fixed debt'],
   ['allow', bash('node scripts/state.mjs --set-phase build'), 'MAIN SESSION changes the phase (slash commands do this)'],
+  // Tier-2 confirm, not allow: --set-phase is the ONLY privileged flag exempted from the
+  // operator confirm, because slash commands run it routinely. Rewriting the manifest is not
+  // routine. NOTE: this is the 6th case asserting the literal 'deferToUser', a value Claude Code
+  // REJECTS (carried-forward item 7) - it asserts what the guard emits, not that the decision is
+  // applied. Real containment here rests on the deny rules, not on this confirm.
+  ['deferToUser', bash('node scripts/state.mjs --migrate-manifest'), 'MAIN SESSION migrates the manifest (operator, per doctor)'],
   ['deferToUser', bash('node scripts/state.mjs --reset-attempts 0001'), 'main session resets the ceiling - deliberate act'],
   ['deferToUser', bash('node scripts/state.mjs --reseal'), 'main session reseals - deliberate act'],
 

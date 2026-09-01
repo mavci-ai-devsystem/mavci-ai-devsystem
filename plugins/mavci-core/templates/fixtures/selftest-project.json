@@ -1,10 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project_id": "selftest",
   "display_name": "Doctor self-test fixture",
   "created": "2026-01-01T00:00:00Z",
   "stack": { "framework": "nextjs-14-app-router", "language": "typescript", "db": "supabase-postgres", "auth": "supabase-auth", "payments": "stripe", "email": "resend", "ai": "anthropic", "package_manager": "npm" },
-  "tenancy": { "model": "shared-schema-rls", "tenant_column": "org_id" },
+  "tenancy": { "model": "shared-schema", "isolation": "rls", "tenant_column": "org_id" },
   "deploy": { "target": "vercel", "prod_branch": "main", "site_url": "https://selftest.example.com" },
   "environments": { "prod": { "supabase_ref": "selftestprod", "protected": true } },
   "env_sources": { "runtime": "vercel-project-env", "required_keys": ["STRIPE_SECRET_KEY"], "never_read_by_agents": true },

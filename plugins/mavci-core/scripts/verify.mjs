@@ -176,7 +176,12 @@ export function classify(findings, { baseline, waivers }) {
     const suppressible = !UNSUPPRESSIBLE_SEVERITIES.has(f.severity);
     let status = 'fail';
 
-    if (f.errored) status = 'error';
+    // `not_checked` is decided BEFORE suppression, and is never suppressible.
+    // A baseline or waiver retires a VIOLATION; there is no violation here, only an
+    // absence of evidence. Letting it be baselined would file "we never looked" as
+    // accepted debt, and letting it be waived would put an expiry on a fact.
+    if (f.not_checked) status = 'not_checked';
+    else if (f.errored) status = 'error';
     else if (suppressible && isBaselined(baseline, f.check_id, f.path)) status = 'baselined';
     else if (suppressible && activeWaiver(waivers, f.check_id, f.path)) status = 'waived';
 
@@ -202,12 +207,16 @@ export function summarise(checks, ranIds) {
   const failedIds = new Set(checks.filter((c) => c.status !== 'pass').map((c) => c.check_id));
   const passing = ranIds.filter((id) => !failedIds.has(id));
 
-  const counts = { pass: passing.length, fail: 0, waived: 0, baselined: 0, error: 0, blockers: 0 };
+  const counts = { pass: passing.length, fail: 0, waived: 0, baselined: 0, error: 0, not_checked: 0, blockers: 0 };
   for (const c of checks) {
     if (c.status === 'fail') counts.fail++;
     else if (c.status === 'waived') counts.waived++;
     else if (c.status === 'baselined') counts.baselined++;
     else if (c.status === 'error') counts.error++;
+    // Counted, reported, and NOT added to `pass`. `failedIds` above already excludes
+    // it from `passing`, which is the property that matters: a rule that examined
+    // nothing cannot inflate a clean run.
+    else if (c.status === 'not_checked') counts.not_checked++;
     if ((c.status === 'fail' || c.status === 'error') && BLOCKING_SEVERITIES.has(c.severity)) counts.blockers++;
   }
   return { counts, passingIds: passing };
