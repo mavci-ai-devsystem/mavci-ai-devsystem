@@ -19,7 +19,10 @@
 
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import { PATHS, BLOCKING_SEVERITIES, UNSUPPRESSIBLE_SEVERITIES, DEFAULT_EXCLUDE_DIRS } from './config.mjs';
+import {
+  PATHS, BLOCKING_SEVERITIES, UNSUPPRESSIBLE_SEVERITIES, DEFAULT_EXCLUDE_DIRS,
+  EVIDENCE_MAX_CHARS, REMEDY_MAX_CHARS, CLAMP_MARKER,
+} from './config.mjs';
 import {
   abs, exists, readTextOrNull, walk, nowIso, canonicalJson, matchesAny, toPosix,
 } from './lib/fsx.mjs';
@@ -140,6 +143,29 @@ export async function runChecks(root = projectRoot(), { scope = 'full' } = {}) {
 /* ---------------------------------------------------------- suppression */
 
 /**
+ * Cut a finding string to the schema's cap, visibly.
+ *
+ * Gate 4c, finding 2. The cap used to fire at `writeControl`, as a THROW, after
+ * the run: one 583-character evidence string made `verify.mjs --record` fail on
+ * every turn in a project, which is the only mode the gate uses. The checker was
+ * offline and the reason was one verbose rule.
+ *
+ * Truncating here is not a workaround for the static check - the two cover
+ * different halves. `check-evidence-caps.mjs` holds the rule set's TEMPLATES
+ * under the cap at authoring time, in CI, which is where a fix is cheap. But
+ * templates interpolate live project data, so no static check can bound the
+ * result; this is the backstop for the string that only exists at runtime.
+ *
+ * Marked, never silent. A string that stops mid-sentence with no sign it was cut
+ * is finding 1 in a different costume - the message arrives, and the reader has
+ * no way to know something was removed.
+ */
+function clamp(text, max) {
+  if (typeof text !== 'string' || text.length <= max) return text ?? null;
+  return text.slice(0, max - CLAMP_MARKER.length) + CLAMP_MARKER;
+}
+
+/**
  * Apply baseline then waivers. Order matters only for reporting: a finding that
  * is both baselined and waived reports as baselined, because that is the older
  * and less deliberate of the two.
@@ -160,8 +186,13 @@ export function classify(findings, { baseline, waivers }) {
       severity: f.severity,
       path: f.path ?? null,
       line: f.line ?? null,
-      evidence: f.evidence ?? null,
-      remedy: f.remedy ?? null,
+      // Clamped HERE rather than at writeControl, so the human report, the CI
+      // annotation and the recorded verdict all show the same string. Clamping
+      // only on the way to disk would let `verify.mjs` and `verify.mjs --record`
+      // disagree about what the checker found, which is the divergence that made
+      // gate4c so hard to read.
+      evidence: clamp(f.evidence ?? null, EVIDENCE_MAX_CHARS),
+      remedy: clamp(f.remedy ?? null, REMEDY_MAX_CHARS),
     });
   }
   return checks;

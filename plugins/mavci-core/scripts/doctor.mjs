@@ -885,7 +885,8 @@ function checkLegalWatermarks(root, out) {
       + '\n         These carry a REVIEW REQUIRED watermark. The checker verifies the required'
       + '\n         sections are present; it cannot judge legal sufficiency and does not claim to.'
       + '\n         DO NOT SHIP TO PRODUCTION until a lawyer has reviewed the text and the'
-      + '\n         watermark is removed. /mavci-core:release treats this as a blocker.'),
+      + '\n         OPERATOR has removed the watermark. An agent may not remove it: deleting'
+      + '\n         the marker asserts a review that did not happen.'),
   });
 }
 
@@ -908,9 +909,58 @@ function findFile(root, re) {
 
 function checkLessons(root, out) {
   const p = abs(root, `${PATHS.lessons}/pending-system-change.md`);
-  if (exists(p)) {
-    out.push({ status: WARN, text: line(WARN, 'a system change is queued and unapplied', `${PATHS.lessons}/pending-system-change.md — apply it in the system repo with /mavci-core:retro --apply, or delete it.`) });
-  }
+  if (!exists(p)) return;
+  // "or delete it" used to end this line with no actor named. Deleting the
+  // record of an unfixed problem is an operator act, and a remedy that does not
+  // say so reads as an option to whoever is stuck - the same defect as "then
+  // delete the REVIEW REQUIRED marker". `retro.mjs --clear` is denied to an
+  // agent by the risk guard, so an agent that tried would hit a wall it was
+  // sent to; saying it here is cheaper than that.
+  out.push({
+    status: WARN,
+    text: line(WARN, 'a system change is queued and unapplied',
+      `${PATHS.lessons}/pending-system-change.md`
+      + `\n         Apply it in the system repo with ${COMMAND_PREFIX}retro --apply, then clear it`
+      + `\n         with ${COMMAND_PREFIX}retro --clear.`
+      + '\n         AUTHORITY: both are the operator\'s and the risk guard refuses them to an'
+      + '\n         agent. Filing is not fixing, and clearing without applying loses the only'
+      + '\n         record that the problem exists.'),
+  });
+}
+
+/**
+ * ENFORCEMENT DID NOT RUN, and the gate has stopped saying so.
+ *
+ * The other half of Gate 4c finding 3, and the half that makes ending the turn
+ * safe. `gate.mjs` blocks once on a checker fault and then lets the turn end,
+ * because the agent cannot fix a checker it is forbidden to edit. What stops
+ * that from being a plain fail-open is that something OUTSIDE the gate keeps
+ * saying it happened - which is the Phase 2 design constraint applied here:
+ * no component may be the only witness to its own failure.
+ *
+ * FAIL, not WARN. Invariant 5: "could not check" is never OK, and this marker
+ * is the system's own record that it could not check. It clears on a clean gate
+ * run and on nothing else, so a standing one is a live condition rather than
+ * a stale note.
+ */
+function checkUnverified(root, out) {
+  const m = readJsonOrNull(abs(root, PATHS.unverified));
+  if (!m) return;
+  const ageM = Math.round((Date.now() - Date.parse(m.last_at ?? m.since)) / 60_000);
+  const detail = String(m.detail ?? '').split('\n').slice(0, 3).join('\n         ');
+  out.push({
+    status: FAIL,
+    text: line(FAIL, `ENFORCEMENT DID NOT RUN - ${m.consecutive} turn(s), fault "${m.fault}", last ${ageM}m ago`,
+      'The standards gate could not verify these turns, and stopped blocking so the session'
+      + '\n         could continue. Code written in them was NEVER CHECKED. This is a fault in the'
+      + '\n         checker, not in the project, and an agent is not permitted to repair it.'
+      + `\n         ${PATHS.unverified} holds the full record. What it caught:`
+      + `\n         ${detail}`
+      + `\n         File it with ${COMMAND_PREFIX}retro, quoting that text. The marker clears only when a`
+      + '\n         gate run passes cleanly - not when a turn merely ends, and not by deleting it.'
+      + '\n         AUTHORITY: deleting this marker is the operator\'s, and deleting it instead of'
+      + '\n         fixing the checker files "unverified" away rather than resolving it.'),
+  });
 }
 
 function checkGateHeartbeat(root, out) {
@@ -1154,6 +1204,8 @@ function main() {
       checkWaivers(root, out);
       checkLegalWatermarks(root, out);
       checkGateHeartbeat(root, out);
+      // Before the heartbeat's "gate last ran (pass)" line would be read as reassurance.
+      checkUnverified(root, out);
       checkLessons(root, out);
     }
     // Outside a connected project there is no control/ directory to hold a

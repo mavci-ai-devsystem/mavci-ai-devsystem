@@ -40,6 +40,27 @@ jobs:
       - name: Gate fails closed
         run: node scripts/ci/check-gate.mjs
 
+      # `/mavci-core:retro` was named in seven places across eleven releases and
+      # never existed. The gate trapped an agent on a checker crash and sent it
+      # to a command that was not there - both halves of the operator channel
+      # absent at once. Nothing could see it, because a command reference is a
+      # prose string: no code builds one and no loader resolves one.
+      - name: Every command reference resolves to a real skill
+        run: node scripts/ci/check-command-refs.mjs
+
+      # One 583-character evidence string took the whole checker offline for a
+      # project. The cap lived only in verdict.schema.json, so it fired at
+      # writeControl - after the run, inside the gate - and `verify.mjs --record`,
+      # the only mode the gate uses, threw on every turn. Plain `verify.mjs` was
+      # healthy throughout, which is why testing that half proved nothing.
+      #
+      # Same job asserts the other authoring-time property of the rule set: a
+      # remedy needing authority the agent does not have must say so. "Have the
+      # text reviewed, then delete the REVIEW REQUIRED marker" told an agent to
+      # do one thing it cannot and one thing it must not.
+      - name: Rule strings fit their caps, and remedies name who can act
+        run: node scripts/ci/check-evidence-caps.mjs
+
       - name: Plugin structure
         run: node scripts/ci/check-plugin.mjs
 

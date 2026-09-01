@@ -69,14 +69,22 @@ export const PATHS = {
   integrity: `${CONTROL_DIR}/integrity.json`,
   gateRun: `${CONTROL_DIR}/gate-run.json`,
   hookRun: `${CONTROL_DIR}/hook-run.json`,
+  unverified: `${CONTROL_DIR}/unverified.json`,
 };
 
 /**
  * Every file the integrity hash covers. Anything that governs an agent belongs here.
- * `integrity.json` is excluded - it holds the hash. `gate-run.json` and
- * `hook-run.json` are excluded because they change on every turn and every
- * session by design; both are still inside control/, so agents cannot write
- * them and cannot fake a completed gate or a registered hook.
+ * `integrity.json` is excluded - it holds the hash. `gate-run.json`,
+ * `hook-run.json` and `unverified.json` are excluded because they change on
+ * every turn and every session by design; all three are still inside control/,
+ * so agents cannot write them and cannot fake a completed gate, a registered
+ * hook, or a verified session.
+ *
+ * `unverified.json` has a second reason to be excluded, and it is the important
+ * one: it is written on the path where the checker has just CRASHED. A write
+ * that had to reseal would need `state.mjs` to be healthy, which is exactly what
+ * cannot be assumed at that moment - and a marker that fails to be written on a
+ * broken system is a marker that only exists when it is not needed.
  */
 export const CONTROL_GLOBS = [
   PATHS.state,
@@ -144,8 +152,99 @@ export const WAIVER_EXPIRY_WARN_DAYS = 14;
 export const GATE_BUDGET_MS = 25_000;
 export const GATE_HOOK_TIMEOUT_S = 30;
 
-/** Consecutive `continue: true` gates allowed for one prompt before giving up. */
+/** Consecutive blocking gates allowed for one prompt before giving up. */
 export const GATE_MAX_CONTINUES = 3;
+
+/* ------------------------------------------------- enforcement did not run
+ *
+ * Gate 4c, finding 3. Two arms of this gate block, and only one of them has an
+ * exit the agent can reach.
+ *
+ * A VIOLATION is satisfiable: fix the code, the finding goes, the gate passes.
+ * GATE_MAX_CONTINUES caps it anyway, as a loop guard.
+ *
+ * A CHECKER FAULT is not. The fault is in the checker, the agent is forbidden to
+ * edit the checker, and the gate's own message says so - and then refused to let
+ * the turn end anyway. Three consecutive turns in gate4c ended in the identical
+ * crash; the fourth escaped by luck. The one arm the agent provably cannot
+ * satisfy was the only arm with no ceiling. That was inverted.
+ *
+ * Blocking the turn is NOT what makes the system fail-closed. Fail-closed is a
+ * property about not shipping unverified code, and it is held by `doctor`
+ * FAILing and by the release path refusing - both of which work whether or not a
+ * turn ends. What trapping the agent produces is no verification AND no report,
+ * which is strictly worse than ending the turn, because then the operator never
+ * hears about the crash at all.
+ *
+ * So: block ONCE, which gives the agent its chance to diagnose - genuinely
+ * valuable in gate4c - then let the turn end and leave a sticky marker that
+ * something outside the gate reports. `doctor` FAILs on it, the PreToolUse guard
+ * repeats it every turn, and only a CLEAN gate run clears it.
+ */
+export const GATE_MAX_FAULT_BLOCKS = 1;
+
+/**
+ * How enforcement failed. Closed enum, mirrored in unverified.schema.json and
+ * asserted equal by check-schemas.mjs - the hook-run.json precedent from 0.1.4,
+ * where a duplicated enum could otherwise drift silently.
+ *
+ *   timeout             the hook exceeded GATE_BUDGET_MS and the child was killed
+ *   crash               verify.mjs threw
+ *   unreadable_verdict  it returned something that is not a verdict
+ *   unreadable_payload  the hook payload was not JSON, so we knew neither project nor turn
+ *   gate_error          the gate itself faulted above the checker
+ */
+export const GATE_FAULT_KINDS = ['timeout', 'crash', 'unreadable_verdict', 'unreadable_payload', 'gate_error'];
+
+/**
+ * How much of the checker's own error text the marker keeps.
+ *
+ * Not unbounded: this string ends up in a Stop reason, and hook output is capped
+ * at 10,000 characters. Not one line either - that was finding 1, where
+ * `.split('\n')[0]` threw away every error the validator existed to produce.
+ */
+export const FAULT_DETAIL_MAX_CHARS = 2000;
+
+/* --------------------------------------------------- finding string caps
+ *
+ * Gate 4c, finding 2: THE CAP WAS ENFORCED AT THE WRONG END OF THE PIPE.
+ *
+ * `verdict.schema.json` has capped `evidence` at 500 and `remedy` at 300 since
+ * 0.1.0. Nothing checked a rule's strings against those numbers when the rule
+ * was written, because the numbers lived only in the schema and no code knew
+ * them. So the cap fired at `writeControl` - after the run, inside the gate,
+ * against a string already assembled from live project data.
+ *
+ * `settings.marketplace_form` produced 583 characters. The verdict could not be
+ * written, so `verify.mjs --record` - the ONLY mode the gate uses - threw on
+ * every turn in gate4c. Plain `verify.mjs` was healthy throughout: 11 pass,
+ * 5 fail, 1 blocker. Only recording was broken, and recording is the path
+ * enforcement runs on. One verbose string took the entire checker offline.
+ *
+ * Note the shape, because it generalises: the checker's most DETAILED finding is
+ * the one that disabled the checker. Length correlates with importance, so the
+ * cap bit hardest exactly where the evidence was most worth having.
+ *
+ * Three changes, and all three are needed:
+ *   1. the numbers live HERE, so `check-evidence-caps.mjs` can enforce them over
+ *      `scripts/rules/` at authoring time and fail the build;
+ *   2. `check-schemas.mjs` asserts they still equal the schema's `maxLength`,
+ *      because a cap checked at one number and enforced at another is worse
+ *      than no check;
+ *   3. `clampFinding` in verify.mjs TRUNCATES rather than throwing, because a
+ *      static check cannot see an interpolated string and a finding reported at
+ *      500 characters and visibly cut is worth incomparably more than a checker
+ *      that does not run.
+ *
+ * Raising these is allowed and is a deliberate act: change the number here, in
+ * verdict.schema.json, and say why. What is not allowed is discovering the cap
+ * by watching the gate throw.
+ */
+export const EVIDENCE_MAX_CHARS = 500;
+export const REMEDY_MAX_CHARS = 300;
+
+/** Appended when a string is cut. Visible on purpose: a silent truncation is a lie. */
+export const CLAMP_MARKER = ' [...cut]';
 
 /* ------------------------------------------------------------ scanning */
 export const DEFAULT_EXCLUDE_DIRS = new Set([

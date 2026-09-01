@@ -5,7 +5,9 @@ export default function Page() {
     <main className="prose mx-auto p-8">
       <h1>Kullanim Sartlari</h1>
       {/* REVIEW REQUIRED - draft text. A lawyer must review this before launch.
-          This marker is a warning during development and a blocker at /mavci-core:release. */}
+          Only the operator removes this marker, and only after that review: deleting it
+          asserts a review that did not happen. It is a warning while you build and a
+          blocker before you ship. */}
       <h2>Hizmetin kapsami</h2>
       <p>Bu sozlesme, __DISPLAY_NAME__ hizmetinin kullanimina iliskin sartlari
       duzenler. Hizmeti kullanarak bu sartlari kabul etmis sayilirsiniz.</p>

@@ -29,6 +29,7 @@ const GUARD = path.join(SCRIPTS, 'risk-guard.mjs');
 const RULES = path.join(SCRIPTS, 'rules', 'index.mjs');
 
 const state = await import(pathToFileURL(path.join(SCRIPTS, 'state.mjs')).href);
+const { readJsonOrNull } = await import(pathToFileURL(path.join(SCRIPTS, 'lib', 'fsx.mjs')).href);
 const { PATHS } = await import(pathToFileURL(path.join(SCRIPTS, 'config.mjs')).href);
 
 const MANIFEST = JSON.parse(fs.readFileSync(path.join(ROOT, 'plugins/mavci-core/templates/fixtures/selftest-project.json'), 'utf8'));
@@ -412,6 +413,185 @@ function assertDelivered(label, r, want) {
     ok('the session marker is consumed once - a later turn is a no-op again');
   } else {
     bad('session marker was not consumed: every later turn in this session would run the checker');
+  }
+}
+
+/* --- 7. A CHECKER FAULT MUST NOT TRAP THE AGENT FOREVER ----------------
+ *
+ * Gate 4c, finding 3. `failClosed` blocked on every crash with no ceiling, so a
+ * broken checker produced an unsatisfiable gate: the fault is IN THE CHECKER,
+ * which the agent is forbidden to edit, and the gate's own message says so -
+ * "This is a bug in the checker, not in your code" - and then refuses to let the
+ * turn end anyway. Three consecutive turns in gate4c ended in the identical
+ * crash. The fourth escaped only because an unrelated in-project fix happened to
+ * remove the offending string. That was luck, and luck must not be the exit.
+ *
+ * Note which arm had the ceiling and which did not: `readContinues` /
+ * GATE_MAX_CONTINUES capped the VIOLATION path, which the agent can satisfy by
+ * fixing its code, and left the CRASH path - the one arm it provably cannot
+ * satisfy - uncapped. That is inverted, and this case is the assertion that it
+ * stays the right way round.
+ *
+ * WHAT THE ASSERTION HAS TO BE, AND THE WRONG ONE IT REPLACES
+ * "The gate blocks on a crash" passes against the broken build: the gate blocks
+ * perfectly, forever. That is the adjacent-but-wrong signal again. The assertion
+ * that separates a working build from the broken one is that the agent REACHES A
+ * TURN END within N turns, AND that the session is marked unverified when it
+ * does - because ending the turn without the marker is just fail-open with extra
+ * steps.
+ */
+{
+  const tmp = makeProject(); cleanup.push(tmp);
+  const backup = fs.readFileSync(RULES, 'utf8');
+  fs.writeFileSync(RULES, 'this is not valid javascript {{{\n');
+  try {
+    const kinds = [];
+    const statuses = [];
+    // Each turn is a NEW prompt id, which is the case the old ceiling could not
+    // see: `readContinues` keys on prompt_id, so a fault that recurs across
+    // turns reset the counter every time. A fault ceiling has to key on the
+    // FAULT, not on the turn.
+    for (let i = 0; i < 4; i++) {
+      runGate(tmp, { hook_event_name: 'Stop', prompt_id: `fault${i}`, session_id: 's' }, { args: ['--mark-dirty'] });
+      const r = runGate(tmp, { hook_event_name: 'Stop', prompt_id: `fault${i}`, session_id: 's' });
+      kinds.push(decision(r.stdout).kind);
+      statuses.push(r.status);
+    }
+
+    if (statuses[0] === 2) ok('a checker fault blocks the first time (the agent gets its chance to diagnose)');
+    else bad(`checker fault: expected the first turn to block with exit 2, got status=${statuses[0]}`);
+
+    const ended = statuses.slice(1).findIndex((s) => s === 0);
+    if (ended !== -1) {
+      ok(`a repeated checker fault stops blocking: the turn ends on attempt ${ended + 2}`);
+    } else {
+      bad('a repeated checker fault NEVER lets the turn end - the agent is trapped in a fault it is '
+        + `forbidden to fix. statuses=${statuses.join(',')} kinds=${kinds.join(',')}`);
+    }
+
+    // Ending the turn is only half. Ending it silently is fail-open.
+    const marker = readJsonOrNull(path.join(tmp, PATHS.unverified));
+    if (!marker) {
+      bad('the turn ended with NO unverified marker in the control plane: nothing records that '
+        + 'these turns were never verified, so the next session cannot tell them from clean ones');
+    } else if (marker.fault === 'crash' && marker.consecutive >= 2) {
+      ok(`the session is marked unverified (fault=${marker.fault}, consecutive=${marker.consecutive})`);
+    } else {
+      bad(`unverified marker is present but wrong: ${JSON.stringify(marker)}`);
+    }
+
+    // And the detail has to survive into it, or the escalation the agent is
+    // finally permitted to make is one it cannot write.
+    if (marker && /schema|javascript|SyntaxError|Unexpected/i.test(marker.detail ?? '')) {
+      ok('the marker carries the checker\'s own error text, so the escalation can quote it');
+    } else if (marker) {
+      bad(`the marker records no usable detail: ${JSON.stringify(marker.detail ?? null)}`);
+    }
+  } finally {
+    fs.writeFileSync(RULES, backup);
+  }
+}
+
+/* --- 7a. THE REASON MUST ARRIVE WITH ITS CONTENTS ---------------------
+ *
+ * Gate 4c, finding 1. `interpretRunError` ended `.trim().split('\n')[0]`.
+ * `assertValid` is documented "Throw with every error at once" and puts every
+ * error on lines 2..N, so line 1 is the label and a colon and NOTHING ELSE. The
+ * gate delivered this, four times, verbatim:
+ *
+ *     The standards checker crashed: verify.mjs crashed: Error:
+ *     .mavci/control/verdicts/adhoc-1788254362466.json failed schema validation:.
+ *
+ * WHY THE ASSERTION IS `\n  - ` AND NOT "a reason exists".
+ * A reason existed the whole time. It was 90 characters of label ending in a
+ * colon, and it passed every test in this file, because every test asked whether
+ * something arrived rather than whether it said anything. `\n  - ` is
+ * `assertValid`'s own separator, so this assertion is written against the format
+ * the validator produces, not against what the gate happens to emit - the same
+ * discipline as `deliveredBlockingMessage` above, one layer down.
+ *
+ * Confirmed failing against 0.1.11 before the fix was written.
+ */
+{
+  const tmp = makeProject(); cleanup.push(tmp);
+  const backup = fs.readFileSync(RULES, 'utf8');
+  // The multi-error message is PRODUCED BY THE REAL `assertValid`, not imitated.
+  // Writing the expected string by hand would make this a test of our own
+  // spelling of the format - and if `assertValid` ever changed its separator,
+  // the hand-written fixture would keep passing while the gate went back to
+  // delivering nothing. That is the adjacent-but-wrong assertion, one more time.
+  //
+  // The inputs are the real gate4c case: an evidence string over 500 and a
+  // remedy over 300, which is exactly what took recording offline there.
+  //
+  // The module must LINK before it can throw. verify.mjs statically imports
+  // `rulesFor` and `ruleById`, so a stub without them fails at link time with
+  // "does not provide an export named", which is a DIFFERENT fault and would
+  // have tested nothing. Case 2 above uses unparseable JS on purpose; this one
+  // needs a module that loads correctly and then dies the way the real one did.
+  fs.writeFileSync(RULES, [
+    "import { assertValid } from '../lib/schema.mjs';",
+    'export const RULES = [];',
+    'export function rulesFor() { return []; }',
+    'export function ruleById() { return null; }',
+    "assertValid({ evidence: 'x'.repeat(600), remedy: 'y'.repeat(400) }, {",
+    '  type: "object",',
+    '  properties: {',
+    '    evidence: { type: "string", maxLength: 500 },',
+    '    remedy: { type: "string", maxLength: 300 },',
+    '  },',
+    "}, '.mavci/control/verdicts/adhoc-1788254362466.json');",
+    '',
+  ].join('\n'));
+  try {
+    const p = { hook_event_name: 'Stop', prompt_id: 'trunc', session_id: 's' };
+    runGate(tmp, p, { args: ['--mark-dirty'] });
+    assertDelivered('a crashed checker delivers EVERY validation error, not just the label',
+      runGate(tmp, p),
+      [/failed schema validation/, /\n {2}- /, /maxLength 500/, /maxLength 300/]);
+  } finally {
+    fs.writeFileSync(RULES, backup);
+  }
+}
+
+/* --- 7b. the marker clears only on a clean run ------------------------- */
+{
+  const tmp = makeProject(); cleanup.push(tmp);
+  // Plant a marker as a crashed gate would have left it.
+  fs.writeFileSync(path.join(tmp, PATHS.unverified), JSON.stringify({
+    schema_version: 1,
+    project_id: MANIFEST.project_id,
+    fault: 'crash', signature: 'x', consecutive: 2,
+    since: new Date(Date.now() - 60_000).toISOString().replace(/[.]\d{3}Z$/, 'Z'),
+    last_at: new Date(Date.now() - 60_000).toISOString().replace(/[.]\d{3}Z$/, 'Z'),
+    detail: 'planted', prompt_id: 'old', plugin_version: '0.0.0',
+  }, null, 2) + '\n');
+
+  // A FAILING run must NOT clear it. A fail verdict means the checker ran, but
+  // the operator has still never seen this project verified clean since the
+  // fault, and the marker is what tells them so. Clearing on a fail would let a
+  // project that has never once passed look identical to one that just did.
+  fs.mkdirSync(path.join(tmp, 'app', 'api', 'z'), { recursive: true });
+  fs.writeFileSync(path.join(tmp, 'app', 'api', 'z', 'route.ts'),
+    'export async function GET(){return Response.json({})}\n');
+  runGate(tmp, { hook_event_name: 'Stop', prompt_id: 'u1', session_id: 's' }, { args: ['--mark-dirty'] });
+  runGate(tmp, { hook_event_name: 'Stop', prompt_id: 'u1', session_id: 's' });
+  if (fs.existsSync(path.join(tmp, PATHS.unverified))) {
+    ok('a FAILING gate run does not clear the unverified marker');
+  } else {
+    bad('a failing run cleared the unverified marker - "enforcement never ran" and "enforcement '
+      + 'ran and found problems" would be indistinguishable afterwards');
+  }
+
+  // A clean run does.
+  fs.rmSync(path.join(tmp, 'app', 'api', 'z'), { recursive: true, force: true });
+  runGate(tmp, { hook_event_name: 'Stop', prompt_id: 'u2', session_id: 's' }, { args: ['--mark-dirty'] });
+  const r = runGate(tmp, { hook_event_name: 'Stop', prompt_id: 'u2', session_id: 's' });
+  if (!fs.existsSync(path.join(tmp, PATHS.unverified)) && r.status === 0) {
+    ok('a clean gate run clears the unverified marker');
+  } else {
+    bad(`a clean run left the marker in place (status=${r.status}) - it would never clear, and a `
+      + 'permanent FAIL is a FAIL nobody reads');
   }
 }
 

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "unverified.schema.json",
+  "title": "Mavci unverified-session marker",
+  "description": "Present when enforcement DID NOT RUN and the gate stopped blocking about it. Written by gate.mjs on a repeated checker fault; deleted only by a clean gate run. Its presence is a doctor FAIL. Outside CONTROL_GLOBS on purpose: it is written on the path where the checker has just crashed, so a write that had to reseal would need the very component that is broken.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "project_id", "fault", "signature", "consecutive", "since", "last_at", "plugin_version"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "project_id": { "type": "string" },
+    "fault": {
+      "type": "string",
+      "description": "MUST equal config.mjs GATE_FAULT_KINDS. check-schemas.mjs asserts it, because a duplicated enum that drifts is how a closed enum stops being closed.",
+      "enum": ["timeout", "crash", "unreadable_verdict", "unreadable_payload", "gate_error"]
+    },
+    "signature": {
+      "type": "string",
+      "description": "A normalised fingerprint of the fault. The ceiling counts CONSECUTIVE faults with the same signature, not consecutive turns: a fault recurs across prompts, so a per-prompt counter resets every turn and never reaches any ceiling. That is the bug this field exists to avoid repeating.",
+      "maxLength": 200
+    },
+    "consecutive": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "How many turns in a row have failed with this signature. The gate blocks while this is at or below GATE_MAX_FAULT_BLOCKS and lets the turn end afterwards."
+    },
+    "since": { "type": "string", "format": "date-time", "description": "First turn of this run of faults." },
+    "last_at": { "type": "string", "format": "date-time" },
+    "detail": {
+      "type": ["string", "null"],
+      "maxLength": 2000,
+      "description": "The checker's own error text, kept in full up to FAULT_DETAIL_MAX_CHARS. Truncated with a visible marker, never silently. This is what the escalation quotes, so an empty one makes the report unwritable."
+    },
+    "prompt_id": { "type": ["string", "null"] },
+    "session_id": { "type": ["string", "null"] },
+    "plugin_version": { "type": "string" }
+  }
+}

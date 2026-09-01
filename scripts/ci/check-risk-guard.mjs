@@ -70,6 +70,62 @@ const CASES = [
   ['allow', bash('echo ===; cat .mavci/control/integrity.json'), 'a read chained after another command'],
   ['allow', bash('grep -rn phase .mavci/control/'), 'grepping the control plane'],
 
+  /* --- THE WRITE TARGET, NOT THE COMMAND TEXT. Gate 4c, finding 5. -------
+   *
+   * The guard matched a regex against the whole command string, so any command
+   * that so much as NAMED `.mavci/control/` was refused as a write to it. Two
+   * false positives in one session, both on commands that wrote nothing there:
+   *
+   *   node -e "... assertValid(v, s, '.mavci/control/verdicts/adhoc-X.json') ..."
+   *   printf '%s' '... without opening `.mavci/control/verdicts/`.' >> .mavci/lessons/x.md
+   *
+   * The first was pure in-memory validation whose only mention of the control
+   * plane was a COSMETIC LABEL. The second was an append to `.mavci/lessons/` -
+   * agent-writable, explicitly allowed - whose only offence was quoting a
+   * control-plane path in English prose.
+   *
+   * The literal consequence is that THE CONTROL PLANE CANNOT BE DOCUMENTED FROM
+   * BASH: every lesson file describing how it fails trips the guard by naming
+   * the thing it describes. The system is hardest to write about exactly where
+   * writing about it matters most.
+   *
+   * The real cost is behavioural, and it is why this ranks above its severity. A
+   * guard that fires wrongly and often teaches everyone that its refusals are
+   * noise, and the documented escape is a bypass flag. THE FAILURE MODE OF A
+   * NOISY GUARD IS NOT THAT IT BLOCKS TOO MUCH; IT IS THAT IT TRAINS EVERYONE TO
+   * TURN IT OFF. In gate4c the agent reworded and re-ran twice instead - which
+   * is politeness, not a control, and not something to design around.
+   *
+   * BOTH HALVES ARE ASSERTED, and the ordering is the point. A test that only
+   * checked "a control-plane write is refused" passes against the broken build,
+   * because that half always worked. The half that fails against 0.1.11 is the
+   * `allow` group directly below.
+   */
+  ['allow', bash("printf '%s' 'see .mavci/control/verdicts/ for the record' >> .mavci/lessons/note.md"),
+    'writing to lessons/ while QUOTING a control path'],
+  ['allow', bash("echo 'the .mavci/control/ seal is recomputed' > notes.md"),
+    'writing elsewhere while naming the control plane'],
+  ['allow', bash("git commit -am 'describe .mavci/control/state.json handling'"),
+    'a commit whose message names the control plane'],
+  ['allow', bash("jq '.phase' .mavci/control/state.json > /tmp/phase.txt"),
+    'reading the control plane and writing the result elsewhere'],
+  ['allow', bash("echo 'checking .mavci/control/'"), 'merely printing the path'],
+
+  // ... and the half that must not weaken while the half above is fixed.
+  ['deny', bash("echo 'hello' >> .mavci/control/state.json"), 'append into the control plane'],
+  ['deny', bash('cp /tmp/x.json .mavci/control/state.json'), 'copy INTO the control plane'],
+  ['deny', bash('mv .mavci/control/state.json /tmp/'), 'move the control plane away'],
+  ['deny', bash('tee .mavci/control/state.json < /tmp/x'), 'tee into the control plane'],
+  ['deny', bash('touch .mavci/control/unverified.json'), 'create a control file by hand'],
+  ['deny', bash('chmod 777 .mavci/control/state.json'), 'change control-plane permissions'],
+  ['deny', bash('sudo rm -rf .mavci/control'), 'sudo is a prefix, not the command'],
+  ['allow', bash('sudo cat .mavci/control/state.json'), 'sudo before a read is still a read'],
+
+  // Undeterminable is still refused - but the guard must say WHICH it is. The
+  // old message claimed "this command targets .mavci/control/", which was a
+  // claim it had not established and which was false both times in gate4c.
+  ['deny', bash("python -c \"open('.mavci/control/state.json','w').write('{}')\""), 'arbitrary interpreter I/O'],
+
   // MCP
   ['deny', { tool_name: 'mcp__claude_ai_Supabase__execute_sql', tool_input: { project_id: 'selftestprod', query: 'select 1' } }, 'protected env'],
   ['deny', { tool_name: 'mcp__claude_ai_Supabase__execute_sql', tool_input: { project_id: 'other', query: 'DROP TABLE x' } }, 'destructive SQL anywhere'],
@@ -101,6 +157,20 @@ const CASES = [
   ['allow', bash('node scripts/state.mjs --set-phase build'), 'MAIN SESSION changes the phase (slash commands do this)'],
   ['deferToUser', bash('node scripts/state.mjs --reset-attempts 0001'), 'main session resets the ceiling - deliberate act'],
   ['deferToUser', bash('node scripts/state.mjs --reseal'), 'main session reseals - deliberate act'],
+
+  /* --- retro.mjs, the escalation channel (Gate 4c, finding 4) ----------
+   * Filing must be reachable by an agent or the channel does not exist - that
+   * is the entire finding. Applying and clearing must not be: one changes the
+   * system repository, the other deletes the record of an unfixed problem.
+   * The `allow` case is the load-bearing one here, and it is the one a
+   * deny-only test would never have.
+   */
+  ['allow', { ...bash('node scripts/retro.mjs --record "x" --finding "y"'), agent_type: 'mavci-builder' }, 'an AGENT files a finding'],
+  ['allow', { ...bash('node scripts/retro.mjs --list'), agent_type: 'mavci-builder' }, 'an agent lists queued findings'],
+  ['deny', { ...bash('node scripts/retro.mjs --apply'), agent_type: 'mavci-builder' }, 'an agent applies into the system repo'],
+  ['deny', { ...bash('node scripts/retro.mjs --clear'), agent_type: 'mavci-verifier' }, 'an agent deletes the queued findings'],
+  ['allow', bash('node scripts/retro.mjs --apply'), 'the OPERATOR applies'],
+  ['deferToUser', bash('node scripts/retro.mjs --clear'), 'the operator clears - deliberate act'],
 
   // must NOT be blocked - a guard that blocks everything is useless
   ['allow', bash('npm run build'), 'ordinary build'],
@@ -183,6 +253,32 @@ try {
     catch { failures.push(`${label}: guard emitted unparseable output`); continue; }
     const desc = input.tool_input?.command ?? input.tool_input?.file_path ?? input.tool_name;
     if (actual !== expected) failures.push(`${label} [${desc}]: expected ${expected}, got ${actual}`);
+  }
+
+  /* --- a refusal must not assert more than the guard established --------
+   *
+   * The second half of finding 5, and the one that is not about the decision.
+   * When the target genuinely cannot be determined - `node -e`, `python -c`,
+   * arbitrary interpreter I/O - refusing is right. Saying "this command targets
+   * .mavci/control/" is not: that is a claim the guard has not made and could
+   * not make, and it was FALSE both times it fired in gate4c.
+   *
+   * A guard that misstates why it refused sends the reader looking for a write
+   * that is not there. The honest message is the one that says the target could
+   * not be read, and the guard's own advice ("run a read as its own command")
+   * only makes sense once the reader knows which case they are in.
+   */
+  {
+    const undeterminable = runGuard(bash("node -e \"const p='.mavci/control/state.json'; console.log(p)\""));
+    if (undeterminable.decision !== 'deny') {
+      failures.push('an interpreter doing arbitrary I/O near the control plane must still be refused; '
+        + `got ${undeterminable.decision}`);
+    } else if (!/undeterminable|cannot be determined|could not be determined/i.test(undeterminable.reason)) {
+      failures.push('the refusal for an undeterminable target does not say the target is '
+        + `undeterminable - it says: "${undeterminable.reason.trim().slice(0, 140)}". `
+        + 'Claiming the command targets the control plane is a claim the guard has not established, '
+        + 'and it was false both times this fired in gate4c.');
+    }
   }
 
   for (const [name, scope] of Object.entries(SCOPES)) {

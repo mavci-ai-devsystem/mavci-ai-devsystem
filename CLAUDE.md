@@ -118,9 +118,26 @@ unverified (6.16).
 
 ## Current state
 
-Phase 1 built: `architect`, `builder`, `verifier`; 8+4 checker rules; the five
-scripts; hooks; scaffold; CI. Not yet built, per plan: `guardian`, `scribe`,
-`/release`, `/retro`, `/research`, five standards packs, nine further rules.
+Phase 1 built: `architect`, `builder`, `verifier`; 13 checker rules; six scripts
+(`state`, `redact`, `verify`, `gate`, `risk-guard`, `doctor`) plus `retro` and
+`build-agents`; hooks; scaffold; CI. Not yet built, per plan: `guardian`,
+`scribe`, `/release`, `/research`, five standards packs, nine further rules.
+
+**Gate 4 is CLOSED** (2026-09-01, project gate4c, against v0.1.11). Enforcement
+passed end to end: detection, verdict, exact line number, refusal, and
+**fix-in-place** — the agent named the check and the file from the Stop reason
+alone and repaired it in the same turn, without opening
+`.mavci/control/verdicts/`. Post-repair the verdict was clean and the file was
+byte-identical to HEAD. Full record in `docs/lessons/gate-4-closed.md`; the
+findings it produced are `docs/lessons/pending-system-change-0.1.12.md`, and
+0.1.12 is what was built from them.
+
+The lesson worth carrying past the result: **the gate can report a violation and
+cannot report itself.** Every one of the eight occurrences of the wrong-gate
+shape lived in a component's self-report. Gate 4 tested enforcement; it did not
+test enforcement's self-report, and 0.1.12 is the release that closes that for
+the gate specifically. Guardian and `/release` inherit the same problem, and the
+design constraint they must be built under is in `ROADMAP` Phase 2.
 
 Distribution is **partly proven.** Gate 4's re-run (2026-08-28) settled the
 shape of it: the plugin is installed **once per machine** with
@@ -372,9 +389,182 @@ the same turn, with nobody opening `.mavci/control/verdicts/` by hand. That path
 did not exist before this release, so it has never been exercised. It runs in
 gate4c against v0.1.11.
 
-### 0.1.12 — recorded, not built
+### 0.1.12 — the system can report its own failure
 
-**None of these is built.** Items 1–4 were logged against 0.1.10 and moved when
+**Cut 2026-09-01, against Gate 4's findings.** Gate 4 is CLOSED: enforcement
+passed end to end, including fix-in-place — the agent read the Stop reason,
+named the check and the file from it alone, and repaired the violation in the
+same turn without opening `.mavci/control/verdicts/`. Both lesson files are
+promoted to `docs/lessons/`, byte-identical, with `docs/lessons/README.md`
+carrying their provenance. That copy was manual because `/mavci-core:retro` did
+not exist, which is the first item below; the next promotion is a command.
+
+Build order was 4, 3, 1, 2, then the risk-guard finding as 5. Item 4 first
+because nothing else matters until the escalation channel does.
+
+**1 (finding 4) — `/mavci-core:retro` exists, and every command reference now
+resolves.** `scripts/retro.mjs` plus `skills/retro/`. The authority split is the
+design: `--record` is reachable by an **agent**, because a reporting channel an
+agent cannot reach is the trap; `--apply` and `--clear` are the operator's, gated
+by caller in `risk-guard.mjs` exactly as `state.mjs --set-phase` is.
+`check-command-refs.mjs` asserts every `/mavci-core:<name>` the plugin ships
+resolves to a real skill.
+
+**Confirmed failing against 0.1.11 first, and it found more than the finding
+predicted.** `/mavci-core:retro`: **exactly seven**, all seven inside `scripts/`
+and `skills/` — the prediction holds precisely. But the same check found
+**`/mavci-core:release` fourteen times** (7 in the finding's scope, plus three
+generated agents and four scaffold legal pages). That command is equally unbuilt
+and equally named. The finding counted only `retro` because `retro` was the one
+that trapped someone; `release` is the same defect that had not been stepped on
+yet. All 14 were reworded to name what exists — the operator — because an
+exception list for "we will build it later" is where this class of defect goes
+to live. When `/release` ships, the names come back.
+
+**2 (finding 3) — a checker fault blocks once, then lets the turn end and marks
+the session UNVERIFIED.** New `control/unverified.json`, its schema, and its
+enum asserted against `config.mjs`. `doctor` **FAILs** on it; the `PreToolUse`
+guard repeats it every tool call; it clears only on a gate run that **passes**,
+never on a fail and never on a turn merely ending. The counter keys on the fault
+**signature**, not `prompt_id` — each turn is a new prompt, so the old counter
+reset every turn and could never reach any ceiling, which is why the crash arm
+was uncapped in practice as well as in code.
+
+The assertion that separates a working build from the broken one is *the agent
+reaches a turn end within N turns*, not *the gate blocks on a crash* — the
+second passes against 0.1.11, where the gate blocks perfectly, forever.
+Confirmed failing first: `statuses=2,2,2,2  kinds=block,block,block,block`.
+
+**3 (finding 1) — the crash reason arrives with its contents.**
+`interpretRunError` ended `.split('\n')[0]`; `assertValid` puts every error on
+lines 2..N, so line 1 was the label and a colon. `check-gate.mjs` now asserts the
+delivered reason contains a `\n  - ` line, and the fixture **throws through the
+real `assertValid`** rather than imitating its format — a hand-written expected
+string would keep passing if the separator ever changed, which is the same
+adjacent-but-wrong shape. Proved both ways: green with the fix, red with the one
+line restored.
+
+**4 (finding 2) — caps are enforced where they can be fixed.**
+`EVIDENCE_MAX_CHARS`/`REMEDY_MAX_CHARS` move into `config.mjs`;
+`check-schemas.mjs` asserts they still equal the schema's `maxLength`;
+`check-evidence-caps.mjs` holds `scripts/rules/` under them at authoring time;
+`clamp` in `verify.mjs` truncates **with a visible marker** instead of throwing,
+for the interpolated string a static check cannot see. The 583-character
+`settings.marketplace_form` evidence was rewritten to fit — reproduced at exactly
+583 before the change.
+
+**This check passed against the broken build on its first run.** Two reasons,
+both instructive: the static half measured `rule.remedy`, which was never the
+problem, and the runtime fixture wrote `source: "github"`, tripping the same rule
+one branch earlier with a short string. Fixed by measuring the **evidence
+chains** and by pointing the fixture at the branch that actually produced 583.
+Two further versions of the chain scanner reported five false positives for one
+true one — first from a regex matching a quote inside a string, then because
+`blankSource` is documented "not a parser" and reads a backtick inside a regex
+literal as a template literal. It is anchored on `evidence:`, `remedy:` and
+`finding(` now. A check that cries wolf five times per real finding gets edited
+until it stops, and the real finding leaves with the noise.
+
+**5 (the risk-guard finding) — the guard matches the write TARGET, not the
+command text.** Two false positives in one session, both on commands that wrote
+nothing to the control plane: a `node -e` whose only mention was a cosmetic label
+string, and a `printf >> .mavci/lessons/` whose only offence was quoting a
+control-plane path in English prose. The literal consequence is that the control
+plane could not be documented from Bash — every lesson file describing how it
+fails tripped the guard by naming the thing it describes.
+
+The reason this ranks above its severity is behavioural. **A guard that fires
+wrongly and often trains everyone to turn it off**, and the documented escape is
+a bypass flag. Rewording and re-running twice, which is what happened in gate4c,
+is politeness rather than a control and must not be designed around.
+
+The fix distinguishes naming a path from writing to one: redirection targets and
+the operand positions of known writers are targets whatever their quoting; a path
+appearing only inside a quoted operand of a non-writer is data. Fail-closed is
+preserved — an unrecognised command with an **unquoted** control path, or any
+interpreter doing arbitrary I/O, is still refused. What changed there is the
+message: it now says the target could not be determined, instead of asserting
+*"this command targets .mavci/control/"*, which the guard had not established and
+which was false both times it fired. `check-risk-guard.mjs` asserts both halves;
+the `allow` half failed four times against 0.1.11 and the `deny` half never
+regressed. 80 cases now, up from 62.
+
+**6 — remedy authority is in the rule text, and in a check.** A rule declares
+`authority: 'agent' | 'operator' | 'external'`, and anything but `agent` must
+carry an `AUTHORITY:` note naming who can act. Four rules declare one.
+
+This is Gate 4c's fourth declined path made structural. *"Have the text reviewed,
+then delete the REVIEW REQUIRED marker"* asked an agent to do one thing it cannot
+and one thing it must not, and the cheap path was **sanctioned by the check's own
+remedy text**. The agent declined, which is the only reason it is a design note
+and not an incident. A remedy that only the operator or an outside party can
+perform, written as if the reader could perform it, is not advice — it is an
+instruction to fabricate. The same wording is now in `doctor`'s legal-watermark
+warning and in the four scaffold legal pages.
+
+**Also fixed, found while reading:** ARCHITECTURE 6.4's `hooks.json` example
+still showed `"command": ["node", …]` — the array form that made v0.1.2 install
+with **zero hooks**. A governing document showing the broken form as canonical is
+how that comes back.
+
+**Still open, deliberately.** The `deferToUser` finding (item 7 of the old list,
+below) is **not** in this release. Its condition stands unmet: the decision-control
+table has not loaded this session, so the accepted value cannot be quoted
+verbatim, and `ask` versus `defer` is exactly the adjacent-but-wrong distinction
+this Gate keeps finding. Guessing at a hook payload value is how both this and the
+Stop gate happened. Tier 3 is unaffected — `deny()` is valid and was observed
+hard-blocking.
+
+**Not built, and now written down where it cannot be lost:** `/mavci-core:release`
+must refuse while `control/unverified.json` stands. That is the half of
+fail-closed that moves to the ship gate when the turn is allowed to end, and
+until `/release` exists only `doctor` and the `PreToolUse` notice hold it. It is
+recorded in ROADMAP Phase 2 as a gap, not described as a design. The dangling
+`/release` references it shares a name with are finding 8 below.
+
+### The method earned its place three times in this release — record it
+
+Each of these is `CLAUDE.md`'s rule — *name the broken build the assertion must
+catch, and show it failing first* — producing a result nothing else would have
+produced. They are recorded as method, not as incidents.
+
+**1. Three tries to find the assertion that discriminates (item 4/finding 2).**
+The evidence-cap check **passed against the broken build on its first run.** It
+measured `rule.remedy`, which was never the problem, and its runtime fixture
+tripped the rule one branch early with a short string. Two further versions of
+the chain scanner then reported **five false positives for every true one** —
+first a regex opening a phantom literal at a quote inside a string, then
+`blankSource` reading a backtick inside a regex literal as a template literal.
+Only the fourth version discriminated. **Without "show it failing first", version
+one ships as coverage** and the 583-character string is caught by nobody until it
+takes another project's checker offline. Note also that five-false-positives-per-
+true-one is not a cosmetic defect: it is item 5's lesson one layer up, and a check
+in that state gets edited until it stops complaining.
+
+**2. A ceiling that cannot be reached is the same shape as an assertion that
+cannot fail (item 2/finding 3).** `readContinues` keys on `prompt_id`. Every turn
+is a new prompt, so the counter reset to zero every turn — the crash arm was
+uncapped *in practice* as well as in code, and reading the code alone would have
+shown a ceiling sitting right there. It was only visible from the outside, as
+`statuses=2,2,2,2`. The same family as `check-gate.mjs` asserting payload shape
+for seven releases: a mechanism that is present, correct-looking, and never
+reached.
+
+**3. Loosening a guard without proving the denials survived is how the loosening
+becomes the hole (item 5).** The `allow` half failed four times against 0.1.11 and
+the `deny` half never regressed once — which is the only reason the rewrite from
+string-matching to target-matching is trustworthy. A test of the `allow` half
+alone would have gone green on a guard that had stopped denying anything, and the
+whole change is a *relaxation*: that is precisely the direction where one-sided
+evidence is worthless. Both directions, every time a control is loosened.
+
+### Carried forward — still not built
+
+**Items 1–4 and 5–6 below remain unbuilt; item 7 is held deliberately, for the
+reason given in the 0.1.12 entry above.** The list is kept verbatim rather than
+rewritten, because each entry carries the reasoning that made it a decision.
+
+Items 1–4 were logged against 0.1.10 and moved when
 0.1.10 was cut as a single-purpose gate fix; 5 and 6 are from Gate 4c; 7 is the
 risk-guard `deferToUser` finding. They moved again at 0.1.11, for the same reason
 and by the same rule: 0.1.11 exists so that the fix-in-place result can be
@@ -521,6 +711,36 @@ nobody will notice, which is also the argument for not deferring it twice.
    against Claude Code's accepted set, not against our own case table.** Every one
    of the seven instances this session found shares that shape: the assertion was
    internally consistent and never checked against the thing outside it.
+
+8. **`/mavci-core:release` was named 14 times and did not exist — the same defect
+   as `retro`, undetected only because nobody stepped on it.** Found by
+   `check-command-refs.mjs` on its first run against 0.1.11, in the same sweep
+   that confirmed retro's seven. Seven references in `scripts/` and `skills/`,
+   three in the generated agents, four in the scaffold legal pages that ship into
+   every project.
+
+   Retro's absence was discovered by an agent being trapped by it. `/release`'s
+   absence was discovered by a check, before anyone hit it — which is the whole
+   argument for the check, and the reason this is logged as a finding rather than
+   as a footnote to the retro fix. **A dangling reference is not a smaller defect
+   because nobody has reached it yet; it is the same defect earlier.** The
+   `legal.pages_present` remedy told an agent a warning "blocks
+   /mavci-core:release", the risk guard told it "deploys go through
+   /mavci-core:release", and both were instructions to use a door that is a wall.
+
+   **The fix was to name the operator, not to add an exception list.** An
+   allowance for "planned, not built yet" is where exactly this class of defect
+   goes to live: it converts a build failure into a list entry, and a list entry
+   into a permanent condition. All 14 were reworded to name what exists.
+
+   **What is owed when `/release` ships:** the names come back — the remedy, the
+   risk-guard deploy message, the agent contract line and the four scaffold
+   watermarks should say `/mavci-core:release` again, because that will then be
+   the true and most useful thing to say. `check-command-refs.mjs` is what makes
+   restoring them safe *and* what forbids restoring them early: the moment
+   `skills/release/` exists the references resolve and the build stays green, and
+   until then any one of them fails it. The check is the enforcement in both
+   directions, which is why no reminder is needed here beyond this paragraph.
 
 ---
 

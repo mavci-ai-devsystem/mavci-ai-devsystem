@@ -63,6 +63,8 @@ jobs:
           node scripts/ci/check-hooks-quiet.mjs
           node scripts/ci/check-packaging.mjs
           node scripts/ci/check-command-invocation.mjs
+          node scripts/ci/check-command-refs.mjs
+          node scripts/ci/check-evidence-caps.mjs
 
       # The release gate that would have stopped v0.1.2. A hooks.json Claude Code
       # rejects installs cleanly and registers ZERO hooks, so a tag must never

@@ -527,6 +527,12 @@ export function validateAll(root) {
   check(PATHS.waivers, 'waivers');
   check(PATHS.integrity, 'integrity');
   check(PATHS.hookRun, 'hook-run');
+  // Same reasoning as hook-run in 0.1.4: a control file with no schema is a
+  // control file nothing validates, and `state.schema_valid` is the rule that
+  // would otherwise never look at it. It is written outside writeControl - on
+  // the path where the checker has just crashed - so this is the only place its
+  // shape is ever checked.
+  check(PATHS.unverified, 'unverified');
 
   for (const dir of [PATHS.controlTasks, PATHS.verdicts, PATHS.tasks]) {
     const d = abs(root, dir);

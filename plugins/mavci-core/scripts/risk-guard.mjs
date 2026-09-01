@@ -30,9 +30,6 @@ const PLUGIN_ROOT = path.resolve(HERE, '..');
 
 const CONTROL_PATH_RE = /\.mavci[/\\]control/;
 
-/** Reads. Anchored per SEGMENT, so a read chained after anything still counts. */
-const READ_CMD_RE = /^(sudo\s+)?(cat|head|tail|less|more|type|grep|rg|jq|ls|dir|stat|wc|file|find|cmp|diff|md5sum|sha256sum|git\s+(diff|status|log|show))\b/;
-
 /** The plugin's own entry points, which own the control plane. */
 const PLUGIN_SCRIPT_RE = /scripts[/\\](state|gate|verify|doctor)\.mjs/;
 
@@ -57,11 +54,194 @@ function stripDataOperands(cmd) {
     .replace(/(^|\s)(-m|--message)(\s+)(['"])[\s\S]*?\4/g, '$1$2$3DATA');
 }
 
-/** Does this ONE subcommand act on the control plane, other than by reading it? */
-function targetsControlPlane(cmd) {
-  return CONTROL_PATH_RE.test(cmd)
-    && !PLUGIN_SCRIPT_RE.test(cmd)
-    && !READ_CMD_RE.test(cmd);
+/* ------------------------------------------- what does this command WRITE?
+ *
+ * Gate 4c, finding 5. The guard used to ask "does the command STRING contain
+ * `.mavci/control`", which is a question about text, not about targets. It
+ * refused two commands in one session that wrote nothing there:
+ *
+ *   node -e "... assertValid(v, s, '.mavci/control/verdicts/adhoc-X.json') ..."
+ *   printf '%s' '... without opening `.mavci/control/verdicts/`.' >> .mavci/lessons/x.md
+ *
+ * The first mentioned the control plane only in a COSMETIC LABEL passed to a
+ * pure in-memory function. The second appended to `.mavci/lessons/` - explicitly
+ * agent-writable - and its only offence was quoting a control-plane path in
+ * English prose. The guard's own advice, "a read is allowed, run it as its own
+ * command", did not cover either case, because the matcher was looking at the
+ * wrong thing.
+ *
+ * The literal consequence: THE CONTROL PLANE CANNOT BE DOCUMENTED FROM BASH.
+ * Every lesson file describing how it fails trips the guard by naming the thing
+ * it describes.
+ *
+ * The real cost is behavioural, and it is why this was fixed rather than lived
+ * with. A guard that fires wrongly and often teaches everyone that its refusals
+ * are noise, and the documented escape is a bypass flag. The failure mode of a
+ * noisy guard is not that it blocks too much; it is that it trains everyone to
+ * turn it off. In gate4c the agent reworded and re-ran twice instead. That is
+ * politeness, not a control, and nothing should be designed around it.
+ *
+ * SO THE QUESTION IS NOW ABOUT POSITION, AND THE ANSWER HAS THREE VALUES:
+ *
+ *   'write'         a control-plane path is the target of a redirection or of a
+ *                   known writing command. Refuse, and say what it writes.
+ *   'undetermined'  the command can do arbitrary I/O (`node -e`, `python -c`) or
+ *                   is not recognised at all, and a control path appears
+ *                   UNQUOTED where an operand would be. Refuse - but say the
+ *                   target could not be read, which is the truth. Claiming it
+ *                   "targets .mavci/control/" is a claim the guard has not
+ *                   established, and it was false both times in gate4c.
+ *   'none'          the path appears only as data: inside a quoted operand of a
+ *                   command that does not write, or as the argument of a read.
+ *
+ * Fail-closed is preserved, and this is the part not to weaken: an UNRECOGNISED
+ * command with an unquoted control path is 'undetermined', not 'none'. What
+ * changed is that quoted prose is data, which is what the four false positives
+ * all were.
+ */
+
+/** Reads. Their operands are safe even unquoted; a redirect is checked separately. */
+const READ_HEADS = new Set([
+  'cat', 'head', 'tail', 'less', 'more', 'type', 'grep', 'rg', 'jq', 'ls', 'dir',
+  'stat', 'wc', 'file', 'find', 'cmp', 'diff', 'md5sum', 'sha256sum', 'sort', 'uniq',
+  'get-content', 'select-string',
+]);
+
+/** Every operand is a write target. `mv` included: moving a file away deletes it. */
+const WRITE_ALL_OPERANDS = new Set([
+  'rm', 'unlink', 'shred', 'truncate', 'mkdir', 'rmdir', 'touch', 'chmod', 'chown',
+  'chgrp', 'ln', 'mv', 'rsync', 'install', 'tee', 'sed', 'perl', 'awk',
+  'remove-item', 'new-item', 'set-content', 'add-content', 'clear-content', 'out-file',
+  'move-item', 'copy-item',
+]);
+
+/** Only the LAST operand is written. Copying OUT of the control plane is a read. */
+const WRITE_LAST_OPERAND = new Set(['cp']);
+
+/** Arbitrary I/O: the target cannot be read from the command line at all. */
+const INTERPRETERS = new Set([
+  'node', 'deno', 'bun', 'python', 'python3', 'py', 'perl', 'ruby', 'php', 'lua',
+  'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'pwsh', 'powershell', 'cmd',
+  'eval', 'source', 'osascript', 'docker', 'ssh',
+]);
+
+/** `git <sub>` that can overwrite or delete working-tree paths. */
+const GIT_WRITE_SUBCOMMANDS = new Set(['checkout', 'restore', 'rm', 'clean', 'apply', 'mv']);
+
+/**
+ * Split one subcommand into tokens, remembering which were quoted and which
+ * redirection each follows. Quoting is the whole distinction between a path
+ * being a target and a path being prose.
+ */
+function tokenize(cmd) {
+  const tokens = [];
+  let cur = '';
+  let quoted = false;
+  let started = false;
+  let q = null;
+  const push = () => {
+    if (started) tokens.push({ text: cur, quoted });
+    cur = ''; quoted = false; started = false;
+  };
+  for (let i = 0; i < cmd.length; i += 1) {
+    const c = cmd[i];
+    if (q) {
+      if (c === q) { q = null; continue; }
+      cur += c; started = true;
+      continue;
+    }
+    if (c === '"' || c === "'") { q = c; quoted = true; started = true; continue; }
+    if (/\s/.test(c)) { push(); continue; }
+    // Redirection operators are shell syntax and only when UNQUOTED. `>file`
+    // with no space is one token in the shell's eyes and two here.
+    if (c === '>' || c === '<') {
+      push();
+      let op = c;
+      if (cmd[i + 1] === '>') { op += '>'; i += 1; }
+      tokens.push({ text: op, redirect: true });
+      continue;
+    }
+    if (c === '&' && cmd[i + 1] === '>') { push(); tokens.push({ text: '&>', redirect: true }); i += 1; continue; }
+    cur += c; started = true;
+  }
+  push();
+  // `2>` and `1>>` arrive as a digit token immediately before a redirect.
+  return tokens.filter((t, i) => !(/^\d$/.test(t.text) && tokens[i + 1]?.redirect));
+}
+
+const isFlag = (t) => !t.redirect && t.text.startsWith('-');
+
+/**
+ * @returns {{kind: 'write'|'undetermined'|'none', target?: string}}
+ */
+function controlPlaneTarget(cmd) {
+  // The sanctioned channel owns the control plane. It is authorised by CALLER
+  // further down, not here.
+  if (PLUGIN_SCRIPT_RE.test(cmd)) return { kind: 'none' };
+  if (!CONTROL_PATH_RE.test(cmd)) return { kind: 'none' };
+
+  const tokens = tokenize(cmd);
+  if (!tokens.length) return { kind: 'none' };
+
+  // 1. Redirection targets. Always a write, quoted or not: `> ".mavci/control/x"`
+  //    is a write to that path and the quotes are the shell's business.
+  for (let i = 0; i < tokens.length - 1; i += 1) {
+    if (tokens[i].redirect && tokens[i].text.includes('>')) {
+      const t = tokens[i + 1].text;
+      if (CONTROL_PATH_RE.test(t)) return { kind: 'write', target: t };
+    }
+  }
+
+  // `sudo` is a prefix, not the command. Dropping it here rather than blanking
+  // the head keeps `sudo rm -rf .mavci/control` classified as the `rm` it is:
+  // it was still refused without this, but as an UNDETERMINED target, which is
+  // the wrong reason - and a refusal that misstates its reason is the defect
+  // this whole function exists to fix.
+  let rest = tokens.filter((t) => t.redirect || !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t.text));
+  while (rest[0] && !rest[0].redirect && /^(sudo|doas)$/i.test(rest[0].text)) rest = rest.slice(1);
+
+  const headToken = rest.find((t) => !t.redirect);
+  const head = (headToken?.text ?? '').toLowerCase();
+  const base = head.split(/[/\\]/).pop().replace(/\.(exe|cmd|ps1)$/, '');
+  const operands = rest.filter((t, i) => t !== headToken && !t.redirect && !isFlag(t)
+    && !(rest[i - 1]?.redirect));
+
+  // 2. Known writers: their operands are targets whatever the quoting.
+  if (WRITE_ALL_OPERANDS.has(base)) {
+    const hit = operands.find((t) => CONTROL_PATH_RE.test(t.text));
+    if (hit) return { kind: 'write', target: hit.text };
+    return { kind: 'none' };
+  }
+  if (WRITE_LAST_OPERAND.has(base)) {
+    const last = operands.at(-1);
+    if (last && CONTROL_PATH_RE.test(last.text)) return { kind: 'write', target: last.text };
+    return { kind: 'none' };
+  }
+  if (base === 'git') {
+    const sub = operands[0]?.text;
+    if (GIT_WRITE_SUBCOMMANDS.has(sub)) {
+      const hit = operands.slice(1).find((t) => CONTROL_PATH_RE.test(t.text));
+      if (hit) return { kind: 'write', target: hit.text };
+    }
+    // `git commit -m "... .mavci/control/ ..."` and every other read-shaped git
+    // subcommand: the message is prose, not a target. This exact case blocked
+    // the commit that documented this guard.
+    return { kind: 'none' };
+  }
+
+  // 3. Arbitrary I/O. Refuse, but do not claim to know what it writes.
+  if (INTERPRETERS.has(base)) return { kind: 'undetermined' };
+
+  // 4. Reads: operands are safe. A redirect was already checked at step 1.
+  if (READ_HEADS.has(base)) return { kind: 'none' };
+
+  // 5. Unrecognised command. FAIL CLOSED on an unquoted operand that looks like
+  //    a control path - this is the branch that keeps the guard a guard - but a
+  //    path that appears ONLY inside quotes is data, which is what all four
+  //    gate4c false positives were.
+  const unquotedHit = operands.find((t) => !t.quoted && CONTROL_PATH_RE.test(t.text));
+  if (unquotedHit) return { kind: 'undetermined', target: unquotedHit.text };
+  return { kind: 'none' };
 }
 
 /* ------------------------------------------------------------ decisions */
@@ -244,6 +424,25 @@ function main() {
    * call is allowed to proceed - but the operator is told, every time, until a
    * gate completes. Silence would be indistinguishable from a clean run.
    */
+  /* ---- report a session the gate gave up on (Gate 4c, finding 3) --------
+   * `gate.mjs` blocks once on a checker fault, then lets the turn end and
+   * leaves a marker. Something outside the gate has to keep saying so, or
+   * ending the turn is a fail-open with a file nobody opens. `doctor` FAILs on
+   * it once a session; this repeats it on every tool call, because the turns it
+   * describes are the turns being written right now.
+   *
+   * Notice, not deny. The condition is that enforcement is BROKEN, and denying
+   * every tool call would re-create the trap the marker exists to end.
+   */
+  const unver = readJsonOrNull(abs(root, PATHS.unverified));
+  if (unver) {
+    notice(`mavci: THIS SESSION IS UNVERIFIED. The standards gate failed to run `
+      + `${unver.consecutive} turn(s) in a row (fault: ${unver.fault}) and stopped blocking so work `
+      + 'could continue. Nothing written since has been checked. The fault is in the checker, not in '
+      + `your code, and you may not repair it: file it with /mavci-core:retro, quoting `
+      + `${PATHS.unverified}. This clears only when a gate run passes.`);
+  }
+
   const run = readJsonOrNull(abs(root, PATHS.gateRun));
   if (run && run.completed === null && run.prompt_id !== (input.prompt_id ?? null)) {
     const age = Math.round((Date.now() - Date.parse(run.started)) / 1000);
@@ -267,7 +466,7 @@ function main() {
     // Money and account-shape changes are never an agent's call.
     if (/__buy_|__create_project|__delete_branch|__pause_project|__restore_project|update_project_deployment_protection|deploy_to_vercel/.test(tool)) {
       deny(`${tool} changes an external account, spends money or deploys. Tier 3: operator only. `
-        + 'Ask the operator to do this, or use /mavci-core:release for a deploy.');
+        + 'Ask the operator to run it and say exactly what you need done.');
     }
 
     if (/Supabase__(execute_sql|apply_migration)/.test(tool)) {
@@ -275,13 +474,13 @@ function main() {
         if (typeof sql !== 'string') continue;
         for (const d of DESTRUCTIVE_SQL) {
           if (d.re.test(sql)) deny(`${d.why} is tier 3 and is blocked in every environment, including local. `
-            + 'Write a reversible migration instead, and have the operator apply it through /mavci-core:release.');
+            + 'Write a reversible migration instead, and have the operator apply it.');
         }
       }
       const ref = ti.project_id ?? ti.project_ref ?? null;
       if (ref && protectedRefs.has(ref)) {
         deny(`this call targets Supabase project "${ref}", which .mavci/project.json marks as protected. `
-          + 'Writing to a protected environment is tier 3: operator only, via /mavci-core:release.');
+          + 'Writing to a protected environment is tier 3: the operator does it, not you.');
       }
       if (!ref && protectedRefs.size) {
         confirm('this SQL call does not name a project ref, and this project has a protected environment. '
@@ -450,6 +649,45 @@ function main() {
       }
     }
 
+    /* --- retro.mjs: filing is an agent's, applying is not ---------------
+     *
+     * The escalation channel has to be REACHABLE by an agent or it is not a
+     * channel - that is the whole of Gate 4c finding 4, where seven messages
+     * told an agent to run a command that did not exist. So `--record` is
+     * deliberately open: an agent that is blocked must always be able to say so.
+     *
+     * `--apply` carries a finding into the SYSTEM REPOSITORY, where it changes
+     * how every downstream project is built - the one place an agent must never
+     * reach on its own, and the rule it held to for three trapped turns in
+     * gate4c rather than make a four-character fix it could see.
+     *
+     * `--clear` deletes the record of an unfixed problem. That is the same shape
+     * as deleting a REVIEW REQUIRED marker: an act the agent is physically able
+     * to perform and must not, because doing it files the problem away instead
+     * of resolving it.
+     *
+     * Authorised by CALLER, exactly like state.mjs above: `agent_type` is set
+     * for a subagent and absent in the main session (4.9).
+     */
+    if (/\bretro\.mjs\b/.test(cmd)) {
+      const RETRO_PRIVILEGED = {
+        '--apply': 'carry a finding into the system repository, which governs every project',
+        '--clear': 'delete the record of a problem that has not been fixed',
+      };
+      const flags = cmd.match(/--[a-z-]+/g) ?? [];
+      const privileged = flags.filter((f) => f in RETRO_PRIVILEGED);
+      if (agent && privileged.length) {
+        deny(`${agent} may not run \`retro.mjs ${privileged[0]}\`. That would `
+          + `${RETRO_PRIVILEGED[privileged[0]]}. File the finding with \`--record\` and stop - `
+          + 'that is the whole of your authority here, and it is enough: doctor reports an '
+          + 'unapplied finding on every run until an operator acts on it.');
+      }
+      if (!agent && privileged.includes('--clear')) {
+        confirm('this deletes the queued system findings. Do it after applying them, not instead: '
+          + 'the file is the record of what is still unfixed.');
+      }
+    }
+
     /* --- control-plane writes through a subprocess (B1 mitigation 2) ---
      *
      * Matched on INTENT, per command, not on the raw string.
@@ -470,13 +708,26 @@ function main() {
      * chained after another command (`echo x; cat state.json`) is now recognised
      * as the read it is, instead of being reported as a write.
      */
-    if (targetsControlPlane(cmd)) {
-      deny(`this command targets .mavci/control/ outside state.mjs (\`${cmd}\`). `
+    const cp = controlPlaneTarget(cmd);
+    if (cp.kind === 'write') {
+      deny(`this command writes to ${cp.target}, inside .mavci/control/, outside state.mjs. `
         + 'The control plane holds the phase, retry ceiling, baseline and waivers; writing it '
         + 'directly bypasses validation, redaction and the integrity seal. The seal will detect '
-        + 'it anyway. Use state.mjs. A read is allowed - run it as its own command '
-        + '(cat, head, grep, jq ...); a read wrapped in `node -e` cannot be told apart from a '
-        + 'write from here, so it is refused.');
+        + 'it anyway. Use state.mjs. Reading it is allowed and needs no workaround.');
+    }
+    if (cp.kind === 'undetermined') {
+      // Say what is true. The old message asserted "this command targets
+      // .mavci/control/" for every command that merely NAMED the path, which was
+      // a claim the guard had not established and was false both times it fired
+      // in gate4c - once on a pure in-memory validation, once on an append to
+      // .mavci/lessons/. A refusal that misstates its reason sends the reader
+      // hunting for a write that is not there.
+      deny('the write target of this command could not be determined, and it names a path inside '
+        + `.mavci/control/ (\`${cmd.slice(0, 160)}\`). This is not a claim that it writes there - it `
+        + 'is that the guard cannot tell, so it refuses rather than guess. Run it as a plain '
+        + 'command whose target is visible (cat, jq, cp ... ), or use state.mjs if it really does '
+        + 'need to write. Quoting a control-plane path inside a message or a string operand is '
+        + 'fine and is not what this is about.');
     }
 
     /* --- reading secrets through a subprocess (5.8 mitigation) --------- */
@@ -512,7 +763,7 @@ function main() {
       }
       deny(`${h.why} is tier 3: hard-blocked for agents. `
         + (/(--prod|railway up|deploy)/.test(cmd)
-          ? 'Deploys go through /mavci-core:release, which prints the command for the operator to run.'
+          ? 'A deploy belongs to the operator: print the exact command for them and stop.'
           : 'If this is genuinely needed, the operator must run it.'));
     }
 

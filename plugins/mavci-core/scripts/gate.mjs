@@ -28,7 +28,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { PATHS, GATE_BUDGET_MS, GATE_MAX_CONTINUES } from './config.mjs';
+import {
+  PATHS, GATE_BUDGET_MS, GATE_MAX_CONTINUES,
+  GATE_MAX_FAULT_BLOCKS, GATE_FAULT_KINDS, FAULT_DETAIL_MAX_CHARS,
+} from './config.mjs';
 import { abs, exists, readJsonOrNull } from './lib/fsx.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -205,14 +208,129 @@ function emitMessage(event, message) {
 }
 
 /**
- * Fail closed: block the stop, and say that enforcement did not run.
- * The reason matters more here than on the violations path, not less. An agent
- * refused with no explanation reads it as a malfunction it cannot act on, and
- * `readContinues` will spend the whole ceiling reaching that same silence.
+ * ENFORCEMENT DID NOT RUN: block once, then let the turn end and mark the
+ * session unverified. Gate 4c, finding 3.
+ *
+ * Not "keep blocking", and not "allow silently". Both were wrong for the same
+ * reason: this arm is the one the agent CANNOT satisfy. A violation goes away
+ * when the code is fixed; a checker crash goes away when the checker is fixed,
+ * and the agent is forbidden to edit the checker - this file's own message says
+ * so, and then it refused to let the turn end anyway. gate4c ended three
+ * consecutive turns in the identical crash and escaped the fourth by luck.
+ *
+ * Trapping the agent bought nothing. Fail-closed is a property about not
+ * SHIPPING unverified code, and it is held by `doctor` FAILing on the marker
+ * this function writes and by the release path refusing while it stands -
+ * neither of which needs the turn to hang. What the trap actually produced was
+ * no verification and no report.
+ *
+ * So the ceiling counts consecutive faults with the same SIGNATURE, not
+ * consecutive turns: each turn is a new prompt id, so `readContinues` - which
+ * keys on prompt_id - reset to zero every turn and could never reach any
+ * ceiling. That is why this counter lives in its own file.
+ *
+ * @param {string} kind      one of GATE_FAULT_KINDS
+ * @param {string} reason    what to tell the agent
+ * @param {string} signature what makes two faults "the same"; defaults to reason
  */
-function failClosed(reason) {
-  emitBlock(`mavci: ENFORCEMENT DID NOT RUN. ${reason}`);
-  process.exit(2);
+function failClosed(root, ctx, kind, reason, signature = reason) {
+  const marker = bumpUnverified(root, ctx, kind, signature, reason);
+  const consecutive = marker?.consecutive ?? 1;
+
+  if (consecutive <= GATE_MAX_FAULT_BLOCKS) {
+    emitBlock(`mavci: ENFORCEMENT DID NOT RUN. ${reason}\n\n`
+      + 'The turn is refused once so you can diagnose this. If it happens again the turn will be '
+      + 'allowed to end and the session will be marked UNVERIFIED - not because the problem is '
+      + 'solved, but because you cannot solve it from here.');
+    process.exit(2);
+  }
+
+  // Second consecutive fault with the same signature: hand it to the operator
+  // and get out of the way. The marker is what makes this safe - without it,
+  // ending the turn here would be a plain fail-open.
+  emitMessage(ctx.event ?? 'Stop',
+    `mavci: ENFORCEMENT DID NOT RUN, for the ${consecutive}${consecutive === 2 ? 'nd' : 'th'} turn `
+    + `running. ${reason}\n\n`
+    + 'This turn is being allowed to end, because the fault is in the checker and you are not '
+    + 'permitted to edit the checker. It is not resolved: this session is now marked UNVERIFIED in '
+    + `${PATHS.unverified}. /mavci-core:doctor FAILS while that marker stands, and it clears only on `
+    + 'a clean gate run.\n\n'
+    + 'File it: /mavci-core:retro. Quote the error above - it is the whole of what the operator has '
+    + 'to go on.');
+  process.exit(0);
+}
+
+/**
+ * Write or advance the unverified marker. Best effort, and deliberately not
+ * through `writeControl`.
+ *
+ * `writeControl` redacts, schema-validates, writes atomically and reseals - all
+ * correct, and all of it needs `state.mjs` to be healthy. This function runs on
+ * the path where the checker has just crashed, which is precisely when that
+ * assumption is worst. A marker that can only be written on a working system is
+ * a marker that exists only when it is not needed. `openGateRun` is written the
+ * same way, for the same reason, and both are outside CONTROL_GLOBS so writing
+ * one never invalidates the seal.
+ *
+ * It is still inside control/, so an agent cannot forge or delete one: the deny
+ * rule and the risk guard both cover the directory, not the individual file.
+ */
+function bumpUnverified(root, ctx, kind, signature, detail) {
+  try {
+    const projectId = readJsonOrNull(abs(root, PATHS.manifest))?.project_id;
+    if (!projectId) return null;               // not a connected project: nothing to mark
+    const now = new Date().toISOString().replace(/[.]\d{3}Z$/, 'Z');
+    const sig = String(signature).replace(/\s+/g, ' ').trim().slice(0, 200);
+    const prev = readJsonOrNull(abs(root, PATHS.unverified));
+    const same = prev && prev.signature === sig && prev.fault === kind;
+
+    const doc = {
+      schema_version: 1,
+      project_id: projectId,
+      fault: GATE_FAULT_KINDS.includes(kind) ? kind : 'gate_error',
+      signature: sig,
+      consecutive: same ? (prev.consecutive ?? 1) + 1 : 1,
+      since: same ? prev.since : now,
+      last_at: now,
+      detail: clampDetail(detail),
+      prompt_id: ctx.promptId ?? null,
+      session_id: ctx.sessionId ?? null,
+      plugin_version: readJsonOrNull(path.join(HERE, '..', '.claude-plugin', 'plugin.json'))?.version ?? 'unknown',
+    };
+    fs.writeFileSync(abs(root, PATHS.unverified), JSON.stringify(doc, null, 2) + '\n');
+    return doc;
+  } catch {
+    // A marker we could not write must not stop the block below from happening.
+    // It degrades to the pre-0.1.12 behaviour for this one turn, which is worse
+    // but not silent: the block still fires and still says why.
+    return null;
+  }
+}
+
+/**
+ * Keep the whole message, cut visibly when it will not fit.
+ *
+ * Truncation is marked, never silent. An error string that stops mid-sentence
+ * with no sign it was cut is how finding 1 read from the outside: the message
+ * arrived, and its contents had been removed one function call earlier.
+ */
+function clampDetail(text) {
+  const s = String(text ?? '').trim();
+  if (s.length <= FAULT_DETAIL_MAX_CHARS) return s || null;
+  return `${s.slice(0, FAULT_DETAIL_MAX_CHARS - 40)}\n[... truncated, ${s.length} characters total]`;
+}
+
+/**
+ * Enforcement ran and passed. Retire the marker.
+ *
+ * ONLY on a pass, and the distinction is load-bearing. A FAILING run also proves
+ * the checker is alive, so it is tempting to clear here too - but the marker's
+ * claim is "this project has turns nobody ever verified", and that claim is only
+ * retired by seeing it come out clean. Clearing on a fail would make a project
+ * that has never once passed look identical to one that just did.
+ */
+function clearUnverified(root) {
+  try { fs.rmSync(abs(root, PATHS.unverified), { force: true }); } catch { /* best effort */ }
 }
 
 /* ---------------------------------------------------------- the checker */
@@ -236,7 +354,41 @@ function runVerify(root, extraArgs = []) {
   return JSON.parse(out);
 }
 
-/** execFileSync throws for both a non-zero exit and a timeout; tell them apart. */
+/**
+ * execFileSync throws for both a non-zero exit and a timeout; tell them apart.
+ *
+ * THE WHOLE MESSAGE, NOT ITS FIRST LINE. Gate 4c, finding 1.
+ *
+ * This function used to end `.trim().split('\n')[0]`. `assertValid`
+ * (lib/schema.mjs) is documented "Throw with every error at once - fixing one
+ * field at a time is miserable" and puts every error on lines 2..N:
+ *
+ *     `${label} failed schema validation:\n  - ${errors.join('\n  - ')}`
+ *
+ * Line 1 is the label and a colon. So every error the validator exists to
+ * produce was discarded one function call before it reached the agent, and the
+ * Stop reason read, four times in gate4c, identically:
+ *
+ *     The standards checker crashed: verify.mjs crashed: Error:
+ *     .mavci/control/verdicts/adhoc-1788254362466.json failed schema validation:.
+ *
+ * That is `pending-system-change.md` change 2 one layer down. THAT bug was "the
+ * reason never arrived"; this one was "the reason arrived with its contents
+ * removed". The fix there wired stderr through, and nothing checked what stderr
+ * was carrying - which is why `check-gate.mjs` now asserts on the presence of a
+ * `\n  - ` line rather than on the presence of a reason.
+ *
+ * Note the violation path does NOT route through here, which is why Gate 4
+ * passed while this was broken: only the gate's report of its OWN failure was
+ * truncated. The system could describe your bug and not its own.
+ *
+ * `signature` is separate from `message` on purpose. The message carries
+ * everything; the signature is the stable part that decides whether two turns
+ * hit "the same" fault, with the volatile parts - timestamps, generated file
+ * names, line offsets - normalised out. Fingerprinting on the full message would
+ * make every crash unique and the fault ceiling unreachable, which is the same
+ * defect as keying it on prompt_id.
+ */
 function interpretRunError(err) {
   if (err.code === 'ETIMEDOUT' || err.signal === 'SIGTERM') {
     return { kind: 'timeout' };
@@ -246,8 +398,25 @@ function interpretRunError(err) {
   if (stdout.trim().startsWith('{')) {
     try { return { kind: 'verdict', verdict: JSON.parse(stdout) }; } catch { /* fall through */ }
   }
-  const stderr = (err.stderr?.toString?.() ?? err.message ?? '').trim().split('\n')[0];
-  return { kind: 'crash', message: stderr || 'unknown error' };
+  const message = (err.stderr?.toString?.() ?? err.message ?? '').trim();
+  return {
+    kind: 'crash',
+    message: message || 'unknown error',
+    signature: faultSignature(message),
+  };
+}
+
+/** Volatile parts removed, so the same fault twice fingerprints the same twice. */
+function faultSignature(message) {
+  return String(message)
+    .split('\n')
+    .slice(0, 3)                                  // the label plus the first errors
+    .join(' ')
+    .replace(/\b\d{9,}\b/g, '<n>')                // Date.now() in adhoc-<ts>.json
+    .replace(/\b\d{4}-\d{2}-\d{2}T[\d:.]+Z?\b/g, '<t>')
+    .replace(/:\d+:\d+/g, ':<line>')              // stack positions
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /* --------------------------------------------------------- continue count
@@ -341,6 +510,8 @@ async function gate(input) {
   // on, this record stays incomplete and the next turn reports it.
   openGateRun(root, promptId, sessionId);
 
+  const ctx = { event, promptId, sessionId };
+
   let verdict;
   try {
     verdict = runVerify(root, ['--record']);
@@ -348,27 +519,36 @@ async function gate(input) {
     const r = interpretRunError(err);
     if (r.kind === 'timeout') {
       closeGateRun(root, 'budget_exceeded');
-      return failClosed(
+      return failClosed(root, ctx, 'timeout',
         `The standards checker exceeded its ${GATE_BUDGET_MS / 1000}s budget and was stopped, so nothing was verified. `
-        + 'Run /mavci-core:doctor to diagnose, or verify by hand with `node <plugin>/scripts/verify.mjs`.');
+        + 'Run /mavci-core:doctor to diagnose, or verify by hand with `node <plugin>/scripts/verify.mjs`.',
+        'timeout');
     }
     if (r.kind === 'crash') {
       closeGateRun(root, 'crashed');
-      return failClosed(
-        `The standards checker crashed: ${r.message}. Nothing was verified. `
-        + 'This is a bug in the checker, not in your code. Run /mavci-core:doctor, and /mavci-core:retro to file it.');
+      // r.message is the FULL stderr now, not its first line. See interpretRunError.
+      return failClosed(root, ctx, 'crash',
+        `The standards checker crashed. Nothing was verified. This is a bug in the checker, not in `
+        + `your code, and you are not permitted to fix it. Its own output, in full:\n\n${clampDetail(r.message)}\n\n`
+        + 'Run /mavci-core:doctor, and /mavci-core:retro to file it - quote the text above.',
+        r.signature);
     }
     verdict = r.verdict;
   }
 
   if (!verdict || typeof verdict.summary?.blockers !== 'number') {
     closeGateRun(root, 'unreadable_verdict');
-    return failClosed('The standards checker returned an unreadable verdict, so nothing was verified.');
+    return failClosed(root, ctx, 'unreadable_verdict',
+      'The standards checker returned an unreadable verdict, so nothing was verified. '
+      + 'Run /mavci-core:doctor, and /mavci-core:retro to file it.',
+      'unreadable_verdict');
   }
 
   /* ---- pass ---------------------------------------------------------- */
   if (verdict.summary.blockers === 0) {
     closeGateRun(root, 'pass');
+    // The one thing that retires an unverified marker. Not a fail: see clearUnverified.
+    clearUnverified(root);
     await stamp(root, { prompt_id: promptId, session_id: sessionId, verdict: 'pass', continues: 0 });
     const s = verdict.summary;
     if (s.baselined || s.waived) {
@@ -479,9 +659,15 @@ async function main() {
     // Unparseable payload means we do not know the project, the prompt, or the
     // event. Guessing would silently reset the loop counter and scan the wrong
     // directory. Fail closed and say why.
-    return failClosed(
+    //
+    // `root` here is the environment's idea of the project, not the payload's -
+    // that is the whole problem - so the marker may land in the wrong place or
+    // nowhere. bumpUnverified returns null when there is no manifest, which is
+    // the honest outcome: no project, no marker, and the block still fires.
+    return failClosed(root, { event: 'Stop', promptId: null, sessionId: null }, 'unreadable_payload',
       `The hook payload was not valid JSON (${parseError}), so the gate could not tell which `
-      + 'project or turn it was checking. Nothing was verified. Run /mavci-core:doctor.');
+      + 'project or turn it was checking. Nothing was verified. Run /mavci-core:doctor.',
+      'unreadable_payload');
   }
   await gate(input);
 }

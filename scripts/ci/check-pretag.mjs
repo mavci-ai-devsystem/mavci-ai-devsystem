@@ -140,6 +140,8 @@ const SUITE = [
   ['scripts/ci/check-placeholders.mjs'],
   ['scripts/ci/check-skill-placeholders.mjs'],
   ['scripts/ci/check-packaging.mjs'],
+  ['scripts/ci/check-command-refs.mjs'],
+  ['scripts/ci/check-evidence-caps.mjs'],
   // check-tags.mjs is deliberately NOT here. It asserts that the newest tag IS
   // the mainline, which is a POST-tag condition: before the tag exists main is
   // always one commit ahead of it, so running it here fails every release by

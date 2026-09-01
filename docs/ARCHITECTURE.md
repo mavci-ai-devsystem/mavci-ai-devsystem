@@ -557,6 +557,7 @@ The system holds no list of projects and has no per-project configuration. Every
 │   └── 0007.json                   # descriptive only: title, spec path, artifacts[], notes[]
 ├── decisions/0003-tenant-isolation.md
 ├── lessons/2026-08-28-stripe-idempotency.md
+├── lessons/pending-system-change.md    # findings filed against the SYSTEM, section 10
 │
 │   ── OPERATOR SURFACE (tier 2: agents denied, operator confirms) ──
 ├── project.json
@@ -570,22 +571,31 @@ The system holds no list of projects and has no per-project configuration. Every
     ├── waivers.json                # time-boxed exceptions, section 6.6
     ├── integrity.json              # control_hash + last-gate heartbeat, sections 4.3 and 6.4
     ├── gate-run.json               # gate completion sentinel, section 6.4
-    └── hook-run.json               # proof Claude Code LOADED our hooks, section 6.4
+    ├── hook-run.json               # proof Claude Code LOADED our hooks, section 6.4
+    └── unverified.json             # ENFORCEMENT DID NOT RUN, section 6.4
 ```
 
-`integrity.json`, `gate-run.json` and `hook-run.json` are the three control files
-**excluded from the control hash** (`config.mjs CONTROL_GLOBS`). Each holds a
-result or a heartbeat rather than a governing value, and each is rewritten on a
-cadence — every turn, every session — that would otherwise break the seal
-continuously. They are still inside `control/`, so no agent can write or forge
-one.
+`integrity.json`, `gate-run.json`, `hook-run.json` and `unverified.json` are the
+four control files **excluded from the control hash**
+(`config.mjs CONTROL_GLOBS`). Each holds a result or a heartbeat rather than a
+governing value, and each is rewritten on a cadence — every turn, every session —
+that would otherwise break the seal continuously. They are still inside
+`control/`, so no agent can write or forge one.
 
-`integrity.json` and `hook-run.json` carry `schema_version` and `project_id`,
-have schemas under `plugins/mavci-core/templates/schemas/`, and are covered by `state.schema_valid`
-like every other state file. `gate-run.json` does **not**: it is a within-turn
-sentinel written and read only by `gate.mjs` and `risk-guard.mjs`, and it never
-outlives the turn that wrote it. That is a real gap, not a design principle —
-if anything else ever reads it, it needs a schema first.
+`unverified.json` has a second reason to be excluded, and it is the load-bearing
+one: it is written on the path where the checker has just **crashed**. A write
+that had to reseal would need `state.mjs` to be healthy, which is exactly what
+cannot be assumed at that moment. A marker that can only be written on a working
+system is a marker that exists only when it is not needed. `gate-run.json` is
+written the same way and for the same reason.
+
+`integrity.json`, `hook-run.json` and `unverified.json` carry `schema_version` and
+`project_id`, have schemas under `plugins/mavci-core/templates/schemas/`, and are
+covered by `state.schema_valid` like every other state file. `gate-run.json` does
+**not**: it is a within-turn sentinel written and read only by `gate.mjs` and
+`risk-guard.mjs`, and it never outlives the turn that wrote it. That is a real
+gap, not a design principle — if anything else ever reads it, it needs a schema
+first.
 
 **The split (B1).** A stuck agent's cheapest move used to be editing the file that governs it. Now every governing value — phase, attempts, ceiling, verdicts, baseline, waivers — is on the far side of a permission deny rule. What remains agent-writable is exactly the material an agent legitimately produces: specs, artifact lists, notes, ADRs, lessons.
 
@@ -796,13 +806,56 @@ Practical effect: a question turn costs nothing. A one-file edit costs a few hun
 
 | Failure | Detection | Result |
 |---|---|---|
-| `verify.mjs` throws | try/catch around the whole run | exit 2, `reason`: "standards checker crashed: `<message>`. Enforcement did not run. Run /mavci-core:doctor." |
-| `verify.mjs` exceeds budget | internal 120 s budget, under the hook's 150 s `timeout` | exit 2, "checker exceeded its 120 s budget. Enforcement did not run." |
+| `verify.mjs` throws | try/catch around the whole run | exit 2 with the checker's **whole** stderr, then the fault ceiling below |
+| `verify.mjs` exceeds budget | internal 25 s budget, under the hook's 30 s `timeout` | exit 2, "checker exceeded its 25 s budget. Enforcement did not run." |
 | Malformed or missing `project.json` / schema | validation before scanning | exit 2, naming the file |
 | `integrity.json` mismatch | hash recompute (section 4.2) | exit 2, "control plane modified outside state.mjs" |
 | Checker rule itself throws | per-rule try/catch | that rule records `status: "error"`, and **an errored rule counts as a blocker** |
 | **Hook cancelled by timeout** | **Cannot be handled from inside.** See below. | Detected next turn by the completion sentinel |
 | **Hook never runs at all** — node missing, hook unregistered, `disableAllHooks` | heartbeat: every gate run stamps `control/integrity.json.last_gate` with the `prompt_id` | reported by `risk-guard.mjs` on the next turn |
+
+**The reason carries the checker's whole message, not its first line.** Until
+0.1.12 `interpretRunError` ended `.split('\n')[0]`. `assertValid` is documented
+*"Throw with every error at once"* and puts every error on lines 2..N, so line 1
+is the label and a colon — and every error the validator exists to produce was
+discarded one function call before it reached the agent. Observed four times in
+gate4c as *"failed schema validation:."* with nothing after it. `check-gate.mjs`
+asserts the delivered reason contains a `\n  - ` line, produced by the real
+`assertValid` rather than by a hand-written imitation of its format.
+
+#### A checker fault blocks ONCE, then marks the session unverified
+
+Two arms of this gate block, and only one has an exit the agent can reach.
+
+A **violation** is satisfiable: fix the code and the gate passes. A **checker
+fault** is not — the fault is in the checker, the agent is forbidden to edit the
+checker, and this gate's own message says so before refusing to let the turn end
+anyway. gate4c ended three consecutive turns in the identical crash; the fourth
+escaped because an unrelated in-project fix happened to remove the offending
+string. The one arm the agent provably cannot satisfy was the only arm with no
+ceiling, while the arm it can satisfy was capped. That was inverted.
+
+**Blocking the turn is not what makes the system fail-closed.** Fail-closed is a
+property about not *shipping* unverified code, and it is held by `doctor` FAILing
+and by the release path refusing — both of which work whether or not a turn ends.
+Trapping the agent produced no verification *and* no report, which is strictly
+worse than ending the turn, because then the operator never hears about the crash
+at all.
+
+So from 0.1.12: block once (`GATE_MAX_FAULT_BLOCKS`), which gives the agent its
+chance to diagnose, and on the next fault with the same signature let the turn end
+and write `control/unverified.json`. Three things then report it, none of them the
+gate: `doctor` **FAILs**, the `PreToolUse` guard repeats it on every tool call, and
+the release path must refuse while it stands. It clears only on a gate run that
+**passes** — not on a fail, because a project that has never once come out clean
+must not look like one that just did, and never on a turn merely ending.
+
+The counter keys on the fault **signature**, not on `prompt_id`. Each turn is a
+new prompt, so a per-prompt counter resets every turn and can never reach any
+ceiling — which is why the crash arm was uncapped in practice as well as in code.
+`unverified.json` sits inside `control/` so an agent cannot forge one, and outside
+`CONTROL_GLOBS` so writing it never invalidates the seal — and, critically, so it
+does not need `state.mjs` to be healthy at the moment the checker has just died.
 
 **The timeout asymmetry, stated plainly.** A crash can be made fail-closed: the
 wrapper catches it and exits 2. **A timeout cannot.** When Claude Code cancels a
@@ -831,36 +884,37 @@ The heartbeat is the important one: it is the only mechanism that detects a hook
 
 Timeouts are set explicitly (`150`), never left at the 600-second default that would hide a hung checker for ten minutes (4.19). The advisory `PostToolUse` hook keeps `async: true`; **no gate ever does** (4.20).
 
-`hooks/hooks.json`:
+`hooks/hooks.json` — **`command` is a STRING and the arguments go in `args`**:
 
 ```json
 {
   "hooks": {
-    "PreToolUse": [
-      { "matcher": "Bash|Edit|Write|NotebookEdit",
-        "hooks": [{ "type": "command", "timeout": 20,
-                    "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/risk-guard.mjs"] }] }
-    ],
-    "PostToolUse": [
-      { "matcher": "Edit|Write",
-        "hooks": [
-          { "type": "command", "async": true, "timeout": 60,
-            "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs", "--changed", "--advisory"],
-            "statusMessage": "mavci: checking standards" },
-          { "type": "command", "async": false, "timeout": 20,
-            "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/redact.mjs", "--sweep"],
-            "if": "Edit(./.mavci/**)" }
-        ] }
-    ],
-    "Stop":         [ { "hooks": [{ "type": "command", "timeout": 150,
-                        "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"] }] } ],
-    "SubagentStop": [ { "hooks": [{ "type": "command", "timeout": 150,
-                        "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"] }] } ],
-    "SessionStart": [ { "hooks": [{ "type": "command", "timeout": 20,
-                        "command": ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/doctor.mjs", "--preflight"] }] } ]
+    "Stop": [
+      { "hooks": [{ "type": "command", "timeout": 30,
+                    "command": "node",
+                    "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"],
+                    "statusMessage": "mavci: standards gate" }] }
+    ]
   }
 }
 ```
+
+> **This example was wrong until 0.1.12, and wrong in the exact way that shipped
+> the worst defect in this system's history.** It showed
+> `"command": ["node", "…"]` — an array. That is what v0.1.2 shipped; Claude
+> Code's plugin loader rejected all eight entries with *expected string, received
+> array* and installed the plugin with **zero hooks**, cleanly and silently: no
+> risk guard, no standards gate, no phase gate. A governing document showing the
+> broken form as canonical is how that comes back, so read
+> `plugins/mavci-core/hooks/hooks.json` as the authority and treat any example
+> here as a copy. `claude plugin validate --strict` is what settles it (4.22);
+> `--plugin-dir` does not run the loader's schema validation and cannot see this
+> class of fault at all.
+
+The real file carries all eight entries. Timeouts are set explicitly and are
+`20`–`60` depending on the hook — never the 600-second default, which would hide
+a hung checker for ten minutes (4.19). The advisory `PostToolUse` hook keeps
+`async: true`; **no gate ever does** (4.20).
 
 On a blocking verdict, `gate.mjs` exits 2 and writes the same text on both carriers the Stop
 contract defines. On stdout, the top-level decision:
@@ -878,7 +932,16 @@ Neither `continue` nor a nested `stopReason` appears. `continue` defaults to `tr
 when `false`, so it was inert noise; a `stopReason` nested inside `hookSpecificOutput` is honoured
 by nothing on `Stop` and is what made 0.1.10 block in silence. Do not add either back.
 
-**Loop safety.** A counter keyed on `prompt_id` lives in `control/integrity.json` — moved out of the OS temp directory in revision 2, since it is control-plane state and needs to survive a session restart. On the third consecutive gate for one prompt, `gate.mjs` stops returning `continue: true`, returns a plain `systemMessage`, lets the turn end, and marks the task `blocked`. A gate that cannot be satisfied must reach the operator, not spin.
+**Loop safety, violations arm.** A counter keyed on `prompt_id` lives in
+`control/integrity.json` — moved out of the OS temp directory in revision 2, since
+it is control-plane state and needs to survive a session restart. On the third
+consecutive gate for one prompt (`GATE_MAX_CONTINUES`), `gate.mjs` stops blocking,
+returns a plain `systemMessage`, lets the turn end, and marks the task `blocked`.
+A gate that cannot be satisfied must reach the operator, not spin.
+
+This ceiling is for the arm the agent **can** satisfy. The checker-fault arm has
+its own, keyed on the fault signature rather than the prompt, described above —
+and until 0.1.12 it had none at all.
 
 ### 6.5 Baseline — making the gate usable on existing repos (B2)
 
@@ -1119,7 +1182,23 @@ Within one attempt the `Stop` gate can force at most 2 additional in-turn correc
 
 ## 10. Self-improvement loop
 
-`/mavci-core:retro [<task-id>]`.
+`/mavci-core:retro`. **Built in 0.1.12. Until then this whole section described a
+command that did not exist**, while seven places in the plugin — the gate's crash
+arm, the gate's retry ceiling, the task retry ceiling, a crashed check's remedy,
+`doctor`'s queued-lesson warning, `/mavci-core:build` at the ceiling, and
+`/mavci-core:waive` — stopped an agent and told it to run exactly that command.
+Both halves of the operator channel were absent at once: the turn could not end,
+and the escalation could not be filed. The Gate 4c findings survived only because
+an agent chose to write a file into `.mavci/lessons/` by hand, which is not a
+channel — it is luck with good manners. `check-command-refs.mjs` now fails the
+build on any `/mavci-core:<name>` the plugin ships that has no skill behind it.
+
+**The authority split is the design, not a detail.** `--record` is reachable by an
+**agent**: a reporting channel an agent cannot reach is the trap those seven
+messages describe. `--apply` and `--clear` are the **operator's** — one carries a
+finding into the system repository, the other deletes the record of a problem
+nobody has fixed. `risk-guard.mjs` enforces the split by caller, exactly as it
+does for `state.mjs`, and `check-risk-guard.mjs` asserts both directions.
 
 **In the project:**
 
@@ -1146,6 +1225,23 @@ Within one attempt the `Stop` gate can force at most 2 additional in-turn correc
 **Cost:** one command, one markdown file, one rule, one fixture, one version bump. No dashboard, no database, no scheduled job.
 
 **Guarantee it happens:** the ceiling handler (section 9) writes the lesson stub automatically, so the artifact exists before anyone decides to act. `doctor` reports unresolved `pending-system-change.md` files and every waiver granted in the last 30 days, so a queued lesson cannot be quietly forgotten.
+
+**A remedy names who can carry it out.** From 0.1.12 a rule declares
+`authority: 'agent' | 'operator' | 'external'`, and anything other than `agent`
+must say so in the remedy text itself, naming the actor.
+`check-evidence-caps.mjs` fails the build otherwise.
+
+This exists because of a remedy that read *"Have the text reviewed, then delete
+the REVIEW REQUIRED marker."* An agent can delete a marker. It cannot have a
+lawyer review the text. Deleting it would have made a legal page assert a review
+that never happened — on the one surface where that assertion is load-bearing —
+and turned a visible finding into an invisible one. **The cheap path was
+sanctioned by the check's own remedy text.** Gate 4c's agent declined it, which
+is the only reason this is a design note rather than an incident report; that
+decline is recorded in `docs/lessons/gate-4-closed.md` and is not a mechanism.
+
+A remedy that only the operator or an outside party can perform, written as if
+the reader could perform it, is not advice. It is an instruction to fabricate.
 
 ---
 

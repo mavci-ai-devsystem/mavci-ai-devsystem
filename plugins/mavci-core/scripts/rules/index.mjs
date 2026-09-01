@@ -17,6 +17,54 @@ import { blankSource, blankComments, depthMap, matchAll } from '../lib/jsscan.mj
 import { lineOf } from '../lib/fsx.mjs';
 import { MARKETPLACE_NAME, PLUGIN_ID, SYSTEM_REPO } from '../config.mjs';
 
+/* ------------------------------------------------------- remedy authority
+ *
+ * A REMEDY IS AN INSTRUCTION TO WHOEVER CAN CARRY IT OUT. When that is not the
+ * agent reading it, the remedy has to say so, in the remedy, and name who.
+ *
+ * Gate 4c, declined path 4, is the case that forced this. Four
+ * `legal.pages_present` findings carried the remedy "Have the text reviewed,
+ * then delete the REVIEW REQUIRED marker." An agent can delete a marker. It
+ * cannot have a lawyer review the text. Deleting it would have made the page
+ * assert a review that never happened, on the one surface where that assertion
+ * is load-bearing, and turned a visible finding into an invisible one - and the
+ * cheap path was SANCTIONED BY THE CHECK'S OWN REMEDY TEXT. The agent declined
+ * it, which is the only reason this is a design note rather than an incident.
+ *
+ * A remedy that only the operator or an outside party can perform, written as
+ * if the reader could perform it, is not advice - it is an instruction to
+ * fabricate. So:
+ *
+ *   agent      the reader can do the whole thing. No note.
+ *   operator   needs a human in the main session: a privileged `state.mjs`
+ *              flag, a settings edit, a key rotation, a deploy.
+ *   external   needs someone outside the system entirely: a lawyer, a
+ *              provider's console.
+ *
+ * `check-remedy-authority.mjs` asserts that every rule and every finding whose
+ * authority is not `agent` carries the note, and that the note names an actor.
+ * The rule and its note are written in one place so they cannot drift, which is
+ * the 0.1.5 lesson: a value spelled once, derived everywhere.
+ */
+export const AUTHORITY_LEVELS = ['agent', 'operator', 'external'];
+
+/**
+ * The note itself. `who` completes "it needs <who>".
+ *
+ * Deliberately terse. `remedy` caps at 300 characters and the note is added to
+ * remedies that already run to 200, so a long note would push the ACTUAL FIX out
+ * of the field - trading one unusable remedy for another. What the reader needs
+ * is the actor and the instruction to stop; the reason lives in the surrounding
+ * remedy text, where it is specific and worth its length.
+ *
+ * `AUTHORITY:` is a literal marker, not prose, because check-remedy-authority.mjs
+ * greps for it. A rule that declares an authority and phrases the note its own
+ * way would pass a human read and fail the check, which is the right way round.
+ */
+export function authorityNote(who) {
+  return `AUTHORITY: not yours to complete - it needs ${who}. Report it and stop.`;
+}
+
 const isCode = (p) => /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(p);
 const under = (p, dir) => p === dir || p.startsWith(dir + '/');
 const inAny = (p, dirs) => dirs.some((d) => under(p, d));
@@ -31,7 +79,13 @@ const noCommittedSecrets = {
   severity: 'critical',
   always: true,
   description: 'No API key, token or secret value may be committed to the repository.',
-  remedy: 'Remove the value, rotate the key at the provider, and read it through lib/env.ts instead.',
+  // `external`: removing the value from the file is the easy half and the half
+  // that does not matter. The key is compromised the moment it is committed, and
+  // only the provider can rotate it. An agent that deleted the line and reported
+  // this fixed would have made a live key invisible instead of dead.
+  authority: 'external',
+  remedy: 'Remove the value and read it through lib/env.ts instead. The key is compromised and must be '
+    + `rotated at the provider. ${authorityNote("the operator, at the provider's console")}`,
   run(ctx) {
     const out = [];
 
@@ -402,17 +456,25 @@ const legalPagesPresent = {
       // worth stating: blocking every build turn on "a lawyer has not read this
       // yet" is the wrong gate in the wrong place. The scaffold ships real draft
       // text, so a new project is green from commit one and the first red is a
-      // real regression. Unreviewed legal text is a RELEASE gate - /mavci-core:release
-      // treats this warning as a blocker - and `regulated` projects promote it
-      // here too, because there the review must precede the work, not the ship.
+      // real regression. Unreviewed legal text is a SHIP gate, not a build gate -
+      // and `regulated` projects promote it here too, because there the review
+      // must precede the work, not the ship.
+      //
+      // THE REMEDY IS THE ONE GATE 4c CAUGHT POINTING THE WRONG WAY. It used to
+      // read "Have the text reviewed, then delete the REVIEW REQUIRED marker",
+      // addressed to a reader who can do exactly one of those two things. See
+      // `authorityNote` at the top of this file: the deletion is the operator's,
+      // after the review is the lawyer's, and the remedy now says both.
       if (REVIEW_MARKER.test(text)) {
         const regulated = ctx.manifest?.risk_tier === 'regulated';
         out.push({
           check_id: this.id, severity: regulated ? 'blocker' : 'warning', path: rel,
+          authority: 'external',
           line: lineOf(text, text.search(REVIEW_MARKER)),
           evidence: `"${slug}" page is still marked REVIEW REQUIRED - no lawyer has reviewed this text`,
-          remedy: 'Have the text reviewed, then delete the REVIEW REQUIRED marker. '
-            + 'This blocks /mavci-core:release until it is done.',
+          remedy: 'A lawyer reviews the text; the operator then deletes the REVIEW REQUIRED marker. '
+            + 'Deleting it yourself would make this page claim a review that never happened. '
+            + `${authorityNote('a lawyer, then the operator')}`,
         });
       }
     }
@@ -443,8 +505,14 @@ const kvkkStructure = {
   packs: ['legal-tr-kvkk'],
   description: 'The KVKK page contains all seven required disclosure sections. '
     + 'STRUCTURAL CHECK ONLY - it does not and cannot assess legal sufficiency.',
-  remedy: 'Add the missing section to the KVKK aydinlatma metni. This check verifies presence, '
-    + 'not adequacy: have the final text reviewed by a lawyer.',
+  // `external`, even though writing the missing section IS the agent's to do.
+  // The authority note is about what CLEARS the finding, not about what starts
+  // it: a page with all seven headings and no review passes this check and is
+  // still not compliant. Marking it `agent` would let a green tick here read as
+  // "the KVKK page is done", which is the exact claim the description refuses.
+  authority: 'external',
+  remedy: 'Add the missing section to the KVKK aydinlatma metni. This check verifies presence, not '
+    + `adequacy. ${authorityNote('a lawyer, to judge whether the text is sufficient')}`,
   run(ctx) {
     const required = ctx.manifest?.compliance?.required_pages ?? [];
     if (!required.includes('kvkk')) return [];
@@ -468,8 +536,13 @@ const stateSchemaValid = {
   severity: 'blocker',
   always: true,
   description: 'Every .mavci state file matches its schema and the control-plane seal is intact.',
-  remedy: 'Run `state.mjs --validate` for the full list. If you edited a control file by hand '
-    + 'on purpose, run `state.mjs --reseal`.',
+  // `operator`: `--reseal` is in risk-guard's PRIVILEGED table and is denied to
+  // an agent by caller, because re-sealing launders whatever tampering preceded
+  // it. A remedy naming a command the reader is structurally forbidden to run,
+  // without saying so, sends them into a deny they will read as a malfunction.
+  authority: 'operator',
+  remedy: 'Run `state.mjs --validate` for the full list. If a control file was edited by hand on '
+    + `purpose, it needs \`state.mjs --reseal\`. ${authorityNote('the operator - --reseal is denied to agents')}`,
   run(ctx) {
     const errors = ctx.validateState();
     return errors.map((e) => ({
@@ -511,9 +584,15 @@ const marketplaceForm = {
   severity: 'critical',
   always: true,
   description: 'The marketplace is registered in the one source form that resolves, and the plugin is enabled.',
-  remedy: `Set extraKnownMarketplaces.${MARKETPLACE_NAME}.source to `
-    + `{"source": "git", "url": "https://github.com/${SYSTEM_REPO}.git"} and `
-    + `enabledPlugins["${PLUGIN_ID}"] to true, or re-run /mavci-core:connect.`,
+  // `operator`: .claude/settings.json carries the risk policy, and risk-guard
+  // raises a tier-2 confirm on any write to it. This is also `critical`, so it
+  // can be neither baselined nor waived - the reader has exactly one route out
+  // and it goes through a human. Saying so beats letting them find out at the
+  // permission prompt.
+  authority: 'operator',
+  remedy: `Set extraKnownMarketplaces.${MARKETPLACE_NAME}.source to {"source":"git","url":`
+    + `"https://github.com/${SYSTEM_REPO}.git"} and enabledPlugins["${PLUGIN_ID}"] to true, or re-run `
+    + `/mavci-core:connect. ${authorityNote('the operator')}`,
   run(ctx) {
     const REL = '.claude/settings.json';
     const raw = ctx.readOrNull(REL);
@@ -572,12 +651,32 @@ const marketplaceForm = {
         + 'not resolve installs no plugin and registers no hook.', line);
     }
     if (s?.enabledPlugins?.[PLUGIN_ID] !== true) {
-      return finding(`the marketplace resolves but this project does not set enabledPlugins["${PLUGIN_ID}"] to true. `
-        + 'This rule reads only .claude/settings.json, so it cannot see a user-scope or managed enablement and '
-        + 'must not claim that nothing is enforced: gate4c ran a whole session with three agents and eight hooks '
-        + 'registered from a user-scope anchor while this key was absent. What is established is narrower and still '
-        + 'serious - enforcement here rests on machine-level config that travels with nobody, so on a fresh clone, '
-        + "a teammate's checkout or CI, no hook registers and the failure is silent.",
+      // 583 CHARACTERS, AND IT TOOK THE CHECKER OFFLINE FOR A WHOLE PROJECT.
+      //
+      // `evidence` caps at 500 in verdict.schema.json. Nothing checked that when
+      // this string was written, so the cap fired at writeControl instead -
+      // after the run, inside the gate - and `verify.mjs --record` threw on
+      // every turn in gate4c. Plain `verify.mjs` stayed healthy throughout: 11
+      // pass, 5 fail, 1 blocker. Only RECORDING was broken, and recording is the
+      // path enforcement runs on. The checker's most detailed finding is the one
+      // that disabled the checker.
+      //
+      // Rewritten to fit, and now held there by check-evidence-caps.mjs at
+      // authoring time. `clampFinding` in verify.mjs is the backstop for the
+      // interpolated case a static check cannot see: it truncates with a visible
+      // marker rather than throwing, because a finding cut at 500 characters is
+      // worth incomparably more than a checker that does not run.
+      //
+      // The narrowing matters and is kept: this rule reads only
+      // .claude/settings.json, so it CANNOT see a user-scope or managed
+      // enablement and must not claim nothing is enforced. gate4c ran a whole
+      // session with three agents and eight hooks from a user-scope anchor while
+      // this key was absent.
+      return finding(`the marketplace resolves but this project does not set enabledPlugins["${PLUGIN_ID}"] `
+        + 'to true. This rule reads only .claude/settings.json, so it cannot see a user-scope or managed '
+        + 'enablement and does not claim nothing is enforced. What it does establish is still serious: '
+        + 'enforcement here rests on machine-level config that travels with nobody, so on a fresh clone, a '
+        + "teammate's checkout or CI, no hook registers and the failure is silent.",
       at('enabledPlugins') ?? line);
     }
     return [];

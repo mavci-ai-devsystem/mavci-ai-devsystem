@@ -66,6 +66,7 @@ for (const f of files) {
   const pairs = [
     ['state.schema.json', 'phase', config.PHASES],
     ['hook-run.schema.json', 'event', config.HOOK_RUN_EVENTS],
+    ['unverified.schema.json', 'fault', config.GATE_FAULT_KINDS],
   ];
   for (const [file, prop, fromConfig] of pairs) {
     const p = path.join(DIR, file);
@@ -76,6 +77,33 @@ for (const f of files) {
       failures.push(`${file} ${prop} enum ${JSON.stringify(inSchema)} disagrees with config.mjs ${JSON.stringify(fromConfig)}`);
     } else {
       console.log(`  ok   ${file} ${prop} enum matches config.mjs`);
+    }
+  }
+}
+
+// A numeric constant duplicated between config.mjs and a schema is the same
+// hazard as a duplicated enum, and the one that bit hardest: verdict.schema.json
+// caps evidence at 500 and remedy at 300, nothing in the rule set knew those
+// numbers, and one 583-character string took the whole checker offline for a
+// project (Gate 4c, finding 2). config.mjs now owns them and check-evidence-caps
+// enforces them at authoring time - which is worth nothing if the two numbers
+// are allowed to disagree.
+{
+  const config = await import(pathToFileURL(path.join(ROOT, 'plugins/mavci-core/scripts/config.mjs')).href);
+  const caps = [
+    ['verdict.schema.json', ['$defs', 'check', 'properties', 'evidence', 'maxLength'], config.EVIDENCE_MAX_CHARS],
+    ['verdict.schema.json', ['$defs', 'check', 'properties', 'remedy', 'maxLength'], config.REMEDY_MAX_CHARS],
+    ['unverified.schema.json', ['properties', 'detail', 'maxLength'], config.FAULT_DETAIL_MAX_CHARS],
+  ];
+  for (const [file, keyPath, fromConfig] of caps) {
+    const doc = JSON.parse(fs.readFileSync(path.join(DIR, file), 'utf8'));
+    const inSchema = keyPath.reduce((n, k) => (n == null ? n : n[k]), doc);
+    if (inSchema !== fromConfig) {
+      failures.push(`${file} ${keyPath.join('.')} is ${inSchema}, config.mjs says ${fromConfig}. `
+        + 'A cap enforced at one number and checked at another is a cap that fires in production '
+        + 'and passes in CI.');
+    } else {
+      console.log(`  ok   ${file} ${keyPath.at(-2)}.maxLength (${inSchema}) matches config.mjs`);
     }
   }
 }
