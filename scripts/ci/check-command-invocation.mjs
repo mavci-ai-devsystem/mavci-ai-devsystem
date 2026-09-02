@@ -58,11 +58,27 @@
  * `gate.mjs`); `doctor` is deliberately exempt from that half and is still held
  * to the "it ran" half.
  *
- * CONTROLS
+ * CONTROLS, AND WHY THEY RUN FIRST
  * A negative control runs the exact form shipped from 0.1.0 to 0.1.7 and requires
  * it to be caught, and a positive control requires the fixed form to pass - so
  * this file can disagree in both directions. Verified against a worktree of the
  * v0.1.7 tag: it exits 2 and names all four broken dynamic contexts.
+ *
+ * They used to run LAST, and that cost a release cycle. Launched from PowerShell
+ * instead of Git Bash, `bash` resolved to the WSL app-execution alias on a
+ * machine with no distribution: it exited 1 without running anything. Every
+ * block was scored against an interpreter that executed nothing, 18 of the 22
+ * were scored `ok` because `neverRan`'s English signatures do not match a
+ * Turkish WSL error, and the run printed `invoked 22 inline block(s)` - a false
+ * sentence - before the controls objected underneath it. The gate held, because
+ * both controls did fail and the process exits 2. But the report described 22
+ * invocations that never happened and said nothing about the one thing that
+ * mattered, which is which shell it had been handed.
+ *
+ * So: the interpreter is resolved deliberately rather than taken from PATH, it
+ * is proven to execute before a single block is scored, and it is NAMED on every
+ * run, pass or fail. A check whose verdict depends on which shell the operator
+ * launched it from is measuring the operator, not the tree.
  */
 
 import fs from 'node:fs';
@@ -104,10 +120,66 @@ function substitute(cmd, { pluginRoot, skillDir, projectDir, sessionId, args }) 
     .replace(/\$ARGUMENTS/g, () => args);
 }
 
+/**
+ * WHICH `bash`. This is not a detail - it decided the answer once already.
+ *
+ * This check used to spawn a bare "bash" and trust PATH. On Windows, PATH
+ * resolution
+ * depends on WHICH SHELL LAUNCHED THIS CHECK: from Git Bash, `bash` is Git
+ * Bash and everything below is real; from PowerShell, `bash` is
+ * `%LOCALAPPDATA%\Microsoft\WindowsApps\bash.exe`, the WSL app-execution alias,
+ * which on a machine with no distribution installed prints an error and exits 1
+ * WITHOUT RUNNING ANYTHING. Same tree, same commit, two different verdicts.
+ *
+ * A check whose result depends on the operator's shell is not a check. So the
+ * interpreter is resolved deliberately, reported on every run, and - this is the
+ * half that matters - PROVEN to execute before one block is scored. See the
+ * preflight below and the note on `neverRan`.
+ */
+function resolveBash() {
+  const tried = [];
+  const usable = (p, how) => {
+    tried.push(`${how}: ${p}`);
+    try {
+      const out = execFileSync(p, ['-c', 'echo mavci-bash-probe'],
+        { encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'] });
+      return out.includes('mavci-bash-probe') ? { path: p, how, tried } : null;
+    } catch { return null; }
+  };
+
+  if (process.env.MAVCI_BASH) {
+    // An explicit pin is honoured even if it does not work: a pin that silently
+    // fell back to something else would hide exactly the substitution this
+    // function exists to prevent. It is preflighted like any other choice.
+    return { path: process.env.MAVCI_BASH, how: 'MAVCI_BASH', tried: ['MAVCI_BASH'] };
+  }
+
+  if (process.platform === 'win32') {
+    // Git Bash is the interpreter Claude Code's Bash tool uses on Windows, so it
+    // is the one this check must model. The WindowsApps alias is never a
+    // candidate - it is a launcher for a different operating system.
+    const candidates = [
+      path.join(process.env.ProgramFiles ?? 'C:\\Program Files', 'Git', 'bin', 'bash.exe'),
+      path.join(process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)', 'Git', 'bin', 'bash.exe'),
+      path.join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Git', 'bin', 'bash.exe'),
+    ];
+    for (const c of candidates) {
+      if (c && fs.existsSync(c)) {
+        const hit = usable(c, 'Git Bash');
+        if (hit) return hit;
+      }
+    }
+  }
+
+  return usable('bash', 'PATH') ?? { path: 'bash', how: 'PATH (unproven)', tried };
+}
+
+const BASH = resolveBash();
+
 /** Run a command the way the Bash tool would. Never throws. */
 function runBash(cmd, cwd) {
   try {
-    const stdout = execFileSync('bash', ['-c', cmd],
+    const stdout = execFileSync(BASH.path, ['-c', cmd],
       { cwd, encoding: 'utf8', timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'] });
     return { stdout, stderr: '', status: 0 };
   } catch (err) {
@@ -120,8 +192,30 @@ function runBash(cmd, cwd) {
 }
 
 /**
+ * Make an interpreter's complaint readable. The WSL stub answers in UTF-16LE and
+ * in the machine's display language, so read as utf8 it arrives as text
+ * interleaved with NULs. Stripping them is the difference between a diagnosable
+ * failure and a wall of mojibake.
+ */
+const legible = (s) => s.replace(/\u0000/g, '').replace(/\s+/g, ' ').trim();
+
+/**
  * The signatures of a command that never ran, as opposed to one that ran and
  * reported something. The first entry is the exact shape of the 0.1.0 defect.
+ *
+ * THIS LIST FAILS OPEN, AND THE PREFLIGHT IS WHY THAT IS TOLERABLE.
+ * Every entry is an ENGLISH error string, so it answers "did this run?" by
+ * matching prose. An interpreter that fails in another language - or fails
+ * before reaching a shell at all - produces no match and is scored as HAVING
+ * RUN. That is not hypothetical: with `bash` resolved to the WSL alias on a
+ * Turkish-locale machine, 18 of the 22 blocks below reported `ok` while
+ * executing nothing, and the run still printed `invoked 22 inline block(s)`.
+ *
+ * The fix is not a longer list of strings in more languages - that is the same
+ * assertion with more ways to be almost right. It is to prove the interpreter
+ * executes AT ALL before trusting any per-block verdict from it, which is what
+ * the preflight does. This list is then only ever asked to discriminate between
+ * two commands run by an interpreter already known to work.
  */
 const NEVER_RAN = [
   /Cannot find module/i,
@@ -149,6 +243,56 @@ const sessionId = 'ci-invocation-session';
 let blocks = 0;
 let pluginBlocks = 0;
 
+/**
+ * The two controls, so this file can disagree in BOTH directions.
+ *
+ * The negative one runs the exact form shipped from 0.1.0 to 0.1.7 and requires
+ * it to be caught. The positive one requires the fixed form to pass, so a
+ * harness that has simply stopped working cannot masquerade as a clean tree.
+ * Verified against a worktree of the v0.1.7 tag: it exits 2 and names all four
+ * broken dynamic contexts.
+ *
+ * They are called from the preflight, ahead of the loop. Both of them failing at
+ * once has only ever meant one thing - the harness stopped exercising anything -
+ * and that is a statement about the interpreter, not about the tree.
+ */
+function preflightControls() {
+  {
+    const shipped = 'node "$CLAUDE_PLUGIN_ROOT/scripts/doctor.mjs" $ARGUMENTS';
+    const cmd = substitute(shipped, {
+      pluginRoot: PLUGIN, skillDir: path.join(SKILLS, 'doctor'), projectDir: tmp, sessionId, args: '',
+    });
+    const leftover = cmd.match(/\$(?!\{)CLAUDE_[A-Z_]+/);
+    const r = runBash(cmd, tmp);
+    const sig = neverRan(`${r.stdout}\n${r.stderr}`);
+    if (leftover && sig) {
+      ok(`negative control: the shipped v0.1.7 form is caught twice over - survives substitution as ${leftover[0]}, and fails to run (${sig})`);
+    } else {
+      bad('negative control FAILED: the bare $CLAUDE_PLUGIN_ROOT form was NOT caught '
+        + `(leftover=${leftover?.[0] ?? 'none'}, ranError=${sig ?? 'none'}). `
+        + 'This check cannot detect the defect it exists for, so nothing it reports means anything.\n'
+        + `      interpreter : ${BASH.path} (resolved by ${BASH.how})\n`
+        + `      it said     : ${legible(r.stdout + r.stderr).slice(0, 200) || '(nothing)'}`);
+    }
+  }
+
+  {
+    const fixed = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/state.mjs" --show';
+    const cmd = substitute(fixed, {
+      pluginRoot: PLUGIN, skillDir: path.join(SKILLS, 'plan'), projectDir: tmp, sessionId, args: '',
+    });
+    const r = runBash(cmd, tmp);
+    if (r.status === 0 && !neverRan(`${r.stdout}\n${r.stderr}`) && r.stdout.trim()) {
+      ok('positive control: the braced form runs and reports, so the harness is not simply failing everything');
+    } else {
+      bad(`positive control FAILED: the correct form did not run (status=${r.status}). `
+        + 'This check would block every correct tree.\n'
+        + `      interpreter : ${BASH.path} (resolved by ${BASH.how})\n`
+        + `      it said     : ${legible(r.stdout + r.stderr).slice(0, 200) || '(nothing)'}`);
+    }
+  }
+}
+
 try {
   fs.mkdirSync(path.join(tmp, '.mavci'), { recursive: true });
   fs.writeFileSync(path.join(tmp, '.mavci', 'project.json'), JSON.stringify(MANIFEST, null, 2));
@@ -157,8 +301,52 @@ try {
   state.init(tmp, MANIFEST);
   execFileSync('git', ['init', '-q'], { cwd: tmp, stdio: 'ignore' });
 
-  const skills = fs.readdirSync(SKILLS).filter((s) => fs.existsSync(path.join(SKILLS, s, 'SKILL.md')));
-  if (!skills.length) bad('no skills found - this check inspected nothing');
+  /* --- PREFLIGHT: prove the interpreter before scoring anything with it ---
+   *
+   * These three probes used to run AFTER the loop, as a postscript. That order
+   * was the defect: on a broken interpreter the loop still printed `ok invoked
+   * 22 inline block(s)` - a sentence that was false - and the controls objected
+   * only underneath it. The run was refused, so the gate held; but the report
+   * named 22 successful invocations that had not happened, and named nothing
+   * about the interpreter that was the entire cause.
+   *
+   * A control that can invalidate every line above it belongs above them.
+   */
+  console.log(`  ..   interpreter: ${BASH.path}  (resolved by ${BASH.how})`);
+
+  {
+    // 1. The interpreter executes at all. Deliberately the dumbest possible
+    //    command: if THIS cannot round-trip, no verdict below means anything.
+    const probe = runBash('echo mavci-preflight-ok', tmp);
+    if (probe.status !== 0 || !probe.stdout.includes('mavci-preflight-ok')) {
+      bad('PREFLIGHT: the shell does not execute commands, so nothing below could be tested.\n'
+        + `      interpreter : ${BASH.path} (resolved by ${BASH.how})\n`
+        + `      probe       : echo mavci-preflight-ok -> exit ${probe.status}\n`
+        + `      it said     : ${legible(probe.stdout + probe.stderr).slice(0, 240) || '(nothing)'}\n`
+        + (BASH.tried?.length ? `      tried       : ${BASH.tried.join(' | ')}\n` : '')
+        + '      On Windows this is almost always PATH resolving `bash` to the WSL\n'
+        + '      app-execution alias (%LOCALAPPDATA%\\Microsoft\\WindowsApps\\bash.exe)\n'
+        + '      on a machine with no distribution installed. That launcher exits 1\n'
+        + '      without running the command, which is indistinguishable from a\n'
+        + '      command that ran and failed unless something asks it to echo.\n'
+        + '      Fix: run this from Git Bash, or set MAVCI_BASH to a working bash.');
+    }
+  }
+
+  // 2 and 3. The two controls, unchanged in substance and moved ahead of the
+  //    loop. The negative one requires the 0.1.0 defect to be CAUGHT; the
+  //    positive one requires a correct command to RUN, so this file can
+  //    disagree in both directions rather than only failing everything.
+  if (!failures.length) preflightControls();
+
+  if (failures.length) {
+    console.log('  ..   preflight failed - no block was invoked, and no claim is made about any');
+  }
+
+  const skills = failures.length
+    ? []
+    : fs.readdirSync(SKILLS).filter((s) => fs.existsSync(path.join(SKILLS, s, 'SKILL.md')));
+  if (!failures.length && !skills.length) bad('no skills found - this check inspected nothing');
 
   for (const skill of skills) {
     const skillDir = path.join(SKILLS, skill);
@@ -204,42 +392,8 @@ try {
     }
   }
 
-  if (!blocks) bad('no inline `!` blocks were found in any skill - nothing was invoked');
-  else ok(`invoked ${blocks} inline block(s) across ${skills.length} skill(s); ${pluginBlocks} call a plugin script`);
-
-  /* --- the control that matters: the 0.1.0 form must be CAUGHT -------- */
-  {
-    // Exactly what shipped from 0.1.0 to 0.1.7, run through the same pipeline.
-    const shipped = 'node "$CLAUDE_PLUGIN_ROOT/scripts/doctor.mjs" $ARGUMENTS';
-    const cmd = substitute(shipped, {
-      pluginRoot: PLUGIN, skillDir: path.join(SKILLS, 'doctor'), projectDir: tmp, sessionId, args: '',
-    });
-    const leftover = cmd.match(/\$(?!\{)CLAUDE_[A-Z_]+/);
-    const r = runBash(cmd, tmp);
-    const sig = neverRan(`${r.stdout}\n${r.stderr}`);
-    if (leftover && sig) {
-      ok(`negative control: the shipped v0.1.7 form is caught twice over - survives substitution as ${leftover[0]}, and fails to run (${sig})`);
-    } else {
-      bad('negative control FAILED: the bare $CLAUDE_PLUGIN_ROOT form was NOT caught '
-        + `(leftover=${leftover?.[0] ?? 'none'}, ranError=${sig ?? 'none'}). `
-        + 'This check cannot detect the defect it exists for, so every pass above is meaningless.');
-    }
-  }
-
-  /* --- positive control: the fixed form runs ------------------------- */
-  {
-    const fixed = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/state.mjs" --show';
-    const cmd = substitute(fixed, {
-      pluginRoot: PLUGIN, skillDir: path.join(SKILLS, 'plan'), projectDir: tmp, sessionId, args: '',
-    });
-    const r = runBash(cmd, tmp);
-    if (r.status === 0 && !neverRan(`${r.stdout}\n${r.stderr}`) && r.stdout.trim()) {
-      ok('positive control: the braced form runs and reports, so the harness is not simply failing everything');
-    } else {
-      bad(`positive control FAILED: the correct form did not run (status=${r.status}). `
-        + 'This check would block every correct tree.');
-    }
-  }
+  if (!failures.length && !blocks) bad('no inline `!` blocks were found in any skill - nothing was invoked');
+  else if (blocks) ok(`invoked ${blocks} inline block(s) across ${skills.length} skill(s); ${pluginBlocks} call a plugin script`);
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
   // The verify skill arms the gate; do not leave the marker on the CI runner.
@@ -251,4 +405,5 @@ if (failures.length) {
   for (const f of failures) console.error('  - ' + f);
   process.exit(2);
 }
-console.log('\ncommand invocation check passed: every dynamic-context block substitutes and runs.');
+console.log('\ncommand invocation check passed: every dynamic-context block substitutes and runs, '
+  + `under ${BASH.path} (resolved by ${BASH.how}).`);

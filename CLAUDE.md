@@ -141,10 +141,18 @@ from the tree, and the check is named beside it.
                   0.1.15 added guardian-record on SubagentStop.
                   Entries below that name eight are dated
                   observations and correct as history.
-    28 checks     the release suite, DERIVED from release.yml      check-pretag.mjs
-                  TWENTY-EIGHT, not the 24 this file said: 0.1.18
+    33 checks     the release suite, DERIVED from release.yml      check-pretag.mjs
+                  THIRTY-THREE as of 0.1.22, not the 28 this file
+                  said at 0.1.21. The count is printed by the gate
+                  on every pass, so it is read from a run, never
+                  maintained here by hand. It was 24 at 0.1.17 and
+                  the entry below explains the jump to 28: 0.1.18
                   added four, to selftest.yml only, where no
                   release gate ever ran them. See the 0.1.18 entry.
+    32 scripts    every check script in scripts/ci/                check-ci-gates.mjs
+                  Larger than the suite above: the suite is what
+                  release.yml runs, and check-pretag declares four
+                  excluded steps with reasons on every pass.
 
 `/mavci-core:release` exists, which is carried-forward item 8's condition met:
 the fourteen references that were reworded to name the operator may name the
@@ -1250,6 +1258,139 @@ run they were given:** `check-ci-gates.mjs` (31 dead assertions in
 `check-guardian.mjs`) and `check-agent-contract.mjs` (four agents beyond the one
 the finding named).
 
+
+### 0.1.22 — the check answered a question about the operator's shell
+
+**Cut 2026-09-02.** The release gate refused `v0.1.22` and the refusal is the
+entry: `check-command-invocation.mjs` reported both of its controls down at once,
+and its own message says what that means — *this check cannot detect the defect it
+exists for, so nothing it reports means anything.* Twenty-eight green checks had
+just passed. This one caught it because it is the only check that RUNS anything.
+
+**The three questions, answered in order, because two of them were dead ends and
+the order is what made the third cheap.**
+
+**1. 0.1.22 did not break it.** `check-command-invocation.mjs` is byte-identical
+between `6b7c081` and `8316792` — 0.1.22 touched `state.mjs`, `doctor.mjs`,
+`risk-guard.mjs`, the plan skill and a new `check-state-transition.mjs`, and
+nothing the check reads. Confirmed positively rather than by diff alone: a
+worktree at `6b7c081` reproduces the **identical six failures**. It was already
+broken, and the suite had passed before the branch because it had been run from a
+different shell.
+
+**2. The scaffold did not regress, and `verify: exited 1` was not what it said.**
+That line reads as a freshly scaffolded project failing its own checker, which
+would have made the two control failures downstream and the diagnosis a different
+one entirely. A probe that re-ran both controls after **every one of the 22
+blocks** showed `state.mjs --show` and `verify.mjs --format=human` exiting 0
+throughout, with no block mutating the shared temp project. `verify.mjs` never
+ran. Nothing in the project was wrong.
+
+**3. So the controls did not break independently — and they did not break at
+all.** One cause, and it was the harness: *the check had stopped exercising the
+thing rather than the thing changing.*
+
+**The cause.** The check spawned a bare `bash` and trusted PATH. Which binary
+that is depends on **which shell launched the check**. From Git Bash it is Git
+Bash and everything the check reports is real. From PowerShell — the operator's
+primary shell — `bash` resolves to
+`%LOCALAPPDATA%\Microsoft\WindowsApps\bash.exe`, the WSL app-execution alias,
+which on a machine with no distribution installed prints an error and **exits 1
+without running the command**. Same tree, same commit, two different verdicts.
+
+**The severity is not that the gate failed. It is what the gate said on the way
+down.** Of the 22 blocks, only 4 objected — the ones matched by `MUST_EXIT_ZERO`,
+which noticed a non-zero exit. The other **18 were scored `ok` while executing
+nothing**, and the run printed `invoked 22 inline block(s) across 13 skill(s)`,
+which was false. The reason is `neverRan()`: it answers *did this command run?*
+by matching a list of **English** error strings. The WSL stub answered in Turkish,
+in UTF-16LE. Nothing matched, so a command that never started was scored as one
+that started and behaved.
+
+**That list fails open, and a longer list in more languages is the same
+assertion with more ways to be almost right.** The fix is not lexical. It is to
+prove the interpreter executes AT ALL before trusting any per-block verdict from
+it — invariant 5 (*a failed probe is never reported as a pass*) applied to the
+harness rather than to the thing under test.
+
+**The controls ran last, and that was the second half of it.** They are the right
+probes and they did fire; the process exited 2 and no tag was cut, so the gate
+held. But they ran as a postscript, underneath a summary line that had already
+claimed 22 successful invocations, and neither of them named the interpreter —
+which was the entire cause and the only fact that would have shortened the
+diagnosis. **A control that can invalidate every line above it belongs above
+them.**
+
+**What shipped.**
+
+- `resolveBash()`: `MAVCI_BASH` if pinned, else Git Bash at its known locations on
+  win32, else PATH. The WindowsApps alias is never a candidate — it is a launcher
+  for a different operating system, not a shell. The interpreter is **named on
+  every run, pass or fail**, because a check that does not say which interpreter
+  it used is asserting more than it verified.
+- A **preflight** ahead of the loop: an `echo` round-trip, then both controls. On
+  failure the check refuses having invoked nothing and says so — `no block was
+  invoked, and no claim is made about any` — instead of reporting 22 invocations
+  that did not happen.
+- `legible()`, which strips the NULs out of a UTF-16LE answer read as utf8. The
+  difference between a diagnosable failure and a wall of mojibake.
+- The header now carries the whole of this, next to the paragraph enumerating
+  what a green run does **not** prove, which this is now one of.
+
+**Verified in both directions, and the negative controls are independent.**
+Pinning the WSL stub yields **one** failure naming the interpreter, the probe, its
+answer and the fix; pinning a path that does not exist yields the same arm with
+different evidence (`exit -1`, `(nothing)`). Under Git Bash and under PowerShell
+the check now returns the **same verdict**, which is the property that was missing.
+
+**Also fixed: the gate truncated its own evidence, and kept the wrong half.**
+`check-pretag` reproduced `err.stdout` and discarded `err.stderr` — but every
+check in the suite writes its running commentary to stdout and its
+**authoritative failure list to stderr**. It then kept the last **4** lines. So a
+six-failure run was read as a three-failure one, and the three dropped were the
+ones naming `build`, `plan` and `verify`, which is what made the surviving
+`verify: exited 1` look like a scaffold regression. Now: stderr preferred, 40
+lines, and **the number of dropped lines is printed**. A gate that truncates its
+own evidence must say that it did, or the reader diagnoses the part that survived.
+
+**One thing deliberately not done.** `check-plugin.mjs`'s stdio rule fired on a
+new **doc comment** that quoted a call: `blankSource` is documented "not a
+parser", read the backticked prose as code, and reported *calls exec\*Sync without
+pinning stdio* about a line that calls nothing. The rule was right to fail closed
+and the prose was reworded. **Narrowing a checker to stop noticing is the move
+this repository exists to refuse** — but the message names a cause it has not
+established, which is finding 5's shape from 0.1.12, and it is worth a retro when
+someone is in that file for another reason.
+
+#### The tags — v0.1.21 joins v0.1.15 and v0.1.16, for a DIFFERENT reason
+
+**v0.1.21 was never tagged, and once `v0.1.22` is cut it never will be.**
+`check-tags.mjs` has exactly three failing arms — mixed lightweight/annotated
+forms at or above v0.1.7, no tag reachable from the mainline, and the mainline
+ahead of the newest tag. Verified by reading them, not assumed. **Not one of them
+asks whether every version in this log was ever tagged.** `v0.1.22` at main's tip
+satisfies all three, and 0.1.21 stays untagged with nothing objecting, exactly as
+0.1.15 and 0.1.16 do.
+
+**The reason is not the same reason, and conflating them would invent a principle
+that does not exist.** v0.1.15 and v0.1.16 are untagged **on principle**: the
+corpus that would have graded them did not exist when they were built, what
+passed later was a different agent, and a tag would claim a release point for an
+agent findings 14 and 20 describe as defective. That decision was argued and is
+permanent because the argument cannot expire.
+
+v0.1.21 is untagged **by sequencing**. It was cut, committed, and superseded by
+0.1.22 before a tag was pushed. Nothing was withheld and nothing was judged. It is
+an accident of ordering that the tag arm is structurally unable to notice, and it
+is recorded here for the same reason the 0.1.15/0.1.16 note was: **a version in
+the log with no tag reads, to the next person, as a version whose tag is owed.**
+It is not owed. There is no work queued behind this paragraph.
+
+**What this costs, and it is the same cost as before.**
+`plugins/mavci-core/templates/mavci-verify.yml` clones
+`v<state.json.plugin_version>`, so a project whose control plane records 0.1.21
+fails loudly at checkout. **That is correct behaviour and stays.** The fix for
+such a project is `/mavci-core:doctor --sync`, not a tag here.
 
 ### Carried forward — still not built
 

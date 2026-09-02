@@ -158,6 +158,12 @@ export const SELFTEST_ONLY = new Map([]);
 // otherwise report "0 checks pass" in the confident voice of a gate that ran.
 const MIN_DERIVED = 8;
 
+// How much of a failing check's own report to reproduce. Was 4, which is smaller
+// than the failure list of any check that finds more than a couple of things -
+// so the gate routinely showed a fraction of the evidence and did not say so.
+// Whatever is cut is now counted and announced.
+const TAIL_LINES = 40;
+
 // ONE recogniser for "this step runs a node check", shared by the release
 // derivation and the selftest-coverage arm. Two copies of a pattern is the
 // shape this repository keeps finding: they agree until one is edited.
@@ -803,9 +809,24 @@ function main() {
       execFileSync(process.execPath, [path.join(ROOT, script), ...args],
         { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 180000 });
     } catch (err) {
-      const tail = String(err.stdout ?? '').trim().split('\n').slice(-4).join('\n');
+      // Prefer stderr: every check in this suite writes its authoritative
+      // failure list there and uses stdout for the running commentary. Taking
+      // the stdout tail threw the summary away and kept the chatter - which is
+      // how a six-failure run was read as a three-failure one, with the three
+      // that named the cause among the ones dropped.
+      const err_ = String(err.stderr ?? '').trim();
+      const out_ = String(err.stdout ?? '').trim();
+      const body = err_ || out_;
+      const lines = body ? body.split('\n') : [];
+      const shown = lines.slice(-TAIL_LINES);
+      const dropped = lines.length - shown.length;
       failures.push(`${path.basename(script)} FAILED (exit ${err.status}):\n`
-        + (tail ? tail.split('\n').map((l) => `      ${l}`).join('\n') : '      (no output)'));
+        + (shown.length
+          // A gate that truncates its own evidence must say that it did, or the
+          // reader diagnoses the part that survived.
+          ? (dropped > 0 ? `      [...${dropped} earlier line(s) not shown]\n` : '')
+            + shown.map((l) => `      ${l}`).join('\n')
+          : '      (no output)'));
     }
   }
 
