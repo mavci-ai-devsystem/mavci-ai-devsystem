@@ -865,11 +865,41 @@ because a release log that skips two releases silently reads as two releases in
 which nothing happened. Both now have entries — that is what the state summary
 rewrite at the top of this section was for.
 
-**They still have no TAG, and that is a decision rather than the same gap.**
-`618069b` states it: `release-check.mjs` refuses on an absent guardian record,
-and *the version exists to give the working-tree install a distinct identity, not
-to claim a release. The tag comes after the corpus passes.* The corpus still has
-no result, so both stay untagged.
+**They have no TAG, and as of 2026-09-02 that is PERMANENT rather than pending.**
+`618069b` set the condition: `release-check.mjs` refuses on an absent guardian
+record, and *the version exists to give the working-tree install a distinct
+identity, not to claim a release. The tag comes after the corpus passes.*
+
+**The corpus has now passed — twice, at 0.1.19 and at 0.1.20 — and it does not
+discharge that condition for these two versions.** It cannot, and the reason is
+not a technicality about ordering:
+
+- **There was no corpus at 0.1.15 or 0.1.16.** `corpus-stage.mjs` and
+  `corpus-score.mjs` first appear at `2ed0e80` (0.1.18). The case library the
+  passing runs were graded against did not exist when either version was built,
+  so there is no run of it that either version could ever have had.
+- **What passed is a different agent.** At `7397629` guardian is told to read
+  `.mavci/project.json` and `.mavci/control/state.json` at startup and to work
+  from the manifest and the phase. The worklist-file protocol — *the worklist is
+  the complete statement of what you were asked*, the single `.mavci/` read, the
+  hook-bounded read scope — arrived afterwards. The corpus graded THAT agent. It
+  is not the one 0.1.15 and 0.1.16 shipped.
+- **The agent they shipped is the one findings 14 and 20 describe as defective**:
+  ordered to invoke a skill with no tool that can invoke one, and ordered to make
+  two reads its own scope refuses. A tag on those commits would claim a release
+  point for it, on the strength of a measurement taken on its replacement.
+
+So the condition is met chronologically and unmet substantively, and the
+substantive half is the one that decides. Neither version can be covered
+retroactively by a corpus run: coverage runs forward from the library and the
+agent that were current when it ran. **v0.1.15 and v0.1.16 will not be cut.**
+They stay as they are — versions in the log and in `docs/lessons/`, with no tag,
+permanently.
+
+This paragraph replaces "owed after the corpus run" rather than satisfying it. A
+pending condition that can never be met should stop being described as pending:
+left standing, it reads as work queued, and every later reader spends the same
+hour rediscovering that the thing it waits for cannot arrive.
 
 Checked on 2026-09-02, because the reason offered for back-tagging them was that
 `check-tags` would keep failing until they existed. **It would not.** Its only
@@ -885,8 +915,21 @@ fails loudly at checkout today and would silently succeed afterwards, on a
 version this repository declined to release, with guardian's answers still
 unmeasured. That is carried-forward items 1 and 2 arriving through a third door:
 a forward-looking version value steering a project's CI at a rule set nobody
-chose. **The two tags are owed after the corpus run, not before it**, and this
-paragraph is the record of what is owed and why it is not overdue.
+chose. That argument did not expire when the corpus passed — it is the reason the
+decision above is permanent rather than deferred. **The loud checkout failure is
+the correct behaviour and stays.** A project whose control plane records 0.1.15
+or 0.1.16 is pinned at a version this repository declined to release; failing at
+checkout tells it so, and a tag would replace that with a silent success. The fix
+for such a project is `/mavci-core:doctor --sync`, not a tag here.
+
+**Not the reason, and recorded so it is not mistaken for one.** `release-check.mjs`
+also refuses in this project today, but for an unrelated defect: it reads the
+newest file in `.mavci/control/guardian/records/`, the corpus writes its records
+into that same directory, and the corpus's last case is an expected-`fail`
+control — so a PASSING corpus leaves a failing record as the gate's input. Filed
+as finding 25 in the retro queue. It is a real defect and it is not what settles
+the tags: the argument above holds whatever that gate returns, and fixing the
+gate would not make a 0.1.20 corpus run into evidence about a 0.1.16 agent.
 
 ### 0.1.18 — the corpus becomes measurable, and the clone stops being invisible
 
