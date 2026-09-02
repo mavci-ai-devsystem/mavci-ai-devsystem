@@ -161,3 +161,46 @@ on. They are a throwaway project's data and that project can be deleted. The
 finding is that this repository's rule cannot tell *"a file written by an older
 plugin"* from *"a file someone corrupted"*, reports the second when it means the
 first, and sends the reader to the command that erases the difference.
+
+---
+
+# Finding 2 — a CI check mutates a tracked file to test it, and a killed process leaves the repository edited
+
+Recorded 2026-09-02, plugin 0.1.18, while verifying the work recovered from the
+marketplace clone. **Not built.**
+
+`scripts/ci/check-read-scope.mjs`'s N9 assertion — *an unreadable scopes file
+REFUSES rather than falling open* — is a correct and load-bearing thing to
+assert. `risk-guard.mjs` reads `plugins/mavci-core/agents/agent-scopes.json` from
+`PLUGIN_ROOT`, so the only way to make it unreadable is to make the real file
+unreadable. The check therefore deletes and rewrites a **tracked file in the
+working tree**, restores it in a `finally`, and byte-compares the restoration.
+
+The restoration is careful and it is not the problem. The problem is that a
+`finally` is not a guarantee: `SIGKILL`, a runner timeout, a full disk, or the
+operator pressing Ctrl+C between the delete and the rewrite all leave
+`agent-scopes.json` missing or truncated in a tree that reports itself clean
+everywhere else. **The file it edits is the one that defines guardian's read
+scope.**
+
+Severity is bounded, and the bound is worth stating rather than assuming: an
+unreadable scopes file makes `risk-guard` **fail closed** — that is exactly what
+N9 asserts — so the damaged state refuses reads rather than granting them. The
+cost is a confusing broken tree and a guardian that cannot work, not an open
+door. That is the difference between this and an incident.
+
+It is filed here rather than fixed because the fix is not local to the check. The
+honest options are (a) let `risk-guard` resolve the scopes path through an
+environment variable so a test can point it at a temp copy, which adds a
+production code path that exists only for tests and is itself a way to disable
+the guard, or (b) run the whole assertion in a staged copy of the plugin tree,
+which is slower and needs the copy to stay faithful. Both are real changes with
+real trade-offs, and neither should be picked while a release is being cut.
+
+**Why it is worth recording at all**, given nothing has gone wrong: this session
+existed because 2510 insertions were sitting in a directory that silently
+discards them. A check that edits tracked files in place is the same class of
+hazard pointed at the source repository instead of the clone — work that can
+vanish with no error and no trace. The finding is not "this broke"; it is "this
+is the one place in the repository where a normal CI run writes to tracked
+source, and nothing says so."

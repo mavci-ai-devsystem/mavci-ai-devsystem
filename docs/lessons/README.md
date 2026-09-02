@@ -65,16 +65,24 @@ deliberate: a lesson edited to fit its new home stops being evidence.
                                       occurs. Fourth `Repository not found`
                                       against the system repo in one day.
 
-    pending-system-change-0.1.18.md   NO ORIGIN PROJECT. plugin 0.1.17,
-                                      2026-09-02. One finding, not built:
-                                      state.schema_valid judges every control
-                                      file by the CURRENT schema and never reads
-                                      the schema_version the file declares, so 55
-                                      correct pre-0.1.15 verdicts in gate4c read
-                                      as 55 blockers - and the remedy sends the
-                                      operator to --reseal, which launders the
-                                      evidence of a condition that was never
-                                      tampering.
+    pending-system-change-0.1.18.md   NO ORIGIN PROJECT. plugin 0.1.17 and
+                                      0.1.18, 2026-09-02. TWO findings, neither
+                                      built. 1: state.schema_valid judges every
+                                      control file by the CURRENT schema and
+                                      never reads the schema_version the file
+                                      declares, so 55 correct pre-0.1.15
+                                      verdicts in gate4c read as 55 blockers -
+                                      and the remedy sends the operator to
+                                      --reseal, which launders the evidence of a
+                                      condition that was never tampering.
+                                      2: check-read-scope.mjs deletes and
+                                      rewrites the tracked agent-scopes.json to
+                                      test the unreadable-file path. The finally
+                                      restores it; a SIGKILL between the two
+                                      does not. Bounded - risk-guard fails
+                                      CLOSED on an unreadable scopes file - but
+                                      it is the one place a normal CI run writes
+                                      to tracked source.
 
     0.1.18-the-clone-is-generated-state.md
                                       NO ORIGIN PROJECT. plugin 0.1.17,
