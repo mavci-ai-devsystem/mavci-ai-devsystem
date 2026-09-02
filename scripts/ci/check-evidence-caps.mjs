@@ -66,6 +66,8 @@ const { EVIDENCE_MAX_CHARS, REMEDY_MAX_CHARS, PATHS } = config;
 const failures = [];
 const ok = (m) => console.log(`  ok   ${m}`);
 const bad = (m) => { failures.push(m); console.log(`  FAIL ${m}`); };
+/** Added with Part 3: this file had ok/bad but no combinator. */
+const check = (c, m) => (c ? ok(m) : bad(m));
 
 /** The literal the note is recognised by. Derived, never re-spelled here. */
 const AUTHORITY_MARKER = authorityNote('X').split(':')[0] + ':';
@@ -366,6 +368,87 @@ const AUTHORITY_MARKER = authorityNote('X').split(':')[0] + ':';
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+/* ======================================================================
+ * PART 3 - THE REMEDY MUST FIT THE FAILURE. Finding 24.
+ * ======================================================================
+ * `state.schema_valid` printed ONE remedy for every error it could report:
+ * "If a control file was edited by hand on purpose, it needs state.mjs --reseal."
+ *
+ * It fired on a file the sanctioned writer had produced minutes earlier, rejected
+ * by a schema one version older than the writer because the session's registered
+ * hooks were stale. The file was not hand-edited, and resealing recomputes a hash
+ * - it has no bearing on schema validity, so an operator following that remedy
+ * would have spent a privileged action and arrived back at the same block.
+ *
+ * A REMEDY THAT CANNOT WORK IS WORSE THAN NO REMEDY. It costs an action and
+ * teaches the reader the message is unreliable.
+ *
+ * ASSERT ON THE TEXT. Part 1 above catches a remedy that is too LONG, because
+ * that throws. Nothing catches a remedy that is WRONG, because the exit code is
+ * identical either way - which is exactly why the --reseal version passed every
+ * check this gate had. Same shape as 0.1.11: the reason arriving is the thing to
+ * test.
+ *
+ * AND PART 1 CANNOT SEE THESE AT ALL. It reads the rule's static `remedy`
+ * string. These are built per-finding by a function, so they are invisible to it,
+ * and the 300-char cap has to be re-asserted here on the OUTPUT or finding 2
+ * comes straight back through a dynamic door.
+ */
+{
+  const { remedyFor } = rules;
+  const CAP = config.REMEDY_MAX_CHARS;
+  const skew = { onDisk: '0.1.21', hooksRegistered: '0.1.20' };
+  const level = { onDisk: '0.1.21', hooksRegistered: '0.1.21' };
+
+  const seal = remedyFor({ kind: 'seal' }, skew);
+  const schemaSkewed = remedyFor({ kind: 'schema' }, skew);
+  const schemaLevel = remedyFor({ kind: 'schema' }, level);
+
+  // 1. The three failures get three different remedies.
+  check(new Set([seal, schemaSkewed, schemaLevel]).size === 3,
+    'remedy: a seal failure, a skewed schema failure and a level schema failure get three DIFFERENT remedies');
+
+  // 2. --reseal appears for the seal failure and NOWHERE else. This is the whole
+  //    finding: it was printed for a schema rejection it cannot clear.
+  check(/--reseal/.test(seal),
+    'remedy: the SEAL failure names --reseal - it is the one failure resealing answers');
+  check(!/needs .*--reseal|it needs `state\.mjs --reseal`/.test(schemaSkewed)
+    && !/needs .*--reseal/.test(schemaLevel),
+    'remedy: no SCHEMA failure instructs the reader to run --reseal');
+  for (const [label, text] of [['skewed', schemaSkewed], ['level', schemaLevel]]) {
+    check(/NOT a seal failure|cannot clear/.test(text),
+      `remedy: the ${label} schema failure says outright that resealing will not clear it`);
+  }
+
+  // 3. Under skew, the remedy is a SESSION RESTART and it names both versions.
+  check(/RESTART THE SESSION/.test(schemaSkewed),
+    'remedy: a schema rejection under version skew names a SESSION RESTART - the thing that actually clears it');
+  check(/0\.1\.20/.test(schemaSkewed) && /0\.1\.21/.test(schemaSkewed),
+    'remedy: and it names both versions, so the reader can see the skew rather than take it on trust');
+  check(!/RESTART THE SESSION/.test(schemaLevel),
+    'remedy: with NO skew, a restart is not offered - it would not fix a genuinely malformed file');
+
+  // 4. Authority. Only the seal remedy is the operator's; a stale checker is
+  //    restartable by whoever is sitting there.
+  check(/AUTHORITY/.test(seal),
+    'remedy: the seal remedy carries the AUTHORITY marker - --reseal is denied to agents');
+
+  // 5. Finding 2, through the dynamic door Part 1 cannot see.
+  const longest = [
+    remedyFor({ kind: 'seal' }, null),
+    remedyFor({ kind: 'seal' }, { onDisk: '100.200.300', hooksRegistered: '100.200.299' }),
+    remedyFor({ kind: 'schema' }, null),
+    remedyFor({ kind: 'schema' }, { onDisk: '100.200.300', hooksRegistered: '100.200.299' }),
+    remedyFor({}, null), remedyFor(null, null),
+  ];
+  const over = longest.filter((r) => r.length > CAP);
+  check(over.length === 0,
+    `remedy: every remedyFor output fits REMEDY_MAX_CHARS=${CAP} (longest ${Math.max(...longest.map((r) => r.length))}) - `
+    + 'Part 1 reads the static string and cannot see these');
+  check(longest.every((r) => typeof r === 'string' && r.length > 0),
+    'remedy: every input shape yields a remedy, including a malformed error object - never undefined');
 }
 
 if (failures.length) {

@@ -54,10 +54,7 @@ Before anything else, in this order:
 2. Read `.mavci/control/state.json`. If `phase` is not `any`, **stop** and
    report `status: "blocked"` with `blocked_by: "wrong_phase:<actual>"`. Do not
    change the phase yourself - you cannot, and trying wastes a turn.
-3. Load the standards you need. Invoke these skills now, before doing any work:
-   _(this agent loads no standards packs)_
-   They may already be preloaded, in which case invoking them again is cheap.
-   Do not rely on remembering their contents from a previous task.
+3. You load no standards packs. There is nothing to invoke here - go straight to the work.
 
 ## 3. Inputs
 

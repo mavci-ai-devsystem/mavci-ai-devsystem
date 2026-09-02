@@ -16,6 +16,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { PATHS } from './config.mjs';
+import { CORPUS_STAGE_DIR } from './rules/index.mjs';
 import { abs, exists, readJson, writeJsonAtomic, nowIso, walk, readTextOrNull } from './lib/fsx.mjs';
 import { scanProject, worklistFrom } from './lib/sitescan.mjs';
 import { projectRoot } from './state.mjs';
@@ -82,6 +83,39 @@ export function emitWorklist(root = projectRoot()) {
  * correctly declines to record anything, and the run is silently lost. Writing it
  * first makes the worst case a stale ticket, which the gate sees and reports.
  */
+/**
+ * Is a corpus case staged in this project right now?
+ *
+ * THE ONE PLACE THIS IS DECIDED, and it is derived rather than declared. An
+ * argument the dispatcher has to remember to pass is an argument the dispatcher
+ * will one day forget, and the failure would be silent in the direction that
+ * matters - a corpus record counted as project evidence. The staging directory's
+ * contents ARE the fact: if a fixture is staged, the tree guardian is about to
+ * read is not this project's own source.
+ *
+ * It is deliberately coarse. A run over a tree that merely CONTAINS staged
+ * fixtures is not clean evidence about the project either, even if nobody
+ * intended it as a corpus run, so marking it `corpus` is the honest answer in
+ * both cases. Erring the other way would let a dirty stage produce a record the
+ * release gate trusts.
+ *
+ * NOT a marker file inside the project. 0.1.18 removed `current-case.txt` for
+ * naming the staged case inside the tree guardian reads; this reads the stage
+ * that already exists and writes its answer into the ticket, which lives under
+ * `.mavci/` where guardian's read scope refuses to follow.
+ */
+export function stageIsActive(root) {
+  const stage = abs(root, CORPUS_STAGE_DIR);
+  if (!exists(stage)) return false;
+  try {
+    return fs.readdirSync(stage).some((e) => e !== '.gitkeep');
+  } catch {
+    // Unreadable stage: cannot establish that this is a clean tree, so do not
+    // claim it is one.
+    return true;
+  }
+}
+
 export function openTicket(root, worklistId, { trigger = 'manual', reviewedRef = null, treeState = null } = {}) {
   const manifest = readJson(abs(root, PATHS.manifest));
   const wlRel = `${DIR}/${worklistId}.json`;
@@ -92,13 +126,18 @@ export function openTicket(root, worklistId, { trigger = 'manual', reviewedRef =
     worklist_id: worklistId,
     worklist_path: wlRel,
     opened_at: nowIso(),
+    // What the record produced from this ticket will be evidence ABOUT. Decided
+    // here, once, from the tree's actual state - see stageIsActive. The
+    // SubagentStop writer copies it and does not re-derive it, so there is one
+    // answer per run and no way for two derivations to disagree.
+    source: stageIsActive(root) ? 'corpus' : 'real',
     trigger,
     reviewed_ref: reviewedRef,
     tree_state: treeState,
   };
   fs.mkdirSync(abs(root, DIR), { recursive: true });
   writeJsonAtomic(abs(root, TICKET), doc);
-  return { path: TICKET, worklist_path: wlRel };
+  return { path: TICKET, worklist_path: wlRel, source: doc.source };
 }
 
 function main() {
@@ -118,7 +157,7 @@ function main() {
     const ti = argv.indexOf('--open-ticket');
     if (ti !== -1) {
       const r = openTicket(root, argv[ti + 1]);
-      console.log(`ticket open for ${argv[ti + 1]} -> ${r.worklist_path}`);
+      console.log(`ticket open for ${argv[ti + 1]} -> ${r.worklist_path}` + ` [source: ${r.source}]`);
       console.log('  Dispatch guardian with the PATH. Never inline the worklist into the prompt.');
       return;
     }

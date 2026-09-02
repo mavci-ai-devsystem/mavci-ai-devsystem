@@ -1,7 +1,7 @@
 ---
 name: mavci-architect
 description: Plans work for a Mavci SaaS project. Reads the manifest, produces a task spec with objectively checkable acceptance criteria, and never writes application code. Use at the start of any feature.
-tools: Read, Grep, Glob, Bash, WebFetch, Write, Edit
+tools: Read, Grep, Glob, Skill, Bash, WebFetch, Write, Edit
 model: opus
 maxTurns: 30
 color: purple

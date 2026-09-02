@@ -1,7 +1,7 @@
 ---
 name: mavci-verifier
 description: Verifies a completed task against its acceptance criteria and the standards checker. Reads and runs, never edits. Use after /mavci-core:build reports done.
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob, Skill, Bash
 disallowedTools: Edit, Write, NotebookEdit
 model: sonnet
 maxTurns: 25

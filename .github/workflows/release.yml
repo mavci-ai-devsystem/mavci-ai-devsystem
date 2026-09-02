@@ -51,6 +51,8 @@ jobs:
         run: |
           node plugins/mavci-core/scripts/build-agents.mjs --check
           node plugins/mavci-core/scripts/redact.mjs --selftest
+          node scripts/ci/check-ci-gates.mjs
+          node scripts/ci/check-agent-contract.mjs
           node scripts/ci/check-schemas.mjs
           node scripts/ci/check-fixtures.mjs
           node scripts/ci/check-risk-guard.mjs

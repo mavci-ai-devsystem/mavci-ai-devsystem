@@ -1,7 +1,7 @@
 ---
 name: mavci-builder
 description: Implements a task spec in a Mavci SaaS project. Writes application code, migrations and tests against an existing spec. Use after /mavci-core:plan has produced a task.
-tools: Read, Grep, Glob, Bash, Edit, Write, WebFetch
+tools: Read, Grep, Glob, Skill, Bash, Edit, Write, WebFetch
 model: sonnet
 maxTurns: 60
 color: green

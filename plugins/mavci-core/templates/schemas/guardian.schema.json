@@ -14,6 +14,11 @@
     "reviewed_ref": { "type": ["string", "null"] },
     "tree_state": { "type": ["string", "null"], "enum": ["clean", "dirty", null] },
     "worklist_id": { "type": "string" },
+    "source": {
+      "type": ["string", "null"],
+      "enum": ["real", "corpus", null],
+      "description": "What this record is evidence ABOUT: 'real' = guardian ran against this project's own source; 'corpus' = it ran against a fixture staged into corpus-run/, answering a question whose answer was known in advance. One directory holds both (finding 25) and until 0.1.21 nothing distinguished them, so the release gate read a corpus case's expected-fail verdict as a finding about the project. DO NOT ADD THIS FIELD TO \"required\". It looks inconsistent - the reader treats it as mandatory while the schema does not - and that inconsistency is deliberate and load-bearing. This schema sets additionalProperties:false, so a new \"required\" entry rejects every document written before the entry existed. On propagation that invalidates every guardian record already on disk, and the still-registered previous checker rejects the new ones: finding 24's propagation window, in both directions at once. Making it required would not tighten anything either, because the requirement ALREADY lives at the reader and is strictly stronger there - release-gate.mjs refuses on absent, on null, and on any unrecognised value, so a record missing this field is refused today whether or not the schema says so, and an enum that grows cannot promote its new value to project evidence by default. A schema requirement would only bind records written AFTER it shipped, which is the set that already carries the field. Absent here means 'never established', which is why null is a permitted value and 'real' is never a default. If you are here to make the two agree, make them agree by leaving this optional."
+    },
     "trigger": { "type": "string", "enum": ["connect", "release", "manual"] },
     "verdict": { "type": "string", "enum": ["pass", "fail", "not_checked"] },
     "fail_reason": {
@@ -21,6 +26,11 @@
       "enum": ["empty_worklist", "no_report", "coverage_incomplete", "duplicate_answers", "unknown_sites", "undetermined", "malformed_answer", "findings", null]
     },
     "detail": { "type": ["string", "null"], "maxLength": 2000 },
+    "suggested_next": {
+      "type": ["string", "null"],
+      "maxLength": 500,
+      "description": "Guardian's own escalation channel, carried through to the record instead of being discarded (finding 19). The agent contract tells every agent to report a blocked or out-of-scope condition here and stop; guardian used it on the 0.1.18 corpus run to disclose that it could not invoke the skill its startup protocol ordered, and the writer dropped the field, so the disclosure reached no artefact at all. Optional for the same reason as \"source\" - see that field's note before considering making either required."
+    },
     "coverage": {
       "type": "object",
       "additionalProperties": false,

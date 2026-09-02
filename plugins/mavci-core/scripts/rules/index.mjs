@@ -728,18 +728,87 @@ const stateSchemaValid = {
   // it. A remedy naming a command the reader is structurally forbidden to run,
   // without saying so, sends them into a deny they will read as a malfunction.
   authority: 'operator',
-  remedy: 'Run `state.mjs --validate` for the full list. If a control file was edited by hand on '
-    + `purpose, it needs \`state.mjs --reseal\`. ${authorityNote('the operator - --reseal is denied to agents')}`,
+  // THE CONSERVATIVE DEFAULT, not a placeholder. Every finding overrides it via
+  // remedyFor, but this is what a reader gets if that is ever bypassed, so it
+  // states the operator-authority case rather than the agent-actionable one.
+  // Satisfying Part 2's authority assertion with a string no finding emits would
+  // be passing a check with text nobody reads.
+  remedy: 'Run `state.mjs --validate` for the full list. If the SEAL is what failed, a control '
+    + `file changed on purpose needs \`state.mjs --reseal\`. ${authorityNote('the operator')}`,
   run(ctx) {
     const errors = ctx.validateState();
     return errors.map((e) => ({
       check_id: this.id, severity: this.severity,
       path: e.path ?? '.mavci/control', line: null,
       evidence: e.message ?? String(e),
-      remedy: this.remedy,
+      remedy: remedyFor(e, ctx.versions),
     }));
   },
 };
+
+/**
+ * FINDING 24. THE REMEDY MUST FIT THE FAILURE BEING REPORTED.
+ *
+ * What happened: 0.1.20's `--record-corpus` - the only sanctioned writer - wrote
+ * `guardian-corpus.json` with a field 0.1.20's schema had added. The hooks
+ * registered in that session were 0.1.19's, whose schema sets
+ * `additionalProperties: false`, so the field was not merely unknown to it, it
+ * was a violation. The gate blocked, and printed: "If a control file was edited by
+ * hand on purpose, it needs state.mjs --reseal."
+ *
+ * Every clause of that was wrong for the situation. The file was not edited by
+ * hand - it was written minutes earlier by the sanctioned writer. And resealing
+ * recomputes a hash; it has no bearing on schema validity, so an operator who ran
+ * it would have spent a privileged action and arrived back at the same block. A
+ * REMEDY THAT CANNOT WORK IS WORSE THAN NO REMEDY: it costs an action and teaches
+ * the reader that this message is unreliable.
+ *
+ * Three failures, three remedies:
+ *
+ *   SEAL      - the hash disagrees with the files. `--reseal` is the answer, and
+ *               the only case where it is.
+ *   SKEW      - a schema rejection while the registered hooks are OLDER than the
+ *               plugin on disk. The file is fine; the checker reading it is stale.
+ *               The fix is a session restart, and nothing in the old message said
+ *               so. Not conditional on the version being older in the abstract:
+ *               both versions are read off disk, and if they differ the checker
+ *               and the writer disagree by construction.
+ *   SCHEMA    - a rejection with no skew to explain it. Then the document really
+ *               is malformed and `--validate` names it.
+ *
+ * ASSERT ON THE TEXT. The exit code is identical whichever of these is printed -
+ * which is why the version that named `--reseal` for everything passed every
+ * check the gate had. Same shape as 0.1.11: the reason arriving is the thing to
+ * test.
+ */
+export function remedyFor(error, versions = null) {
+  const onDisk = versions?.onDisk ?? null;
+  const registered = versions?.hooksRegistered ?? null;
+  const skewed = !!onDisk && !!registered && onDisk !== registered;
+
+  if (error?.kind === 'seal') {
+    return 'The SEAL disagrees with the files: a hash mismatch, NOT a schema problem. Review '
+      + `\`git diff .mavci/control/\`; a control file changed on purpose needs \`state.mjs --reseal\`, `
+      + `the one failure it answers. ${authorityNote('the operator')}`;
+  }
+
+  if (skewed) {
+    // AUTHORITY, and it is not decoration: an agent cannot restart its own
+    // session. Without the marker this remedy is finding 16's shape - an
+    // instruction to the one party who cannot carry it out.
+    return `RESTART THE SESSION: these hooks are ${registered}, the plugin on disk is ${onDisk}, so `
+      + 'this checker is older than the writer. NOT a seal failure - `--reseal` cannot clear a '
+      + `schema rejection. ${authorityNote('the operator, who restarts the session')}`;
+  }
+
+  // NO authority marker, deliberately: both actions here are the agent's own -
+  // run --validate, file a retro. Marking this operator-only would be the
+  // opposite error to finding 24's, telling an agent to stop when it can act.
+  return 'Run `state.mjs --validate` for the full list. A document does not match its schema. NOT '
+    + 'a seal failure: `--reseal` recomputes a hash and cannot clear this. If a Mavci writer '
+    + 'produced the file, that writer has a bug - file it with /mavci-core:retro rather than '
+    + 'editing the file by hand.';
+}
 
 /* =================================================================== 13 */
 

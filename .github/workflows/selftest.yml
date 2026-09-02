@@ -54,6 +54,22 @@ jobs:
       # sites_total === 0 is not_checked BEFORE any subtraction: with an empty
       # worklist the arithmetic reports perfect coverage of nothing, and a pass there
       # would be the most expensive lie this system can tell.
+      # FIRST, because it decides whether any result below means anything.
+      # check-guardian.mjs had its only failure gate at line 176 of 429: the whole
+      # SubagentStop writer section printed FAIL into an array nothing read, and
+      # the script exited 0. 31 assertions, green since 0.1.15, found by mutation
+      # rather than by reading. This asserts the SHAPE - every assertion ahead of
+      # a gate that can fail - across every check in the directory.
+      - name: Every assertion in every check can fail the build
+        run: node scripts/ci/check-ci-gates.mjs
+
+      # Finding 20: the shared agent contract is rendered into five agents whose
+      # grants differ, and ordered guardian to invoke a skill it holds no tool for
+      # and to read a path its own scope refuses. Found in four more agents on this
+      # check's first run.
+      - name: No agent is ordered to use a tool it lacks or read a path it cannot
+        run: node scripts/ci/check-agent-contract.mjs
+
       - name: Guardian coverage arithmetic and the empty-worklist floor
         run: node scripts/ci/check-guardian.mjs
 

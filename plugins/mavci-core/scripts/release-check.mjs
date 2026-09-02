@@ -12,27 +12,35 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PATHS } from './config.mjs';
 import { abs, exists, readJsonOrNull } from './lib/fsx.mjs';
-import { assessReleaseReadiness, UNREADABLE } from './lib/release-gate.mjs';
+import { assessReleaseReadiness, selectProjectRecord, UNREADABLE } from './lib/release-gate.mjs';
 import { pluginVersion, projectRoot } from './state.mjs';
 
 /**
- * The newest guardian record, or a sentinel.
+ * Every guardian record on disk, ascending by filename.
  *
- * `null` means absent; `UNREADABLE` means a file is there and cannot be parsed.
- * Collapsing those two would let a corrupt record be reported as no record, which
- * is a different problem with a different fix - and the gate deliberately gives
- * them the same VERDICT while keeping them distinguishable in the message.
+ * `UNREADABLE` marks a file that is there and cannot be parsed. Collapsing that
+ * into "absent" would let a corrupt record be reported as no record, which is a
+ * different problem with a different fix - the gate gives them the same VERDICT
+ * while keeping them distinguishable in the message.
+ *
+ * THIS FUNCTION USED TO CHOOSE, AND CHOOSING WAS THE BUG. It read the directory,
+ * took the last file and called it the project's record. The corpus writes into
+ * the same directory through the same writer, its last case is an expected-`fail`
+ * control, and so a PASSING corpus left this gate holding a failing record about a
+ * staged fixture and reporting it as a finding about the project (finding 25).
+ * Selection now lives in `selectProjectRecord`, which is pure and asserted by
+ * `check-release-gate.mjs`; this only gathers. An input selection that no test can
+ * reach is the untested half of every gate built on it.
  */
-function latestGuardianRecord(root) {
+function guardianRecords(root) {
   const dir = abs(root, PATHS.guardianRecords);
-  if (!exists(dir)) return null;
-  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort();
-  if (!files.length) return null;
-  const p = path.join(dir, files[files.length - 1]);
-  try {
-    const doc = JSON.parse(fs.readFileSync(p, 'utf8'));
-    return doc && typeof doc === 'object' ? doc : UNREADABLE;
-  } catch { return UNREADABLE; }
+  if (!exists(dir)) return [];
+  return fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort().map((id) => {
+    try {
+      const doc = JSON.parse(fs.readFileSync(path.join(dir, id), 'utf8'));
+      return { id, doc: doc && typeof doc === 'object' ? doc : UNREADABLE };
+    } catch { return { id, doc: UNREADABLE }; }
+  });
 }
 
 function main() {
@@ -42,11 +50,23 @@ function main() {
     process.exit(2);
   }
 
+  const { record, counts } = selectProjectRecord(guardianRecords(root));
   const result = assessReleaseReadiness({
     runningVersion: pluginVersion(),
     unverified: readJsonOrNull(abs(root, PATHS.unverified)),
-    guardianRecord: latestGuardianRecord(root),
+    guardianRecord: record,
+    recordCounts: counts,
   });
+
+  // Say what was skipped even on the happy path. A gate that silently discards
+  // most of its input directory and then reports "all hold" is telling the
+  // operator less than it knows, and finding 25 is precisely what that costs.
+  if (counts.corpus || counts.undeclared) {
+    console.log('(' + counts.total + ' guardian record(s) on disk: ' + counts.corpus
+      + ' corpus fixture(s), ' + counts.undeclared
+      + ' declaring no source, both skipped as project evidence.)');
+    console.log('');
+  }
 
   if (result.ok) {
     console.log('release preconditions: all hold.');

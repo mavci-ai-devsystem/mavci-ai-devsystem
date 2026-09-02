@@ -24,7 +24,7 @@ import {
   EVIDENCE_MAX_CHARS, REMEDY_MAX_CHARS, CLAMP_MARKER,
 } from './config.mjs';
 import {
-  abs, exists, readTextOrNull, walk, nowIso, canonicalJson, matchesAny, toPosix,
+  abs, exists, readTextOrNull, readJsonOrNull, walk, nowIso, canonicalJson, matchesAny, toPosix,
 } from './lib/fsx.mjs';
 import { rulesFor, ruleById } from './rules/index.mjs';
 import {
@@ -89,14 +89,41 @@ export async function runChecks(root = projectRoot(), { scope = 'full' } = {}) {
     manifest: ctx0.manifest,
     files: fileList,
     redactor: ctx0.redactor,
+    /**
+     * The propagation window, as two facts a rule can act on (finding 24).
+     *
+     * Propagation replaces the plugin ON DISK. A session already running keeps the
+     * hooks it registered at SessionStart, so for the rest of that session every
+     * hook is one version behind the writers the operator invokes by path - and
+     * the procedure tells the operator to propagate mid-session, with nothing
+     * saying the session must restart before the new format is written. It is not
+     * a race: the window lasts until the next session start, which is exactly when
+     * the work following a propagation happens.
+     *
+     * Both facts were already on disk and no rule looked at them. doctor computes
+     * this same comparison one report away.
+     */
+    versions: {
+      onDisk: pluginVersion(),
+      hooksRegistered: readJsonOrNull(abs(root, PATHS.hookRun))?.plugin_version ?? null,
+    },
     readOrNull(rel) {
       if (cache.has(rel)) return cache.get(rel);
       const t = readTextOrNull(abs(root, rel));
       cache.set(rel, t);
       return t;
     },
+    /**
+     * FINDING 24. A seal failure and a schema failure are different problems with
+     * different fixes, and the rule that reports them used to print one remedy for
+     * both: "it needs state.mjs --reseal". Resealing recomputes a hash. It does
+     * nothing whatever to schema validity, so against a schema rejection that
+     * remedy names an operator-only action that would not clear the block if the
+     * operator took it - costing them an action and teaching them the message is
+     * unreliable. The KIND travels with the error so the remedy can fit it.
+     */
     validateState() {
-      const errs = validateAll(root).map((message) => ({ message }));
+      const errs = validateAll(root).map((message) => ({ message, kind: 'schema' }));
       // NO exists() guard on the seal. A MISSING integrity.json is the strongest
       // tamper signal there is - deleting one file used to disable tamper
       // detection entirely and report a clean pass, because validateAll also
@@ -105,7 +132,7 @@ export async function runChecks(root = projectRoot(), { scope = 'full' } = {}) {
       // Only an unconnected directory is exempt: there is nothing to seal yet.
       if (exists(abs(root, PATHS.manifest))) {
         const r = verifyIntegrity(root);
-        if (!r.ok) errs.push({ message: r.reason, path: PATHS.integrity });
+        if (!r.ok) errs.push({ message: r.reason, path: PATHS.integrity, kind: 'seal' });
       }
       return errs;
     },

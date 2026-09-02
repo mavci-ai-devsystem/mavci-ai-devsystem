@@ -34,10 +34,7 @@ Before anything else, in this order:
 
 1. {{startup_step_1}}
 2. {{startup_step_2}}
-3. Load the standards you need. Invoke these skills now, before doing any work:
-   {{standards_invocations}}
-   They may already be preloaded, in which case invoking them again is cheap.
-   Do not rely on remembering their contents from a previous task.
+3. {{startup_step_3}}
 
 ## 3. Inputs
 
@@ -122,12 +119,4 @@ and stop.
 
 ## 8. Retry discipline
 
-Read `attempts` and `max_attempts` from `.mavci/control/tasks/<id>.json`.
-
-- If `attempts >= max_attempts`, **do not retry**. Report `status: "blocked"` and stop.
-- You cannot edit that file. The ceiling exists so a loop ends with a decision
-  rather than with exhausted patience.
-- On a retry, start from the previous verdict's `failures[]`. It has file paths
-  and line numbers. Re-deriving them wastes the attempt you have left.
-- Within one turn the standards gate will ask you to fix violations at most
-  twice. After that the turn ends and the failure is recorded for the operator.
+{{retry_discipline}}

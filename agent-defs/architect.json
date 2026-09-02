@@ -14,6 +14,7 @@
     "Read",
     "Grep",
     "Glob",
+    "Skill",
     "Bash",
     "WebFetch",
     "Write",
@@ -51,5 +52,6 @@
     "The request requires a third-party service not declared in the manifest",
     "Acceptance criteria cannot be made objectively checkable",
     "The work would require a tier-3 operation to complete"
-  ]
+  ],
+  "_note_tools_skill": "FINDING 20, roster-wide. The shared contract has ordered \"Invoke these skills now, before doing any work\" since the contract existed, and NO agent held a tool that can invoke one - the defect was filed against guardian and check-agent-contract.mjs found it in four more on its first run. Two fixes were possible: drop the instruction, or grant the tool. Dropped for guardian, whose containment is load-bearing and whose standard is one question already inlined in its role. GRANTED here, because loading the packs is what the architecture says this agent does - the instruction was right and the grant was missing, not the reverse. The widening is small in context: this agent already holds tools far more powerful than Skill, and every skill it can reach is prose or a read-only report. The privileged operations are state.mjs flags, which risk-guard gates on Bash by caller and which no skill exposes."
 }

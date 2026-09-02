@@ -50,6 +50,8 @@ export const REFUSAL = [
   'unverified_session',      // control/unverified.json stands - enforcement did not run
   'guardian_record_absent',
   'guardian_record_unreadable',
+  'guardian_record_undeclared', // records exist; none declares itself a run against THIS project
+  'guardian_record_is_corpus',  // the selected record is a corpus fixture, not project evidence
   'guardian_record_stale',
   'guardian_not_checked',    // the floor reached release
   'guardian_failed',
@@ -68,6 +70,71 @@ export const REFUSAL = [
  */
 export const UNREADABLE = Symbol('guardian record present but unreadable');
 
+/* ------------------------------------------------- WHAT A RECORD IS ABOUT
+ *
+ * One directory, two purposes. `.mavci/control/guardian/records/` holds evidence
+ * about THIS PROJECT - guardian ran against the project's own source - and evidence
+ * about GUARDIAN ITSELF - a corpus case ran against a fixture staged into
+ * `corpus-run/`, answering a question whose answer was known before it was asked.
+ * Both are guardian records, both are well-formed, both validate against the same
+ * schema. Until 0.1.21 nothing in either said which.
+ *
+ * That is not a collision between two mistakes. Taking the newest file is the only
+ * thing a reader could do given records with no provenance, and running the corpus
+ * through the real writer is deliberate - a corpus that wrote through some other
+ * path would not be grading the writer that ships. The defect was the shared
+ * namespace, and it was invisible from inside either component.
+ *
+ * It bit exactly where it does the most damage. `t5w9d` is the corpus's LAST case
+ * and its expected verdict is `fail` - it is the unknown control, the case that
+ * exists so `unknown` is not a code path nothing exercises. So the last record left
+ * behind by a corpus run that PASSES is a record whose verdict is `fail`, and this
+ * gate read it as a finding about the project. Passing the corpus was the act that
+ * closed the release gate. Filed as finding 25.
+ *
+ * THE MARKER GOES IN THE DOCUMENT, NOT IN A SECOND DIRECTORY. Moving corpus records
+ * elsewhere separates them by creating a path that the schema sweep, the
+ * absolute-path sweep and the integrity seal each have to be told about
+ * independently - three sets where every reader assumes one, which is finding 23
+ * exactly. One directory, one schema, one seal; the distinction lives in the record.
+ */
+export const RECORD_SOURCE = Object.freeze({ REAL: 'real', CORPUS: 'corpus' });
+
+/**
+ * Pick the record that is evidence about the PROJECT, newest first.
+ *
+ * Exported and pure because the SELECTION is half the decision. It used to live in
+ * `release-check.mjs` as "sort the directory, take the last file", where no test
+ * could reach it - and that is where finding 25 lived for three releases. A gate
+ * whose input selection is untested is a gate tested on the half that works.
+ *
+ * @param {Array<{id: string, doc: object|symbol}>} entries ascending by id (filename order)
+ * @returns {{record: object|symbol|null, counts: {corpus: number, undeclared: number, total: number}}}
+ */
+export function selectProjectRecord(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  const counts = { corpus: 0, undeclared: 0, total: list.length };
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const doc = list[i]?.doc;
+
+    // An unreadable file BLOCKS the scan rather than being skipped past. It could
+    // have been a newer real record, and a reader that walks over what it cannot
+    // parse to reach something older is choosing evidence by legibility.
+    if (doc === UNREADABLE) return { record: UNREADABLE, counts };
+
+    const source = doc && typeof doc === 'object' ? doc.source : undefined;
+    if (source === RECORD_SOURCE.REAL) return { record: doc, counts };
+    if (source === RECORD_SOURCE.CORPUS) { counts.corpus += 1; continue; }
+
+    // Absent, null, or a value this version has never heard of. NOT a real run.
+    // Fail-closed on purpose: a writer that has not been taught to declare its
+    // source must not have its output counted as project evidence by default,
+    // and an enum that grows must not silently promote its new value to "real".
+    counts.undeclared += 1;
+  }
+  return { record: list.length ? null : null, counts };
+}
+
 const ABSENT_OR_UNREADABLE_GUIDANCE =
   'A guardian record is the only evidence that the judgement half of this system ran at all. '
   + 'Absent and unreadable are the same fact here: neither establishes anything, so neither may '
@@ -80,9 +147,13 @@ const ABSENT_OR_UNREADABLE_GUIDANCE =
  * @param {object|null|symbol} input.guardianRecord  parsed record; `null` when the file
  *                                          is absent; `UNREADABLE` when it exists and
  *                                          could not be parsed
+ * @param {{corpus: number, undeclared: number, total: number}|null} [input.recordCounts]
+ *        what `selectProjectRecord` skipped on its way to `guardianRecord`. Only
+ *        changes the WORDING of an absent-record refusal - never the decision - so a
+ *        caller that omits it gets the same verdict with a less specific message.
  * @returns {{ok: boolean, refusals: Array<{code: string, message: string}>}}
  */
-export function assessReleaseReadiness({ runningVersion, unverified = null, guardianRecord = null }) {
+export function assessReleaseReadiness({ runningVersion, unverified = null, guardianRecord = null, recordCounts = null }) {
   const refusals = [];
   const refuse = (code, message) => refusals.push({ code, message });
 
@@ -102,8 +173,44 @@ export function assessReleaseReadiness({ runningVersion, unverified = null, guar
     return { ok: false, refusals };
   }
   if (guardianRecord === null) {
+    // `recordCounts` distinguishes "the directory is empty" from "ten records and
+    // not one of them is about this project". Reporting the second as the first
+    // sends the operator to run guardian when they have already run it - which is
+    // the shape of every message this system has had to correct.
+    const c = recordCounts;
+    if (c && c.total > 0) {
+      refuse('guardian_record_undeclared',
+        `${c.total} guardian record(s) exist and none is evidence about this project: `
+        + `${c.corpus} declare themselves corpus fixtures, ${c.undeclared} declare no source at all. `
+        + 'A record that does not say what it is about is not counted as project evidence - absent '
+        + 'and unrecognised both read as NOT a real run, so a writer that has not been taught to '
+        + 'declare its source cannot be trusted by default. Records written before 0.1.21 carry no '
+        + 'source and will all read this way: run guardian once against this project to produce one '
+        + 'that does. Do NOT hand-edit an old record to add the field.');
+      return { ok: false, refusals };
+    }
     refuse('guardian_record_absent',
       `No guardian record for this project. ${ABSENT_OR_UNREADABLE_GUIDANCE}`);
+    return { ok: false, refusals };
+  }
+
+  // Defense in depth. The selector already skips corpus records; this refuses one
+  // handed straight to the decision, so a second caller that reads the directory
+  // its own way cannot walk past the distinction. Both arms are asserted.
+  if (guardianRecord.source === RECORD_SOURCE.CORPUS) {
+    refuse('guardian_record_is_corpus',
+      'The guardian record offered is a CORPUS FIXTURE, not a run against this project. It '
+      + 'measures whether guardian answers correctly on a staged case whose answer was known in '
+      + 'advance - including cases whose expected verdict is "fail". It is evidence about '
+      + 'guardian and says nothing about this project, so it cannot stand in for a run that does.');
+    return { ok: false, refusals };
+  }
+  if (guardianRecord.source !== RECORD_SOURCE.REAL) {
+    refuse('guardian_record_undeclared',
+      `The guardian record declares source "${guardianRecord.source ?? '(absent)'}", which is not `
+      + `"${RECORD_SOURCE.REAL}". A record that does not declare itself a run against this project `
+      + 'is not counted as one. Absent and unrecognised are the same fact here, and both fail '
+      + 'closed: an enum that grows must not promote its new value to project evidence by default.');
     return { ok: false, refusals };
   }
 

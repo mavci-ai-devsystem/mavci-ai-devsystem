@@ -24,6 +24,36 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
 const COV = path.join(ROOT, 'plugins/mavci-core/scripts/lib/coverage.mjs');
 
+/* ------------------------------------------------------------------------
+ * IF YOU ARE EDITING THIS FILE, READ THIS FIRST.
+ *
+ * It has produced an untrue green TWICE. Not a wrong assertion twice - a file
+ * that reported success while the thing it names was not established. It is the
+ * file whose job is checking guardian, which is the component the rest of the
+ * system is built not to trust, so a false green here is worth more than a false
+ * green anywhere else in the suite.
+ *
+ *   1. THE CONTAINMENT OVERCLAIM. The Bash assertion's message read "fully
+ *      natively contained". That stopped being true the moment guardian's READS
+ *      were scoped by risk-guard.mjs: reads are hook-enforced, and disableAllHooks
+ *      removes them. The assertion was correct and its message was not, so a
+ *      green check made a false claim. Fixed by narrowing the claim to WRITE
+ *      containment and saying what the reads actually rest on. See line ~152.
+ *
+ *   2. THE DEAD GATE (finding 26, 2026-09-02). The only `process.exit(1)` in
+ *      this file sat at line 176 of 429. Every assertion below it - the whole
+ *      SubagentStop writer section, the skill-text constraints, the hot-path
+ *      check: 31 of them - pushed into `failures` and nothing read it again. They
+ *      printed FAIL and the process exited 0, and had done since 0.1.15. Found by
+ *      mutating guardian-record.mjs and noticing the suite still passed. The gate
+ *      is now the LAST thing in the file and check-ci-gates.mjs enforces that
+ *      shape, so appending a new section below it is safe again.
+ *
+ * The common shape: both times the file was RIGHT about guardian and wrong about
+ * itself. If you add a section here, mutate its subject and watch your new
+ * assertions go red before you believe them.
+ * ---------------------------------------------------------------------- */
+
 const failures = [];
 const ok = (m) => console.log(`  ok   ${m}`);
 const bad = (m) => { failures.push(m); console.log(`  FAIL ${m}`); };
@@ -170,12 +200,14 @@ check(GUARDIAN_FAIL_REASON.includes('empty_worklist'),
 }
 
 console.log('');
-if (failures.length) {
-  console.log(`guardian coverage check FAILED (${failures.length}):`);
-  for (const f of failures) console.log(`  - ${f}`);
-  process.exit(1);
-}
-console.log('guardian coverage: the floor holds, the subtraction discriminates, and both negative controls fire');
+console.log('-- guardian coverage: the floor holds, the subtraction discriminates, and both negative controls fire');
+// NO GATE HERE. It used to be one, and it was the ONLY one in this file: 31
+// assertions below it - the entire SubagentStop writer section - printed FAIL
+// into a `failures` array nothing read again, and the script exited 0. Found by
+// mutation, not by reading, and it had been green since 0.1.15. The gate is at
+// the END of the file now, and check-ci-gates.mjs enforces that shape for every
+// check in this directory so it cannot be reintroduced by the next section that
+// gets appended.
 
 /* ==================================================================== */
 /* THE WRITER. Design 4.3 / 4.3a - the three ways it manufactures a pass. */
@@ -183,15 +215,17 @@ console.log('guardian coverage: the floor holds, the subtraction discriminates, 
 
 {
   const os = await import('node:os');
-  const { handleSubagentStop, parseReport } = await import(
+  const { handleSubagentStop, parseReport, clampField, FIELD_CAP } = await import(
     pathToFileURL(path.join(ROOT, 'plugins/mavci-core/scripts/guardian-record.mjs')).href);
   const state = await import(pathToFileURL(path.join(ROOT, 'plugins/mavci-core/scripts/state.mjs')).href);
+  const { stageIsActive, openTicket } = await import(
+    pathToFileURL(path.join(ROOT, 'plugins/mavci-core/scripts/worklist.mjs')).href);
 
   const BASE = JSON.parse(fs.readFileSync(
     path.join(ROOT, 'plugins/mavci-core/templates/fixtures/selftest-project.json'), 'utf8'));
 
   /** A connected project with one open guardian ticket over a two-site worklist. */
-  function project() {
+  function project({ ticketSource } = {}) {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-gw-'));
     fs.mkdirSync(path.join(tmp, '.mavci', 'control', 'guardian'), { recursive: true });
     fs.writeFileSync(path.join(tmp, '.mavci', 'project.json'), JSON.stringify(BASE, null, 2));
@@ -201,7 +235,8 @@ console.log('guardian coverage: the floor holds, the subtraction discriminates, 
       JSON.stringify({ sites_total: 2, questions: [{ site_id: 's001' }, { site_id: 's002' }] }));
     fs.writeFileSync(path.join(tmp, '.mavci', 'control', 'guardian', 'ticket.json'),
       JSON.stringify({ project_id: BASE.project_id, worklist_id: 'wl-1',
-        worklist_path: '.mavci/control/guardian/wl-1.json', trigger: 'manual' }));
+        worklist_path: '.mavci/control/guardian/wl-1.json', trigger: 'manual',
+        ...(ticketSource === undefined ? {} : { source: ticketSource }) }));
     return tmp;
   }
   const records = (t) => {
@@ -279,6 +314,155 @@ console.log('guardian coverage: the floor holds, the subtraction discriminates, 
     check(worklistIntact(t),
       'writer: and the WORKLIST survives - the record must not overwrite the evidence it was scored against');
   }
+  /* ------------------------------------------------------------ FINDING 25
+   *
+   * A record must say what it is evidence ABOUT. The corpus writes through this
+   * same writer into this same directory - deliberately - and until 0.1.21 the
+   * record it produced was indistinguishable from a run against the project's own
+   * source. The release gate read "the newest record", the corpus's last case is
+   * an expected-fail control, and so a PASSING corpus closed the release gate.
+   *
+   * BROKEN BUILD: 0.1.20's writer, which had no source field at all. Every
+   * assertion below fails against it - the first three because the field is
+   * absent, the fourth because there is nothing to copy.
+   *
+   * ONE DERIVATION, AT THE TICKET. This writer copies and never re-derives:
+   * two derivations of one fact are two chances to disagree, and this hook fires
+   * on every subagent stop on the machine, so a filesystem probe here is a cost
+   * paid by every unrelated agent.
+   */
+  const answered = () => msg({ answers: [
+    { site_id: 's001', origin: 'verified_session' }, { site_id: 's002', origin: 'verified_session' }] });
+
+  {
+    const t = project({ ticketSource: 'real' });
+    const r = handleSubagentStop(t, { agent_type: 'mavci-guardian', last_assistant_message: answered() });
+    check(r.action === 'recorded' && r.record.source === 'real',
+      'writer: a ticket marked source=real produces a record marked real');
+  }
+  {
+    const t = project({ ticketSource: 'corpus' });
+    const r = handleSubagentStop(t, { agent_type: 'mavci-guardian', last_assistant_message: answered() });
+    check(r.action === 'recorded' && r.record.source === 'corpus',
+      'writer: a ticket marked source=corpus produces a record marked corpus - the corpus cannot launder itself through the real writer');
+  }
+  {
+    // A ticket written by a plugin older than 0.1.21. The record must carry null,
+    // NOT 'real': a provenance never established is not a provenance, and the
+    // release gate refuses null. Defaulting to 'real' here would have made the
+    // whole fix inert for every project mid-upgrade.
+    const t = project();
+    const r = handleSubagentStop(t, { agent_type: 'mavci-guardian', last_assistant_message: answered() });
+    check(r.action === 'recorded' && r.record.source === null,
+      'writer: a ticket with NO source produces source:null, never a defaulted "real"');
+  }
+  {
+    const t = project({ ticketSource: 'corpus' });
+    handleSubagentStop(t, { agent_type: 'mavci-guardian', last_assistant_message: answered() });
+    const onDisk = JSON.parse(fs.readFileSync(
+      path.join(t, '.mavci', 'control', 'guardian', 'records', 'wl-1.json'), 'utf8'));
+    check(onDisk.source === 'corpus',
+      'writer: the source survives to DISK - the record readers open, not just the object returned');
+  }
+
+  /* ---- the derivation itself: the stage is the fact ---------------------- */
+  {
+    const t = project();
+    check(stageIsActive(t) === false, 'ticket: a project with no staging directory is not a corpus run');
+
+    fs.mkdirSync(path.join(t, 'corpus-run'), { recursive: true });
+    check(stageIsActive(t) === false, 'ticket: an EMPTY staging directory is not a corpus run either');
+
+    fs.writeFileSync(path.join(t, 'corpus-run', '.gitkeep'), '');
+    check(stageIsActive(t) === false, 'ticket: .gitkeep alone is not a staged case - it is how the directory is kept');
+
+    fs.mkdirSync(path.join(t, 'corpus-run', 'app'), { recursive: true });
+    fs.writeFileSync(path.join(t, 'corpus-run', 'app', 'route.ts'), 'export const x = 1;');
+    check(stageIsActive(t) === true, 'ticket: a staged case IS a corpus run, derived from the tree and not from an argument');
+
+    // The ticket writes what the derivation says, with no way for a caller to
+    // override it. An argument the dispatcher must remember is an argument the
+    // dispatcher will one day forget, and it would fail silently in the direction
+    // that matters: a corpus record counted as project evidence.
+    const opened = openTicket(t, 'wl-1');
+    check(opened.source === 'corpus',
+      'ticket: openTicket over a staged tree writes source=corpus, and takes no argument that could say otherwise');
+    const ticketDoc = JSON.parse(fs.readFileSync(path.join(t, '.mavci', 'control', 'guardian', 'ticket.json'), 'utf8'));
+    check(ticketDoc.source === 'corpus', 'ticket: and it is on disk in the ticket the writer will read');
+
+    fs.rmSync(path.join(t, 'corpus-run', 'app'), { recursive: true, force: true });
+    check(openTicket(t, 'wl-1').source === 'real',
+      'ticket: with the stage cleared, the next ticket is a real run again');
+  }
+
+  /* ------------------------------------------------------- FINDINGS 13 / 19
+   *
+   * The cap is right; the SILENCE was the defect, and it cost twice. On 0.1.17
+   * the 500-char slice removed guardian's disclosure that the run might not
+   * count, leaving the half that reads like a clean answer. On the 0.1.18 corpus
+   * run half the evidence fields written were truncated - one mid-clause, one
+   * mid-path at "corpus-run/ap" - with nothing saying so.
+   *
+   * BROKEN BUILD: 0.1.18/0.1.20 as shipped, `a.evidence.slice(0, 500)`.
+   *
+   * THE ADJACENT ASSERTION THAT MISSES, named in finding 19 itself: asserting
+   * `record.answers[0].evidence.length === 500`. That is TRUE of the broken
+   * build - it is what slice() produces - so it is green against the defect. The
+   * assertion has to be on the MARKER.
+   */
+  {
+    const long = 'A'.repeat(900);
+    const t = project({ ticketSource: 'real' });
+    const r = handleSubagentStop(t, { agent_type: 'mavci-guardian', last_assistant_message: msg({
+      suggested_next: 'Could not invoke the standards skill: no tool in my grant can invoke one.',
+      answers: [
+        { site_id: 's001', origin: 'verified_session', evidence: long },
+        { site_id: 's002', origin: 'unknown', reason_if_unknown: long }] }) });
+
+    const ev = r.record.answers[0].evidence;
+    check(ev.length === FIELD_CAP && /\[truncated \d+ chars\]$/.test(ev),
+      'record: a truncated evidence field SAYS it was truncated, and still fits the cap');
+    check(/\[truncated 4\d\d chars\]$/.test(ev),
+      'record: and the marker states how much went, not merely that something did');
+    check(/\[truncated \d+ chars\]$/.test(r.record.answers[1].reason_if_unknown),
+      'record: reason_if_unknown is marked too - both capped fields, not just the one that was noticed');
+
+    // The negative control for the adjacent assertion. Length alone cannot tell
+    // the fixed build from the broken one.
+    check(ev.length === 500,
+      'record: (control) the length is 500 either way - which is why length is NOT the assertion');
+
+    check(r.record.suggested_next === 'Could not invoke the standards skill: no tool in my grant can invoke one.',
+      "record: guardian's suggested_next reaches the record instead of being dropped");
+  }
+  {
+    const t = project({ ticketSource: 'real' });
+    const r = handleSubagentStop(t, { agent_type: 'mavci-guardian', last_assistant_message: msg({
+      answers: [{ site_id: 's001', origin: 'verified_session', evidence: 'short' },
+        { site_id: 's002', origin: 'verified_session' }] }) });
+    check(r.record.answers[0].evidence === 'short' && !/truncated/.test(r.record.answers[0].evidence),
+      'record: a field under the cap is untouched - no marker on text that was not cut');
+    check(r.record.answers[1].evidence === null && r.record.suggested_next === null,
+      'record: absent fields stay null rather than becoming an empty string or a marker');
+
+    const onDisk = JSON.parse(fs.readFileSync(
+      path.join(t, '.mavci', 'control', 'guardian', 'records', 'wl-1.json'), 'utf8'));
+    check(Object.prototype.hasOwnProperty.call(onDisk, 'suggested_next'),
+      'record: suggested_next is on DISK, in the artefact a reader opens');
+  }
+  {
+    // The clamp is exported and asserted directly, because the boundary is where
+    // an off-by-one turns a marked truncation into a schema violation.
+    check(clampField('x'.repeat(FIELD_CAP)) === 'x'.repeat(FIELD_CAP),
+      'clamp: exactly at the cap is not truncated');
+    check(clampField('x'.repeat(FIELD_CAP + 1)).length === FIELD_CAP,
+      'clamp: one over the cap still lands ON the cap, marker included - the schema maxLength is the contract');
+    check(clampField('x'.repeat(50000)).length === FIELD_CAP,
+      'clamp: and so does a field 100x the cap - the marker length converges');
+    check(clampField(undefined) === null && clampField(null) === null && clampField(42) === null,
+      'clamp: a non-string is null, never coerced into text');
+  }
+
   // No ticket => nothing dispatched it => no record, even from guardian itself.
   {
     const t = project();
@@ -342,3 +526,16 @@ console.log('guardian coverage: the floor holds, the subtraction discriminates, 
     'writer: the agent_type gate precedes every filesystem call in main() - this hook fires for '
     + 'EVERY subagent stop in EVERY repo on the machine, so the free discriminator goes first');
 }
+
+/* ==================================================================== */
+/* THE GATE. Last thing in the file, over every assertion above it.      */
+/* ==================================================================== */
+
+console.log('');
+if (failures.length) {
+  console.log(`guardian check FAILED (${failures.length}):`);
+  for (const f of failures) console.log(`  - ${f}`);
+  process.exit(1);
+}
+console.log(`guardian: coverage floor, the writer's three manufactured passes, record provenance,`);
+console.log('          the two prose constraints on the skill, and the hot-path ordering - all gated');

@@ -1047,6 +1047,210 @@ project until a corpus result exists. This release makes that measurement
 possible; it does not perform it, and the tag it earns is still owed to 0.1.15
 and 0.1.16 first.
 
+### 0.1.21 — the record says what it is about, and the contract stops ordering the impossible
+
+**Cut 2026-09-02.** Six findings, and two of them were only visible because
+fixing another one required mutating a suite nobody suspected.
+
+#### THE PROPAGATION WINDOW — READ THIS BEFORE PROPAGATING
+
+**This release changes what the writer produces AND what the shared contract
+orders, so the window cuts in both directions.** Propagation replaces the plugin
+on disk; a session already running keeps the hooks it registered at
+`SessionStart`. For the rest of that session the hooks are one version behind
+the writers the operator invokes by path — and that is exactly when the work
+following a propagation happens. It is not a race. It lasts until the next
+session start.
+
+- **Old checker, new record.** A guardian record written by 0.1.21's writer
+  carries `source` and `suggested_next`. 0.1.20's `guardian.schema.json` sets
+  `additionalProperties: false`, so to hooks still registered from 0.1.20 those
+  are not unknown fields, they are violations. This is finding 24's exact case,
+  one release later, and the reason `state.schema_valid` now says RESTART THE
+  SESSION instead of `--reseal`.
+- **New checker, old record.** Every guardian record written before 0.1.21 has
+  no `source`. 0.1.21's schema still accepts them — the field is deliberately
+  optional — so they stay schema-valid, but `release-check.mjs` refuses them as
+  `guardian_record_undeclared`, because a record that never declared what it was
+  about is not project evidence. **That is not a malfunction and must not be
+  cleared by hand-editing a record.** It clears when guardian next runs.
+
+**So: restart the session after propagating, before writing any control file.**
+Everything below assumes that.
+
+#### 1. Finding 25 — one directory, two purposes
+
+`.mavci/control/guardian/records/` held evidence about the PROJECT and evidence
+about GUARDIAN ITSELF, written by the same writer, validated by the same schema,
+with nothing saying which was which. `release-check.mjs` read "the newest
+record". The corpus's last case, `t5w9d`, is the unknown control and its expected
+verdict is `fail`. **So a corpus that PASSED left a failing record as the release
+gate's input, and passing the corpus was the act that closed the gate.**
+
+Neither side was wrong alone, which is why it survived three releases. Taking the
+newest file was the only thing a reader could do given records with no
+provenance; running the corpus through the real writer is deliberate, because a
+corpus that wrote through another path would not be grading the writer that
+ships. The defect was the shared namespace and it was invisible from inside
+either component.
+
+**The marker is in the document, not in a second directory.** Moving corpus
+records elsewhere would create a path the schema sweep, the absolute-path sweep
+and the integrity seal each have to be told about independently — three sets
+where every reader assumes one, which is finding 23's shape. One directory, one
+schema, one seal.
+
+`source` is derived at `openTicket` from whether a case is staged, never passed
+as an argument a dispatcher could forget, and the `SubagentStop` writer copies it
+without re-deriving — one derivation per run, no way for two to disagree. A
+ticket written before 0.1.21 yields `source: null`, never a defaulted `'real'`.
+
+**`source` is optional in the schema and required by the reader, and that is
+tighter, not looser.** A schema `required` entry under `additionalProperties:
+false` invalidates every record written before it — the window above, in the
+direction that breaks the live tree — and it would only bind records that already
+carry the field. At the reader, absent, `null` and any unrecognised value all
+refuse, so an enum that grows cannot promote its new value to project evidence.
+The reasoning is written beside the field in `guardian.schema.json`, because the
+next reader to notice the inconsistency will want to "fix" it.
+
+Selection moved out of `release-check.mjs` into a pure `selectProjectRecord()`.
+It had lived in the CLI where no test could reach it, **which is where finding 25
+sat for three releases.**
+
+#### 2. Finding 26 — 31 assertions, green since 0.1.15, structurally unable to fail
+
+**`check-guardian.mjs` had its only failure gate at line 176 of 429.** Everything
+below it — the entire `SubagentStop` writer suite (design 4.3, "the three ways it
+manufactures a pass"), the two prose constraints on the skill text, the hot-path
+ordering check — pushed into a `failures` array nothing read again. They printed
+`FAIL` and the process exited 0.
+
+**This is the largest single instance of the shape CLAUDE.md lists eight of, and
+it is the limit case.** The others were probes testing the half that worked. This
+was a probe whose result was never read at all. The assertions were correct;
+every one would have caught a real defect; the harness discarded them.
+
+It was found by mutation, not by reading — removing the record's `source` field
+made seven writer assertions print FAIL while the suite still exited 0. The
+mutation was run only to satisfy the house rule that an assertion be demonstrated
+failing before it counts. **That rule, applied mechanically to a suite nobody
+suspected, is the only reason this was found.**
+
+**Second untrue green from this file.** The first was the containment overclaim:
+the Bash assertion's message read "fully natively contained" after guardian's
+reads had become hook-enforced, so a green check made a false claim. Both times
+the file was right about guardian and wrong about itself. A note to that effect
+now sits at the top of it, because a file that has produced two of these has
+earned one.
+
+`check-ci-gates.mjs` generalises it: every assertion in every check script must
+sit ahead of a gate that can fail. A structural probe over all 30 scripts found
+this one file only — measured, not assumed. **It states what it cannot see:** it
+proves an assertion CAN fail, never that it discriminates. An assertion passing
+for the wrong reason is still invisible to it. Mutation is the only thing that
+covers that, it is manual, and there is no static substitute.
+
+#### 3. Findings 19 and 20 — two defects concealing each other
+
+**This is a class we had not named.** Finding 19 alone looked like a formatting
+problem: `guardian-record.mjs` sliced `evidence` to 500 characters silently, so
+records ended mid-word. Half the evidence fields in the 0.1.18 corpus run were
+truncated, one mid-path at `corpus-run/ap`, with nothing saying so.
+
+It was not losing detail. **It was deleting the only channel by which an agent
+reports a contract it cannot satisfy.** `suggested_next` was dropped by the
+writer entirely, and `suggested_next` is where the shared agent contract tells
+every agent to report a blocked or out-of-scope condition and stop. Guardian used
+it twice during that run to say it could not invoke the skill its own startup
+protocol ordered. Both disclosures went nowhere.
+
+So finding 20 — **the contract has ordered an impossible step since the contract
+existed** — stayed invisible, because the component being broken reported the
+break, twice, into a field the writer discarded. Fixing 19 is what made 20
+findable. Neither is severe alone; together they form a channel that reports
+faults into a hole, and a fault that is only reported through that channel does
+not exist as far as the system is concerned.
+
+**Finding 20's expansion is the finding, not the fix.** It was filed against
+guardian because that is where it was observed. `check-agent-contract.mjs`, run
+against the pre-fix tree, found the same contradiction in **four more agents** —
+architect, builder, scribe and verifier, none of which held a tool that could
+invoke a skill either. Five of five. Guardian was not the exception; it was the
+one that said so.
+
+The fix is four different actions, which "fix the contradiction" hides:
+
+| Agent | Action | Why |
+|---|---|---|
+| guardian | drop the instruction | containment is load-bearing; its standard is one question already inlined in its role |
+| architect, builder, verifier | **grant `Skill`** | loading the packs is what the architecture says they do — the instruction was right and the grant was missing |
+| scribe | neither | declares no packs; `build-agents` no longer renders an order for an empty list |
+
+**THIS IS A GRANT WIDENING ON THREE AGENTS, AND HERE IS WHY IT IS NOT A
+LOOSENING.** An audit seeing three agents gain a tool in one release should find
+the reasoning next to it rather than reconstruct it. The check
+(`check-agent-contract.mjs`) was written strict and stayed strict; what changed
+was the subject, so that it complies. The alternative — narrowing the check to
+stop noticing — was available and is the move this repository exists to refuse.
+The three that gained `Skill` already hold `Bash`, `Write` and `Edit`, which
+dwarf it; every skill they can reach is prose or a read-only report; and the
+privileged operations are `state.mjs` flags, gated by risk-guard on `Bash` by
+caller, which no skill exposes. Guardian, the one agent whose containment the
+corpus depends on, gained nothing.
+
+Also fixed in 20: the contract's section 8 ordered a read of
+`.mavci/control/tasks/<id>.json`, which guardian's `read_scope` denies and
+risk-guard enforces — a refusal on its first instruction after the report format.
+Guardian has no retry semantics at all, and its section 8 now says so.
+
+#### 4. Finding 24 — a remedy that fits the failure
+
+`state.schema_valid` printed one remedy for everything: "it needs `state.mjs
+--reseal`". It fired on a file the sanctioned writer had produced minutes
+earlier, rejected by a schema one version older than the writer. The file was not
+hand-edited, and **resealing recomputes a hash — it has no bearing on schema
+validity**, so an operator who ran it would have spent a privileged action and
+arrived back at the same block. A remedy that cannot work is worse than no
+remedy: it costs an action and teaches the reader the message is unreliable.
+
+Three failures, three remedies. Seal → `--reseal`, the one failure it answers.
+Schema under version skew → **RESTART THE SESSION**, naming both versions. Schema
+with no skew → `--validate`, and file a retro if a Mavci writer produced the
+file. `--reseal` appears in exactly one of the three.
+
+The skew remedy carries an AUTHORITY marker, and that was `check-evidence-caps`
+Part 2 catching a real error rather than a formality: **an agent cannot restart
+its own session.** Without the marker it was finding 16's shape — an instruction
+addressed to the one party who cannot carry it out.
+
+Both new remedies came in over the 300-character cap on the first attempt (302
+and 345). The explanation was cut and the action kept first, which is finding
+13's lesson applied to the writing of its own fix. And because these remedies are
+built per-finding rather than stored on the rule, **Part 1's static-string cap
+cannot see them at all** — the cap is re-asserted on `remedyFor`'s output, or
+finding 2 walks straight back in through a dynamic door.
+
+#### Verification
+
+Every fix in this release was demonstrated failing before it was written.
+
+| Mutation | Restores | Assertions that go red |
+|---|---|---|
+| M7 | 0.1.20's release-gate reader | 9, incl. a corpus fixture read as `guardian_failed` — finding 25 reproduced |
+| M8 | 0.1.20's record writer (no `source`) | 7 — **and exposed finding 26: exit status 0** |
+| M9 | the silent `slice(0, 500)` | 6 — while `evidence.length === 500` stayed **green**, the adjacent assertion finding 19 named |
+| M10 | one `--reseal` remedy for every failure | 6 |
+
+M9's green control is kept in the suite, labelled as a control, so nobody
+mistakes it for coverage.
+
+**28 CI checks, two of them new, both of which found their instance on the first
+run they were given:** `check-ci-gates.mjs` (31 dead assertions in
+`check-guardian.mjs`) and `check-agent-contract.mjs` (four agents beyond the one
+the finding named).
+
+
 ### Carried forward — still not built
 
 **Items 1–4 and 5–6 below remain unbuilt; item 7 is held deliberately, for the

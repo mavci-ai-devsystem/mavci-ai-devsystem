@@ -126,6 +126,52 @@ const DEFAULT_STARTUP_STEP_2 = [
   '   change the phase yourself - you cannot, and trying wastes a turn.',
 ].join('\n');
 
+/**
+ * FINDING 20. THE CONTRACT IS SHARED; THE GRANTS ARE NOT.
+ *
+ * Both of these were fixed text in `_contract.md`, rendered into every agent
+ * regardless of what that agent could actually do, and both ordered guardian to
+ * do something its own grants refuse:
+ *
+ *   STEP 3 said "Invoke these skills now". Guardian holds `Read`, `Grep`, `Glob`
+ *   and nothing that can invoke a skill. Observed twice on the 0.1.18 corpus run,
+ *   where guardian reported the contradiction itself - in `suggested_next`, which
+ *   the record then dropped (finding 19), so the disclosure reached no artefact.
+ *
+ *   SECTION 8 ordered a read of `.mavci/control/tasks/<id>.json`. Guardian's
+ *   read_scope denies `.mavci/**` with exactly one exception, the ticketed
+ *   worklist, and risk-guard enforces it - so an agent following section 8 gets a
+ *   refusal on its first instruction after the report format.
+ *
+ * The root cause is one thing, not two: guardian's overrides covered startup step
+ * 1 and step 2 and nothing else, so every OTHER block of shared prose kept
+ * addressing an agent with different capabilities. Making these overridable is
+ * half the fix; `check-agent-contract.mjs` is the other half, because the next
+ * shared block added to the contract will have the same problem and nobody will
+ * notice until an agent reports a refusal it cannot act on.
+ */
+const DEFAULT_STARTUP_STEP_3 = [
+  'Load the standards you need. Invoke these skills now, before doing any work:',
+  '   {{standards_invocations}}',
+  '   They may already be preloaded, in which case invoking them again is cheap.',
+  '   Do not rely on remembering their contents from a previous task.',
+].join('\n');
+
+const DEFAULT_RETRY_DISCIPLINE = [
+  'Read `attempts` and `max_attempts` from `.mavci/control/tasks/<id>.json`.',
+  '',
+  '- If `attempts >= max_attempts`, **do not retry**. Report `status: "blocked"` and stop.',
+  '- You cannot edit that file. The ceiling exists so a loop ends with a decision',
+  '  rather than with exhausted patience.',
+  "- On a retry, start from the previous verdict's `failures[]`. It has file paths",
+  '  and line numbers. Re-deriving them wastes the attempt you have left.',
+  '- Within one turn the standards gate will ask you to fix violations at most',
+  '  twice. After that the turn ends and the failure is recorded for the operator.',
+].join('\n');
+
+const NO_STANDARDS_STEP_3 = 'You load no standards packs. There is nothing to invoke here - go '
+  + 'straight to the work.';
+
 const DEFAULT_INPUTS_INTRO = 'You may assume these exist and may read them freely:';
 
 const DEFAULT_INPUTS = [
@@ -163,6 +209,19 @@ export function render(contract, def) {
     escalate_list: bullets(def.escalate_when),
     startup_step_1: def.startup_step_1 ?? DEFAULT_STARTUP_STEP_1,
     startup_step_2: (def.startup_step_2 ?? DEFAULT_STARTUP_STEP_2).split('{{phase}}').join(def.phase),
+    // Resolved HERE, not via the map: the substitution loop is one pass, and
+    // standards_invocations is applied before startup_step_3 would introduce it.
+    // Same shape as startup_step_2 and {{phase}}.
+    // NO PACKS, NO ORDER. scribe declares `standards_packs: []`, and the shared
+    // step 3 rendered "Invoke these skills now, before doing any work:" above
+    // "_(this agent loads no standards packs)_" - an instruction to invoke an
+    // empty list. Milder than finding 20's two cases and the same defect: prose
+    // addressed to an agent it does not describe. An agent with nothing to load
+    // is told there is nothing to load.
+    startup_step_3: (def.startup_step_3
+      ?? ((def.standards_packs ?? []).length ? DEFAULT_STARTUP_STEP_3 : NO_STANDARDS_STEP_3))
+      .split(`{{standards_invocations}}`).join(standardsInvocations(def)),
+    retry_discipline: def.retry_discipline ?? DEFAULT_RETRY_DISCIPLINE,
     inputs_intro: def.inputs_intro ?? DEFAULT_INPUTS_INTRO,
     inputs_read_list: bullets(def.inputs ?? DEFAULT_INPUTS),
   };

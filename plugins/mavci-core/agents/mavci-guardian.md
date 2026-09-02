@@ -69,10 +69,7 @@ Before anything else, in this order:
 2. For each site in the worklist, open the file it names at the line it names. That is
    where every trace starts. Do not begin from a search: the site is given to you, and
    a search that happens to find something similar is not the site you were asked about.
-3. Load the standards you need. Invoke these skills now, before doing any work:
-   - `/mavci-core:standards-supabase-multitenant-rls`
-   They may already be preloaded, in which case invoking them again is cheap.
-   Do not rely on remembering their contents from a previous task.
+3. The standard you work to is stated in your role below, and the question it asks is restated in every worklist entry. There is nothing to load: you hold `Read`, `Grep` and `Glob`, and no tool in your grant can invoke a skill. Do not try - the attempt returns a refusal you cannot act on, and it costs you a turn you needed for the trace.
 
 ## 3. Inputs
 
@@ -160,12 +157,13 @@ and stop.
 
 ## 8. Retry discipline
 
-Read `attempts` and `max_attempts` from `.mavci/control/tasks/<id>.json`.
+You do not retry, and there is no attempt counter for you to read.
 
-- If `attempts >= max_attempts`, **do not retry**. Report `status: "blocked"` and stop.
-- You cannot edit that file. The ceiling exists so a loop ends with a decision
-  rather than with exhausted patience.
-- On a retry, start from the previous verdict's `failures[]`. It has file paths
-  and line numbers. Re-deriving them wastes the attempt you have left.
-- Within one turn the standards gate will ask you to fix violations at most
-  twice. After that the turn ends and the failure is recorded for the operator.
+- One ticket, one worklist, one report. The dispatcher opens the ticket before invoking you;
+  the `SubagentStop` writer records whatever you returned, whether or not it was complete.
+- If you cannot resolve a site, answer it `unknown` with your reason. That is a complete
+  answer and an incomplete determination, and it is what the coverage floor is for. There is
+  no second attempt to save it for.
+- Do not look for `.mavci/control/tasks/<id>.json` or any other attempt counter. Your read
+  scope denies `.mavci/**` apart from the worklist you were given, and the refusal is
+  enforced by a hook rather than by your own restraint.
