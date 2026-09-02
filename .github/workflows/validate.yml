@@ -100,6 +100,22 @@ jobs:
       - name: Corpus has both controls and no expectation guardian will never be asked
         run: node scripts/ci/check-corpus.mjs
 
+      # The corpus's THIRD deterministic half, and the one that made the other two
+      # unusable until 0.1.19: the WRITER. `doctor` FAILs without a corpus result, and
+      # there was no sanctioned way to produce one - no writer, no schema, a deny rule
+      # and the risk guard both in the way. The 0.1.18 corpus passed all three cases
+      # and could not be recorded. The danger in fixing that is a writer that ACCEPTS
+      # a result, which would put the model back in the chair check-corpus-score.mjs
+      # was written to take it out of, one layer further out where nothing looks. So
+      # this asserts the result and the version are uncomputable by the caller, that a
+      # partial or unscorable set is refused, and that the schema catches a record the
+      # writer never produced. Its guard assertion is read through a channel first
+      # proven capable of seeing a refusal - risk-guard exits 0 on every decision, so
+      # a probe reading the exit code reports ALLOW for a guard denying everything.
+      - name: Corpus writer computes the result it records
+        run: node scripts/ci/check-corpus-writer.mjs
+
+
       # scribe.json promises this check by name, which under this repo's own rule is
       # a debt until it exists. Two things beyond existence: a citation that resolves
       # to the WRONG thing fails (a task id carrying another task's title, a verdict

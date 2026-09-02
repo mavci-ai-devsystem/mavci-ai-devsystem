@@ -589,6 +589,14 @@ export function validateAll(root) {
   // shape is ever checked.
   check(PATHS.unverified, 'unverified');
 
+  // The corpus result joins the sweep for the same reason, and with the sharpest
+  // edge of the three: it is the ONLY artefact standing between a `doctor` FAIL and
+  // a green tick on guardian's judgement. Validated only by its writer, a malformed
+  // one - a `recorded_for` that is not a version, a `cases` array shorter than the
+  // library - would be read by `doctor`, found to have `result === 'pass'`, and
+  // cleared. This is the check that is not the writer.
+  check(PATHS.guardianCorpus, 'guardian-corpus');
+
   // guardianRecords joins the sweep for the reason hook-run and unverified did:
   // a control file with no schema check is a control file nothing validates. It
   // matters more here than for either of those, because a guardian record is the
@@ -614,6 +622,151 @@ export function validateAll(root) {
   }
 
   return errors;
+}
+
+/* ------------------------------------------------------- guardian corpus */
+
+/**
+ * Record the guardian acceptance corpus result. OPERATOR ONLY - `risk-guard.mjs`
+ * classifies `--record-corpus` as privileged and refuses it to every agent by
+ * caller, the same way it refuses `--set-phase`.
+ *
+ * WHY THIS EXISTS. `doctor` FAILs when there is no corpus result for the running
+ * plugin version, and until now there was no way to produce one: no writer, no
+ * schema, and a deny rule plus this guard in the way of writing the file by hand.
+ * A required artefact with no sanctioned producer is not a requirement, it is a
+ * trap - the shape of Gate 4c finding 4, where seven messages pointed an agent at
+ * a command that did not exist. The 0.1.18 corpus passed all three cases and could
+ * not be recorded.
+ *
+ * THE POINT OF THE WHOLE FUNCTION IS THAT IT COMPUTES THE RESULT RATHER THAN
+ * ACCEPTING ONE. Every verdict in this system is routed away from the party being
+ * judged: guardian emits per-site answers and the SubagentStop writer derives the
+ * verdict; the release gate recomputes that verdict from the coverage numbers
+ * rather than trusting the record. The corpus is the acceptance test for
+ * guardian's judgement, and for three releases it was scored by a model reading
+ * two JSON files - which is why `corpus-score.mjs` exists. A writer that accepted
+ * `--result pass` would reintroduce exactly that, through the back door, one layer
+ * further out: the model would no longer be scoring the run, it would be asserting
+ * the score. So this takes case/worklist PAIRS and nothing else, runs the scorer
+ * over the documents on disk, and derives `result` from what the scorer returns.
+ *
+ * Three refusals, each of which is the cheap way to a green tick if it is absent:
+ *
+ *   1. `recorded_for` is stamped from `pluginVersion()` and can never be supplied.
+ *      An argument-settable version key is worse than no key at all: `doctor`
+ *      compares it for EQUALITY with the running version, so one flag would let a
+ *      result from any tree satisfy any release.
+ *   2. EVERY case in the library must be scored in one invocation. Recording a
+ *      subset is the cheapest possible green corpus - drop the case that fails and
+ *      the remaining ones all pass - and `cases_total` would still look plausible
+ *      next to a `doctor` line that only ever prints it.
+ *   3. A case the scorer CANNOT score is not recorded at all. `CannotScore` means
+ *      the run could not be judged; treating it as either outcome invents a fact.
+ *      Same reasoning as `no_report` in coverage.mjs and the distinct exit 2 in the
+ *      scorer itself.
+ *
+ * A FAILING corpus is recorded, and deliberately so. `doctor` reports a non-pass
+ * result as its own FAIL with the reason, which is what happened on 0.1.17; the
+ * refusals above are about results this function cannot legitimately COMPUTE, not
+ * about outcomes it dislikes.
+ *
+ * @param {string} root
+ * @param {Array<{caseId: string, worklistId: string}>} runs
+ */
+export async function recordCorpus(root, runs) {
+  const { listCases, EXPECTATIONS } = await import('./corpus-stage.mjs');
+  const { scoreCase, CannotScore } = await import('./corpus-score.mjs');
+
+  const library = listCases();
+  if (!library.length) {
+    throw new Error('the corpus case library is empty, so there is nothing to record a result about.');
+  }
+  if (!Array.isArray(runs) || !runs.length) {
+    throw new Error('no runs given. Pass one --run <case-id>=<worklist-id> per case in the library: '
+      + library.join(', '));
+  }
+
+  // Refusal 2, checked before any scoring so a partial invocation costs nothing.
+  const seen = new Map();
+  for (const r of runs) {
+    if (!library.includes(r.caseId)) {
+      throw new Error(`"${r.caseId}" is not a case in the library. Known: ${library.join(', ')}. `
+        + 'A result naming a case that does not exist has graded nothing.');
+    }
+    if (seen.has(r.caseId)) {
+      throw new Error(`case "${r.caseId}" was given twice, as ${seen.get(r.caseId)} and `
+        + `${r.worklistId}. One run per case: two records for one case means one of them is not `
+        + 'the run being recorded, and picking either is this writer guessing.');
+    }
+    seen.set(r.caseId, r.worklistId);
+  }
+  const missing = library.filter((id) => !seen.has(id));
+  if (missing.length) {
+    throw new Error(`the library has ${library.length} case(s) and ${missing.length} `
+      + `were not scored: ${missing.join(', ')}. Every case must be scored in one invocation. `
+      + 'Recording a subset is the cheapest green corpus there is - drop the failing case and the '
+      + 'rest pass - and nothing downstream reads which cases were actually run.');
+  }
+
+  const manifest = readJsonOrNull(abs(root, PATHS.manifest));
+  const cases = [];
+
+  // Scored in run_order, which is the library's own order, so the report reads the
+  // way the run was performed.
+  for (const caseId of library) {
+    const worklistId = seen.get(caseId);
+    const expectedPath = path.join(EXPECTATIONS, `${caseId}.json`);
+    const worklistRel = `${PATHS.guardianDir}/${worklistId}.json`;
+    const recordRel = `${PATHS.guardianRecords}/${worklistId}.json`;
+
+    for (const [label, p] of [['expectation', expectedPath],
+      ['worklist', abs(root, worklistRel)], ['record', abs(root, recordRel)]]) {
+      if (!exists(p)) {
+        throw new Error(`case ${caseId}: no ${label} at ${p}. Nothing is recorded: a corpus `
+          + 'result that skipped a document it could not find would be a claim, not a score.');
+      }
+    }
+
+    let outcome;
+    try {
+      outcome = scoreCase({
+        expected: readJson(expectedPath),
+        worklist: readJson(abs(root, worklistRel)),
+        record: readJson(abs(root, recordRel)),
+      });
+    } catch (e) {
+      // Refusal 3. CANNOT_SCORE is not a failing case and it is not a passing one.
+      if (e instanceof CannotScore) {
+        throw new Error(`case ${caseId} (worklist ${worklistId}) COULD NOT BE SCORED: ${e.message} `
+          + 'Nothing was recorded. "could not tell" is not an outcome, and writing either one in '
+          + 'its place invents a fact about a run that was never judged.');
+      }
+      throw e;
+    }
+
+    cases.push({
+      case_id: caseId,
+      worklist_id: worklistId,
+      ok: outcome.ok,
+      failures: outcome.failures ?? [],
+    });
+  }
+
+  const doc = {
+    schema_version: 1,
+    project_id: manifest?.project_id ?? null,
+    // Refusal 1: stamped here, never read from an argument.
+    recorded_for: pluginVersion(),
+    // Derived from the scorer, never from the caller.
+    result: cases.every((c) => c.ok) ? 'pass' : 'fail',
+    cases_total: cases.length,
+    run_at: nowIso(),
+    scored_by: 'scripts/corpus-score.mjs',
+    cases,
+  };
+
+  return writeControl(root, PATHS.guardianCorpus, doc, 'guardian-corpus');
 }
 
 /* -------------------------------------------------------------------- CLI */
@@ -696,6 +849,47 @@ async function main() {
         console.log(`waived ${check_id} at ${filePath} until ${addDaysIso(Number(days))}`);
         return;
       }
+      case '--record-corpus': {
+        // Refusal 1, enforced at the CLI as well as in the writer. A flag that is
+        // silently IGNORED is worse than one that is refused: the operator would
+        // read the record afterwards and see the version they asked for, because it
+        // happened to match, and never learn the flag did nothing.
+        const asserted = ['--result', '--recorded-for', '--version', '--plugin-version', '--pass']
+          .filter((f) => argv.includes(f));
+        if (asserted.length) {
+          die(`--record-corpus does not accept ${asserted.join(', ')}. The result and the plugin `
+            + 'version are COMPUTED here, never supplied: the version is stamped from the running '
+            + "plugin, and the result comes from running corpus-score.mjs over each case's record. "
+            + "A writer that accepted either would put the model back in the chair "
+            + "corpus-score.mjs was written to take it out of.");
+        }
+
+        const runs = [];
+        for (let i = 0; i < argv.length; i += 1) {
+          if (argv[i] !== '--run') continue;
+          const pair = argv[i + 1];
+          if (!pair || pair.startsWith('--') || !pair.includes('=')) {
+            die('usage: --record-corpus --run <case-id>=<worklist-id> [--run <case-id>=<worklist-id> ...]');
+          }
+          const eq = pair.indexOf('=');
+          runs.push({ caseId: pair.slice(0, eq), worklistId: pair.slice(eq + 1) });
+        }
+        if (!runs.length) {
+          die('usage: --record-corpus --run <case-id>=<worklist-id> [--run ...]. '
+            + 'One --run per case in the corpus library. Every case must be scored in one '
+            + 'invocation; a subset is refused.');
+        }
+
+        const rec = await recordCorpus(root, runs);
+        console.log(`corpus result recorded for plugin ${rec.recorded_for}: ${rec.result.toUpperCase()} `
+          + `(${rec.cases_total} case(s))`);
+        for (const c of rec.cases) {
+          console.log(`  ${c.ok ? 'pass' : 'FAIL'}  ${c.case_id}  ${c.worklist_id}`);
+          for (const f of c.failures) console.log(`          ${f}`);
+        }
+        console.log(`  -> ${PATHS.guardianCorpus}`);
+        return;
+      }
       case '--migrate-manifest': {
         const r = migrateManifest(root);
         if (!r.changed) { console.log(`manifest already at schema_version ${r.to}`); return; }
@@ -756,6 +950,7 @@ async function main() {
         die([
           'usage: state.mjs <command>',
           '  --migrate-manifest             upgrade .mavci/project.json to the current schema (operator)',
+          '  --record-corpus --run <case>=<worklist-id> ...   score every corpus case and record the result (operator)',
           '  --init [manifest-path]         create the control plane for a validated manifest',
           '  --baseline-init                record every current violation as pre-existing (connect only)',
           '  --validate                     schema-check every state file and the seal',

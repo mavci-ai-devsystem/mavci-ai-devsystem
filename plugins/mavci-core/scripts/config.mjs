@@ -87,6 +87,10 @@ export const PATHS = {
   /** One file per guardian run, sealed. Swept by state.schema_valid: until it was,
    *  a malformed guardian record passed the standards checker entirely, and the
    *  ONLY thing that would have caught it was the writer that produced it. */
+  /** The guardian run directory: worklists live here, records in the subdirectory
+   *  below. Named once so a reader of a worklist id and a writer of one cannot
+   *  drift - `corpus-score.mjs` and `state.mjs --record-corpus` both join on it. */
+  guardianDir: `${CONTROL_DIR}/guardian`,
   guardianRecords: `${CONTROL_DIR}/guardian/records`,
   /**
    * The open-run marker. Written before guardian is dispatched, deleted on
@@ -123,6 +127,11 @@ export const CONTROL_GLOBS = [
   PATHS.state,
   PATHS.baseline,
   PATHS.waivers,
+  // The corpus result governs: its presence and its `recorded_for` are what clear
+  // a `doctor` FAIL, so by the rule above - anything that governs an agent belongs
+  // here - it is sealed. It is not in the excluded set with gate-run and hook-run
+  // because it does not change per turn or per session; it changes once per release.
+  PATHS.guardianCorpus,
   `${PATHS.controlTasks}/**/*.json`,
   `${PATHS.verdicts}/**/*.json`,
 ];

@@ -774,6 +774,7 @@ function main() {
         '--init': 're-initialise the control plane',
         '--baseline-init': 'record a new baseline, which retires every current violation at once',
         '--migrate-manifest': 'rewrite the project manifest, whose tenancy.isolation value decides which tenant-isolation rules run at all',
+        '--record-corpus': "record the guardian acceptance corpus result, which is the only artefact that clears doctor's FAIL on guardian's judgement",
       };
 
       const flags = cmd.match(/--[a-z-]+/g) ?? [];

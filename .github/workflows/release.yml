@@ -72,6 +72,7 @@ jobs:
           node scripts/ci/check-release-gate.mjs
           node scripts/ci/check-corpus.mjs
           node scripts/ci/check-corpus-score.mjs
+          node scripts/ci/check-corpus-writer.mjs
           node scripts/ci/check-corpus-isolation.mjs
           node scripts/ci/check-corpus-blind.mjs
           node scripts/ci/check-read-scope.mjs

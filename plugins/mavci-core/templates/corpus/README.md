@@ -41,6 +41,75 @@ Two consequences, and neither should be smoothed over:
 
 ---
 
+## The first correction ran against the author, not the subject
+
+**On plugin 0.1.18, `q3v7k` failed, and guardian was right.** This is the first
+time the corpus has corrected the person who wrote it rather than the thing it
+grades, and it is the outcome that justifies the apparatus, so it is recorded
+here in full rather than as a changelog line.
+
+`lib/auth.ts` was, in its entirety:
+
+    export function verifySession(cookie: string): Session | null {
+      return cookie.length > 10 ? { orgId: "from-verified-token", email: "x@y.z" } : null;
+    }
+
+The expectation said `verified_session`. Guardian answered `internal_constant`
+and gave its reason: `verifySession` performs no verification. It tests the
+cookie's length and returns a hardcoded literal; the cookie selects the null
+versus non-null branch and never the value. Guardian stated it had classified
+"by the implementation, not by the `verifySession` name or the `session.orgId`
+identifier, neither of which is backed by a signature check, token decode or
+principal lookup" - which is what the role instructs, in the sentence that says
+not to answer `verified_session` because the code looks careful.
+
+**The expectation was wrong about the code, not about the answer.** No correct
+tracer could have reached `verified_session` on that fixture, because there was
+nothing to trace to. The fix went into the fixture: `verifySession` now recomputes
+an HMAC-SHA256 over the token payload with a server-side secret, compares it with
+`timingSafeEqual`, rejects expired and `orgId`-less claims, and returns `orgId`
+out of the signature-verified payload. The expectation was not touched, and it
+must not be: `q3v7k` exists to show two DIFFERENT clearing origins, and collapsing
+both to `internal_constant` would delete the only thing field 3 discriminates on
+in this case. On the re-run guardian answered `verified_session` and quoted the
+`timingSafeEqual` comparison as its reason.
+
+**The fix for the leak reintroduced it inverted, in the same patch, and was caught
+before it shipped.** The first draft of the corrected `auth.ts` carried a doc comment
+saying the returned `orgId` was "the verified principal's own claim and not a value
+the caller was free to choose". That is the answer, written into the input, one file
+from the site guardian is asked about - the same defect as `corpus/expected/` being
+greppable, with the direction reversed: the old leak let guardian find the expected
+answer, and this one would have handed it over unasked. It would have passed. Worse,
+it would have passed for the wrong reason and looked exactly like the fix working.
+The comment now states the token format and nothing else, so `verified_session` has
+to be earned by reading the HMAC comparison. Record it as a rule rather than an
+anecdote: **a leak fix is itself a place a leak can be introduced, and prose added
+next to a corrected fixture deserves the scrutiny the fixture just got.**
+
+Three things this establishes, and one it does not:
+
+- **The corpus can fail its author.** Every case here was authored by the process
+  that produced guardian, which is the self-consistency limit stated above. A
+  corpus that only ever confirms its author cannot detect that the author was
+  wrong. This one did, on the first run where the scoring was deterministic.
+- **It happened on the control case**, which is where it matters most. `q3v7k` is
+  the reason a green corpus means anything: it is the case that separates a
+  discriminating guardian from one that reports a problem whenever asked to look.
+  Its green tick is what every other green tick is measured against, and it was
+  the tick that was wrong.
+- **Only field 3 saw it.** `verdict` was `pass` and `fail_reason` was `null`, both
+  as expected. A scorer checking the verdict alone - which is what a model reading
+  two JSON files had been doing for three releases - calls this run green. The
+  case for the third scored field was written before this happened; this is that
+  argument arriving as an event.
+- **It does not establish that guardian is right about code in the world.** The
+  fixture was wrong in a way its author could recognise once guardian named it.
+  That is a weaker claim than catching a defect nobody anticipated, and the
+  section above still stands unamended.
+
+---
+
 ## The two residuals
 
 Neither of these is a defect with a fix pending. They are what this corpus cannot
@@ -145,6 +214,47 @@ Being outside the project makes the isolation structural rather than a conventio
 grep cannot reach a file that is not there. `scripts/ci/check-corpus-isolation.mjs`
 asserts it by staging a case and looking, not by reading this file.
 
+**Moving the expectations out was necessary and it was not sufficient, and nobody
+identified the second path until the probes ran.** Leak 2 was filed and fixed as
+though the expectation FILES were the exposure. They were one route to the answer.
+On the 0.1.18 run, `scopeId` - the identifier `t5w9d` turns on - appeared in seven
+files inside the project, and five of them were under `.mavci/`:
+
+    .mavci/control/guardian/records/wl-20260902072953.json   the 0.1.17 record,
+                                                             carrying this exact
+                                                             identifier's origin
+    .mavci/control/guardian/wl-20260901194633.json           prior worklists naming
+    .mavci/control/guardian/wl-20260902072953.json           the site and identifier
+    .mavci/lessons/pending-system-change.md                  states the expected
+                                                             origin in prose, and
+                                                             names which answers
+                                                             count as failures
+    .mavci/control/guardian/wl-20260902101947.json           this run's own worklist
+
+The system's own record of the leak is itself a copy of the answer. So is every
+previous record: a corpus that runs more than once writes the answers it is
+grading into the tree it grades in. **Removing the expectations from the project
+did not remove the answer from the project - the read scope did.** A layout
+argument cannot close this, because the leaking files are the control plane and
+the lesson queue, which have to live in the project.
+
+That makes the read scope load-bearing for case 03 specifically, not merely
+defence in depth. It was probed against each of those five paths with the ticket
+open and the case staged, immediately before dispatch: `Grep` for `scopeId` from
+the project root refused, `Grep` rooted at `.mavci/` refused, the prior record
+refused, the lesson file refused, the previous worklist for the same case refused;
+this run's ticketed worklist allowed by exact path, `Grep` rooted at `corpus-run/`
+allowed, and the case source allowed. No refusal reason mentions the corpus.
+Guardian's recorded evidence shows it searched `corpus-run`, `lib` and `app` and
+never the root.
+
+**What this costs is stated in the residuals and is not repeated here, except for
+the part that changed: the control is now known to be doing work on a live path,
+and it fails open on hook timeout or crash.** Before this run, the read scope was
+a defensible narrowing. After it, an unenforced read scope means `t5w9d` is
+scored against a tree that contains its answer three ways.
+
+
 **Nothing marks the staged case inside the project.** The old staging wrote
 `corpus/current-case.txt`; nothing read it, and it named the running case in the tree
 guardian reads. A mis-staged case is caught where that fact actually lives —
@@ -170,7 +280,24 @@ Per case, in `run_order`, with the project in the **verify** phase:
     # dispatch mavci-guardian with the worklist PATH, never its contents
     node "$PLUGIN/scripts/corpus-score.mjs" --case <case-id> --worklist <worklist-id>
 
-Finish with `node "$PLUGIN/scripts/corpus-stage.mjs" --clear`.
+Finish with `node "$PLUGIN/scripts/corpus-stage.mjs" --clear`, then record the result
+across every case in ONE invocation:
+
+    node "$PLUGIN/scripts/state.mjs" --record-corpus
+        --run q3v7k=<worklist-id>
+        --run m8f2r=<worklist-id>
+        --run t5w9d=<worklist-id>
+
+**That command computes the result; it does not accept one.** It re-runs the scorer
+over each case's record, derives `result` from what the scorer returns, and stamps
+`recorded_for` from the running plugin - `--result` and `--recorded-for` are refused
+outright rather than ignored. Every case in the library must appear in the one
+invocation: a subset is the cheapest green corpus there is, and `cases_total` would
+still read plausibly beside a `doctor` line that only prints it. It is operator-only,
+classified privileged in `risk-guard.mjs` beside `--set-phase`.
+
+`scripts/ci/check-corpus-writer.mjs` demonstrates each of those refusals failing
+against the broken build it names.
 
 ## How a run is scored
 

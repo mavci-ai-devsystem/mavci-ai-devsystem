@@ -1,4 +1,40 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
+
 export type Session = { orgId: string; email: string };
+
+type Claims = { orgId: string; email: string; exp: number };
+
+/** Session cookie format: `<base64url(payload)>.<base64url(hmac-sha256)>`. */
 export function verifySession(cookie: string): Session | null {
-  return cookie.length > 10 ? { orgId: "from-verified-token", email: "x@y.z" } : null;
+  const token = readCookie(cookie, "sid");
+  if (!token) return null;
+
+  const dot = token.indexOf(".");
+  if (dot === -1) return null;
+
+  const payload = token.slice(0, dot);
+  const presented = Buffer.from(token.slice(dot + 1), "base64url");
+  const expected = createHmac("sha256", process.env.SESSION_SECRET!).update(payload).digest();
+  if (presented.length !== expected.length) return null;
+  if (!timingSafeEqual(presented, expected)) return null;
+
+  let claims: Claims;
+  try {
+    claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Claims;
+  } catch {
+    return null;
+  }
+  if (!claims.orgId || claims.exp * 1000 < Date.now()) return null;
+
+  return { orgId: claims.orgId, email: claims.email };
+}
+
+function readCookie(header: string, name: string): string | null {
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() !== name) continue;
+    return decodeURIComponent(part.slice(eq + 1).trim());
+  }
+  return null;
 }

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "guardian-corpus.schema.json",
+  "title": "Mavci guardian acceptance corpus result",
+  "description": "The outcome of running the guardian acceptance corpus against one plugin version. Written only by `state.mjs --record-corpus`, which computes `result` by running corpus-score.mjs over every case in the library and stamps `recorded_for` from the running plugin. Swept by state.schema_valid so a malformed record is caught by something that is not the writer - the same reasoning that put hook-run, unverified and the guardian records into that sweep, and it matters here because this file is the only thing standing between a doctor FAIL and a green tick.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "recorded_for", "result", "cases_total", "run_at", "scored_by", "cases"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "project_id": { "type": ["string", "null"] },
+    "recorded_for": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[0-9]+[.][0-9]+[.][0-9]+$",
+      "description": "The plugin version this result is evidence about. doctor compares it for EQUALITY with the running version - newer is as wrong as older, because it is evidence about a different component. Stamped by the writer from pluginVersion(); never supplied by a caller."
+    },
+    "result": {
+      "type": "string",
+      "enum": ["pass", "fail"],
+      "description": "Derived from the scorer over every case, never accepted from the caller. There is no `not_checked` member on purpose: a corpus that could not be scored is not recorded at all."
+    },
+    "cases_total": { "type": "integer", "minimum": 1 },
+    "run_at": { "type": "string", "format": "date-time" },
+    "scored_by": { "type": "string", "const": "scripts/corpus-score.mjs" },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "description": "One entry per case in the library. The writer refuses a partial set, so a result carrying fewer entries than the library has cases was not produced by it.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["case_id", "worklist_id", "ok"],
+        "properties": {
+          "case_id": { "type": "string", "minLength": 1 },
+          "worklist_id": { "type": "string", "minLength": 1 },
+          "ok": { "type": "boolean" },
+          "failures": { "type": "array", "items": { "type": "string", "maxLength": 500 } }
+        }
+      }
+    }
+  }
+}
