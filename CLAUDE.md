@@ -858,7 +858,31 @@ recoverable. Full record: `docs/lessons/0.1.17-identity-at-the-moment-of-the-pus
 **Note on this log:** 0.1.15 and 0.1.16 have no entry here. They are in the
 commit log and in `docs/lessons/`, and the gap is named rather than stepped over,
 because a release log that skips two releases silently reads as two releases in
-which nothing happened.
+which nothing happened. Both now have entries — that is what the state summary
+rewrite at the top of this section was for.
+
+**They still have no TAG, and that is a decision rather than the same gap.**
+`618069b` states it: `release-check.mjs` refuses on an absent guardian record,
+and *the version exists to give the working-tree install a distinct identity, not
+to claim a release. The tag comes after the corpus passes.* The corpus still has
+no result, so both stay untagged.
+
+Checked on 2026-09-02, because the reason offered for back-tagging them was that
+`check-tags` would keep failing until they existed. **It would not.** Its only
+failing arm is *the newest tag reachable from main IS main* — nothing in it asks
+whether every version in the log was ever tagged — and `v0.1.17` alone satisfies
+it, verified by cutting `v0.1.17` with both absent and watching `check-tags`
+accept it. The premise was the whole argument, and it was checkable in one run.
+
+What back-tagging would change is not in this repository at all.
+`plugins/mavci-core/templates/mavci-verify.yml` clones
+`v<state.json.plugin_version>`, so a project whose control plane records 0.1.15
+fails loudly at checkout today and would silently succeed afterwards, on a
+version this repository declined to release, with guardian's answers still
+unmeasured. That is carried-forward items 1 and 2 arriving through a third door:
+a forward-looking version value steering a project's CI at a rule set nobody
+chose. **The two tags are owed after the corpus run, not before it**, and this
+paragraph is the record of what is owed and why it is not overdue.
 
 ### Carried forward — still not built
 
