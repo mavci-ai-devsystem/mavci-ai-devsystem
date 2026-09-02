@@ -28,6 +28,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
 const CORPUS = path.join(ROOT, 'plugins/mavci-core/templates/corpus');
 const CASES = path.join(CORPUS, 'cases');
+const EXPECTED = path.join(CORPUS, 'expected');
 
 const { scanProject, worklistFrom } = await import(
   pathToFileURL(path.join(ROOT, 'plugins/mavci-core/scripts/lib/sitescan.mjs')).href);
@@ -54,20 +55,51 @@ console.log('guardian acceptance corpus:');
 const caseDirs = fs.readdirSync(CASES).filter((d) => fs.statSync(path.join(CASES, d)).isDirectory()).sort();
 check(caseDirs.length >= 3, `corpus has at least the three required cases (${caseDirs.length})`);
 
+/* THE EXPECTATION IS NO LONGER IN THE CASE DIRECTORY, and that is the point of the
+ * move rather than a tidy-up. It used to sit beside the fixture it graded, so the
+ * answer travelled with the case into whatever tree the case was staged into - and on
+ * 0.1.17 guardian grepped an identifier and hit it. Expectations now live in a sibling
+ * directory and staging copies only `*.txt` sources, so no expectation can reach a
+ * project. scripts/ci/check-corpus-isolation.mjs asserts that structurally.
+ *
+ * The sources carry a `.txt` suffix and the expectations name paths under
+ * `corpus-run/`, because that is what a STAGED case looks like. This check
+ * reconstructs the staged shape rather than the library shape, so the paths it
+ * validates are the paths a real run actually produces. */
+const STAGE_PREFIX = 'corpus-run/';
+const SUFFIX = '.txt';
+
 const loaded = [];
 for (const id of caseDirs) {
   const dir = path.join(CASES, id);
-  const expPath = path.join(dir, 'expected.json');
-  if (!fs.existsSync(expPath)) { bad(`${id}: no expected.json - a case with no expected answer scores nothing`); continue; }
+  const expPath = path.join(EXPECTED, `${id}.json`);
+  if (!fs.existsSync(expPath)) {
+    bad(`${id}: no expectation at templates/corpus/expected/${id}.json - a case with no expected `
+      + 'answer scores nothing. A case directory left from the pre-0.1.18 layout, which kept '
+      + 'expected.json inside the case, reports here until it is removed');
+    continue;
+  }
   const exp = JSON.parse(fs.readFileSync(expPath, 'utf8'));
-  const files = filesUnder(dir).filter((f) => f !== 'expected.json');
+
+  const sources = filesUnder(dir).filter((f) => f.endsWith(SUFFIX));
+  if (!sources.length) { bad(`${id}: no *${SUFFIX} sources - staging it would copy nothing`); continue; }
+  const staged = new Map();                        // staged path -> path in the library
+  for (const f of sources) staged.set(STAGE_PREFIX + f.slice(0, -SUFFIX.length), f);
+
   const ctx = {
     manifest: { tenancy: { isolation: 'application-filters', tenant_column: 'org_id' } },
-    files,
-    readOrNull: (p) => { try { return fs.readFileSync(path.join(dir, p), 'utf8'); } catch { return null; } },
+    files: [...staged.keys()],
+    readOrNull: (p) => {
+      const src = staged.get(p);
+      if (!src) return null;
+      try { return fs.readFileSync(path.join(dir, src), 'utf8'); } catch { return null; }
+    },
   };
   const scan = scanProject(ctx, { tenantColumn: 'org_id' });
-  loaded.push({ id, exp, scan, worklist: worklistFrom(scan) });
+  // `read` is kept on the record so the assertions below resolve a staged path the
+  // same way the scan did. Reading `CASES/<id>/<a.path>` directly worked only while
+  // expected paths and library paths were the same string, and they no longer are.
+  loaded.push({ id, exp, scan, read: ctx.readOrNull, worklist: worklistFrom(scan) });
 }
 
 /* ------------------------------------------------- the two required controls */
@@ -75,8 +107,18 @@ for (const id of caseDirs) {
 const degenerate = loaded.filter((c) => c.exp.expected_verdict === 'pass');
 check(degenerate.length >= 1,
   `a DEGENERATE-PASS case exists - every site clears, nothing to find (${degenerate.map((c) => c.id).join(', ') || 'NONE'})`);
-check(degenerate.some((c) => c.id.startsWith('00')),
-  'and it sorts first, so it runs before the interesting cases');
+// RUN ORDER IS DECLARED, NOT SPELLED INTO THE DIRECTORY NAME. It used to be
+// asserted as `id.startsWith('00')`, which made a filename load-bearing - the same
+// shape the fixture class refuses on purpose ("declared in the manifest, never
+// inferred from a directory name"). Case ids are now opaque so that a case cannot
+// state its own expected answer through its path, and an opaque id cannot carry an
+// ordering either; `run_order` in the expectation carries it instead, where the
+// scorer and this check read the same field.
+check(degenerate.some((c) => c.exp.run_order === 1),
+  `and it declares run_order 1, so it runs before the interesting cases (${
+    degenerate.map((c) => `${c.id}:${c.exp.run_order ?? 'unset'}`).join(', ') || 'NONE'})`);
+check(loaded.every((c) => Number.isInteger(c.exp.run_order)),
+  'and every case declares a run_order, so the sequence does not fall back to whatever the filesystem returns');
 
 const unknowns = loaded.filter((c) => (c.exp.expected_answers ?? []).some((a) => a.origin === 'unknown'));
 check(unknowns.length >= 1,
@@ -109,9 +151,10 @@ for (const c of loaded) {
   for (const a of answers) {
     const site = wl.questions.find((q) => q.path === a.path
       && (c.scan.sites.find((s) => s.path === q.path && s.line === q.line)));
-    const line = (c.readOrNull ?? (() => null))();
-    const src = fs.readFileSync(path.join(CASES, c.id, a.path), 'utf8');
-    check(src.includes(a.match),
+    const src = c.read(a.path);
+    check(src !== null,
+      `${c.id}: the expectation names ${a.path}, and staging that case produces that file`);
+    check(src !== null && src.includes(a.match),
       `${c.id}: expected answer anchors on a string that is actually in ${a.path} ("${a.match}")`);
     check(Boolean(site), `${c.id}: ${a.path} is enumerated as a worklist site`);
     check(ORIGIN.includes(a.origin), `${c.id}: expected origin "${a.origin}" is in the closed enum`);

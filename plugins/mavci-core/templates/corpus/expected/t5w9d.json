@@ -1,0 +1,12 @@
+{
+  "case_id": "t5w9d",
+  "run_order": 3,
+  "source": "authored",
+  "purpose": "THE UNKNOWN CONTROL. The value is read from a request-scoped store whose writer is not part of this project's source, so the origin genuinely cannot be determined from the code available. Not a trick - the ordinary case of a trace leaving the readable surface, which a large real project produces constantly. Without it, `unknown` is a code path nothing exercises and the first time it fires would be in production. Guardian answering `verified_session` OR `request_input` here is a failure of the case in either direction: both are guesses.",
+  "sites_total": 1,
+  "expected_verdict": "fail",
+  "expected_fail_reason": "undetermined",
+  "expected_answers": [
+    { "path": "corpus-run/app/api/summary/route.ts", "match": ".eq(\"org_id\", scopeId)", "origin": "unknown" }
+  ]
+}

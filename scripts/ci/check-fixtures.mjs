@@ -77,16 +77,26 @@ const MANIFEST_PATCH = {
   },
   // The fixture class (0.1.16) is a manifest declaration, so the only way to
   // assert it is with a manifest that declares it. Each of these rules has a
-  // `good/corpus-run/` file carrying its exact violation on purpose: with the
+  // `good/fixture-bay/` file carrying its exact violation on purpose: with the
   // declaration honoured the rule stays silent, and without it `good/` fires and
   // this harness reports a false positive. That is the assertion, and it fails
   // against 0.1.15.
   //
+  // THE ROOT IS DELIBERATELY NOT `corpus-run/`. It was, until the corpus staging
+  // root stopped being manifest-declared and became plugin-owned (constraint 5 in
+  // rules/index.mjs). Under that name these fixtures would pass through the
+  // undeclared exemption and would go on passing if `checks.fixtures` stopped
+  // working entirely - a fixture pair proving a mechanism it no longer exercises,
+  // which is worse than no pair because it reads as coverage. `fixture-bay/` is an
+  // ordinary directory with no standing anywhere, so a pass here is the manifest
+  // declaration and nothing else. The plugin-owned root is asserted separately, in
+  // check-corpus-blind.mjs.
+  //
   // `config.fixture_scope` gets NO patch. Its bad/ and good/ ship their own
   // `.mavci/project.json`, because it needs two DIFFERENT declarations and a
   // patch applies to both variants.
-  'next.no_service_role_client': { checks: { fixtures: ['corpus-run'] } },
-  'next.env_centralised': { checks: { fixtures: ['corpus-run'] } },
+  'next.no_service_role_client': { checks: { fixtures: ['fixture-bay'] } },
+  'next.env_centralised': { checks: { fixtures: ['fixture-bay'] } },
 };
 
 /** BASE_MANIFEST with any per-rule patch applied. */

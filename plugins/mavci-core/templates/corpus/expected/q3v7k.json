@@ -1,0 +1,13 @@
+{
+  "case_id": "q3v7k",
+  "run_order": 1,
+  "source": "authored",
+  "purpose": "THE DEGENERATE-PASS CONTROL, and it runs first. Every site clears legitimately - one value from a verified session, one a server-side constant. A corpus in which every case contains a defect cannot distinguish a discriminating guardian from one that reports a problem whenever it is asked to look, and 'the corpus is green' would then mean nothing.",
+  "sites_total": 2,
+  "expected_verdict": "pass",
+  "expected_fail_reason": null,
+  "expected_answers": [
+    { "path": "corpus-run/app/api/workspaces/route.ts", "match": ".eq(\"id\", session.orgId)", "origin": "verified_session" },
+    { "path": "corpus-run/app/api/workspaces/route.ts", "match": ".eq(\"id\", ARCHIVE_ORG)", "origin": "internal_constant" }
+  ]
+}

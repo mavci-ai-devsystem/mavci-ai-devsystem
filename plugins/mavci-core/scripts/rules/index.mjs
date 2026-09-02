@@ -106,7 +106,44 @@ const inAny = (p, dirs) => dirs.some((d) => under(p, d));
  *    it, `"fixtures": ["."]` turns the manifest into an off switch - which is
  *    what `checks.exclude_paths` silently still was, and why that rule polices
  *    both fields.
+ *
+ * 5. ONE ROOT IS EXEMPT WITHOUT BEING DECLARED, and it is the exception that
+ *    constraint 1 has to bend for. `corpus-run/` is where `corpus-stage.mjs`
+ *    writes a guardian acceptance case, and every case carries a direct
+ *    `SUPABASE_SERVICE_ROLE_KEY` read on purpose - so without an exemption the
+ *    corpus cannot run at all. It used to be declared: gate4c's manifest carried
+ *    `checks.fixtures: ["corpus-run"]`. That declaration was itself a leak. The
+ *    corpus measures guardian's judgement and measures nothing if guardian can
+ *    tell a corpus run from a real one, and the shared agent contract ordered
+ *    every agent to read `.mavci/project.json` before anything else - so guardian
+ *    was instructed to open the file that named the corpus directory. Relocating
+ *    the expectations did not touch this; the manifest still said where to look.
+ *
+ *    So the plugin knows its own staging directory and the project no longer
+ *    states it. THE COST IS REAL AND IS NOT SMOOTHED OVER: this is exactly the
+ *    name-derived exemption constraint 1 forbids, and a project that puts
+ *    shipping code in a directory called `corpus-run/` gets it. Three things bound
+ *    it, and none of them makes it free:
+ *      - it exempts `FIXTURE_EXEMPT_RULES` only, and `secrets.no_committed_secrets`
+ *        still fires there as it does everywhere - enforced not by that allow-list
+ *        but by `noCommittedSecrets` never calling this helper, so no change here
+ *        can reach it;
+ *      - the name is fixed by the plugin, so a project cannot choose a new one to
+ *        widen its own exemption - it can only occupy the one that exists;
+ *      - `config.fixture_scope` warns on covered files here exactly as it does for
+ *        a declared root, so the exemption is visible in the report rather than
+ *        silent, which is the property that made the declared version tolerable.
+ *    The exemption is what a blind corpus costs. It is recorded so the next reader
+ *    weighs it rather than discovers it.
  */
+
+/**
+ * The staging directory `corpus-stage.mjs` writes into, owned by the plugin and
+ * never declared by a project. Defined HERE rather than there so the dependency
+ * runs from the corpus tooling to the checker and not the other way round: the
+ * checker must know this name without importing anything about the corpus.
+ */
+export const CORPUS_STAGE_DIR = 'corpus-run';
 
 /** The complete set of rules a project-declared fixture root may exempt. */
 export const FIXTURE_EXEMPT_RULES = new Set([
@@ -155,6 +192,7 @@ export function fixtureRoots(manifest) {
  */
 export function isDeclaredFixture(ctx, rel, checkId) {
   if (!FIXTURE_EXEMPT_RULES.has(checkId)) return false;
+  if (under(rel, CORPUS_STAGE_DIR)) return true;      // constraint 5
   return inAny(rel, fixtureRoots(ctx.manifest));
 }
 
@@ -991,6 +1029,25 @@ const fixtureScope = {
           + `${[...FIXTURE_EXEMPT_RULES].join(', ')}`,
         remedy: 'No action needed if this directory holds only fixtures. If it holds shipping code, '
           + 'remove it from checks.fixtures in .mavci/project.json.',
+      });
+    }
+
+    // The undeclared root gets the SAME warning. It is not in the manifest, so a
+    // reader auditing exemptions by reading the manifest would not find it - which
+    // is the whole reason it has to appear in the report instead. An exemption
+    // nobody can see is how a narrow one becomes a wide one, and that argument does
+    // not weaken because the plugin rather than the project chose the path.
+    const stagedCode = ctx.files.filter((p) => under(p, CORPUS_STAGE_DIR) && isCode(p));
+    if (stagedCode.length) {
+      out.push({
+        check_id: this.id, severity: 'warning', path: CORPUS_STAGE_DIR, line: null,
+        evidence: `${stagedCode.length} file(s) under the guardian corpus staging root are exempt `
+          + `from ${[...FIXTURE_EXEMPT_RULES].join(', ')}. This root is not declared in the `
+          + 'manifest: the plugin owns the name, deliberately, so that nothing inside the project '
+          + 'states where a corpus case is staged',
+        remedy: 'No action needed during a corpus run - the staging directory is emptied by '
+          + '`corpus-stage.mjs --clear` when it ends. If this project keeps its own code here, '
+          + 'move it: the name belongs to the corpus and carries an exemption.',
       });
     }
     return out;

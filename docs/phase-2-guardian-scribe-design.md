@@ -381,10 +381,17 @@ component must not be the only witness to its own output.**
 
 The prize is worth naming. Guardian is the most capable model in the roster, it is
 the one component whose judgement nothing deterministic can check, and dropping one
-tool moves it from *"weakest enforced containment"* to *fully natively contained* —
-`Read, Grep, Glob`, no filesystem write path of any kind, surviving
-`disableAllHooks`. That is the strongest guarantee this system can give any agent,
-and guardian is the agent that most needs it.
+tool moves it from *"weakest enforced containment"* to *natively contained on the
+write side* — `Read, Grep, Glob`, no filesystem write path of any kind, surviving
+`disableAllHooks`. That is the strongest write guarantee this system can give any
+agent, and guardian is the agent that most needs it.
+
+> **Superseded in part.** This section said *fully* natively contained, and that was
+> true when it was written. Guardian's **reads** are now scoped by `risk-guard.mjs`
+> so that the acceptance corpus can be run against an agent that is prevented from
+> opening the manifest rather than merely asked not to. Reads are therefore
+> hook-enforced and `disableAllHooks` removes them. The trade is recorded in
+> `agent-defs/guardian.json` under `_note_tools` and in ARCHITECTURE 1.1.
 
 **PROBE RUN 2026-09-01. VERIFIED — guardian ships with no `Bash`.** The
 documentation was loaded rather than recalled, on the same evidence class as
@@ -415,9 +422,11 @@ load stopped it.
                      disallowedTools: Edit, Write, NotebookEdit
                      NO Bash. No filesystem write path of any kind.
 
-Guardian becomes the only **fully natively contained** agent in the roster —
+Guardian becomes the only agent with **no write path of any kind** — write
 containment that survives `disableAllHooks`, on the most capable model, in the one
-component whose judgement nothing deterministic can check. `mavci-verifier` keeps
+component whose judgement nothing deterministic can check. (It was *"the only fully
+natively contained agent"* until its reads were scoped by a hook; see the note
+above and ARCHITECTURE 1.1.) `mavci-verifier` keeps
 `Bash` because it genuinely needs it (it runs `tsc`, the build and the tests), and
 that asymmetry is now correct rather than accidental: the agent that must execute
 things holds the weaker containment, and the agent that only reads and reasons

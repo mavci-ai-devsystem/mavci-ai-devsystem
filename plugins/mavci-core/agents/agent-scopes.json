@@ -16,7 +16,8 @@
       ".mavci/control/**",
       ".mavci/project.json"
     ],
-    "native_constraint": false
+    "native_constraint": false,
+    "read_scope": null
   },
   "mavci-builder": {
     "phase": "build",
@@ -42,7 +43,8 @@
       ".claude/**",
       ".github/workflows/**"
     ],
-    "native_constraint": false
+    "native_constraint": false,
+    "read_scope": null
   },
   "mavci-guardian": {
     "phase": "verify",
@@ -50,7 +52,19 @@
     "deny": [
       "**"
     ],
-    "native_constraint": true
+    "native_constraint": true,
+    "read_scope": {
+      "allow": [
+        "**"
+      ],
+      "deny": [
+        ".mavci/**",
+        ".claude/**",
+        ".git/**",
+        ".env*"
+      ],
+      "ticket_worklist": true
+    }
   },
   "mavci-scribe": {
     "phase": "any",
@@ -69,7 +83,8 @@
       ".env*",
       ".claude/**"
     ],
-    "native_constraint": false
+    "native_constraint": false,
+    "read_scope": null
   },
   "mavci-verifier": {
     "phase": "verify",
@@ -77,6 +92,7 @@
     "deny": [
       "**"
     ],
-    "native_constraint": true
+    "native_constraint": true,
+    "read_scope": null
   }
 }

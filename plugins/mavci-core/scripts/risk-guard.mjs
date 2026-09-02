@@ -334,6 +334,85 @@ function unwrap(sub) {
   return s;
 }
 
+/* --------------------------------------------------------- read scope
+ *
+ * WHY AN AGENT HAS A READ SCOPE AT ALL, and why only one does.
+ *
+ * The guardian acceptance corpus is the only evidence guardian's judgement works,
+ * and it measures nothing if guardian can tell a corpus run from a real one. Two
+ * leaks were closed by moving files and rewriting instructions - the expectations
+ * left the project, and guardian stopped being told to read the manifest. Neither
+ * removed the CAPABILITY. An agent holding `Read`, `Grep` and `Glob` over a whole
+ * tree can open anything in it, and a prompt saying otherwise is a request.
+ *
+ * So the scope is enforced here, at the only place that can enforce it.
+ *
+ * IT IS AN ALLOW-EVERYTHING WITH A DENY LIST, not a list of source roots, and the
+ * shape is deliberate. A positive list of `app/**`, `lib/**` and so on would have
+ * to name the corpus staging directory to let a staged case be read at all - and
+ * the denial message enumerating that list would then hand guardian the name of the
+ * directory the whole exercise exists to hide. Denying the run-describing surface
+ * instead means no message ever names anything guardian does not already hold.
+ *
+ * DENY, NEVER REWRITE. A search whose root is out of scope is refused with the
+ * reason. The tempting alternative - quietly narrowing the root, or filtering the
+ * results - returns a different answer than the command asked for, and an agent
+ * reasoning about "no matches" cannot tell that from "no matches you may see".
+ * A refusal is legible; a silently different result set is not.
+ *
+ * A SEARCH ROOT THAT CONTAINS A DENIED SUBTREE IS ITSELF DENIED. `Grep` and `Glob`
+ * default to the project root when given no path, and the project root contains
+ * `.mavci/`. Allowing that would make the deny list decorative for the one tool
+ * most likely to reach past it.
+ *
+ * THE ONE DYNAMIC EXCEPTION is the worklist named by the OPEN TICKET - not a
+ * `wl-*.json` glob, which would open every previous worklist, and a previous
+ * worklist names the paths of a previous run. Reading the ticket also makes the
+ * skill's stated ordering real: it says "ticket first, dispatch second", and until
+ * now nothing enforced it. A dispatch with no ticket now leaves guardian unable to
+ * read its own worklist, which is a refusal with a reason rather than a silently
+ * unscored run.
+ *
+ * WHAT THIS DOES NOT DO. It is hook-enforced, so `disableAllHooks` removes it -
+ * see ARCHITECTURE 1.1, where guardian's row was corrected when this landed. It
+ * does not follow symlinks, and it does not stop guardian inferring the shape of
+ * the tree from the paths it is legitimately given.
+ */
+
+/** Literal directory prefix of a glob: everything before the first wildcard. */
+export function globHead(g) {
+  const i = g.search(/[*?]/);
+  const head = i === -1 ? g : g.slice(0, i);
+  return head.endsWith('/') ? head.slice(0, -1) : head;
+}
+
+/** Is `rel` at, or inside, any of `globs`? */
+export function within(rel, globs) {
+  return globs.some((g) => {
+    if (matchesAny(rel, [g])) return true;
+    const head = globHead(g);
+    if (head === '') return g.includes('*');
+    return rel === head || rel.startsWith(head + '/');
+  });
+}
+
+/** Does the subtree rooted at `rel` CONTAIN any of `globs`? */
+export function contains(rel, globs) {
+  return globs.some((g) => {
+    const head = globHead(g);
+    if (head === '') return true;
+    return rel === '' || head === rel || head.startsWith(rel + '/');
+  });
+}
+
+/** The path operand of a read tool, project-relative. '' means the project root. */
+function readTarget(root, tool, ti) {
+  const raw = tool === 'Read' ? ti.file_path : ti.path;
+  if (raw === undefined || raw === null || raw === '') return '';
+  const r = relTo(root, toPosix(String(raw)));
+  return r === '.' ? '' : r;
+}
+
 function fileTargets(toolName, input) {
   const out = [];
   if (input?.file_path) out.push(input.file_path);
@@ -411,6 +490,78 @@ function main() {
 
   // Not a Mavci project: this hook has no opinion.
   if (!exists(abs(root, PATHS.manifest))) allow();
+
+  /* ======================================= Read / Grep / Glob: read scope
+   *
+   * Placed before the manifest read and the pending-gate notices, and it exits on
+   * the first line for anything that is not a scoped agent. Every read by the main
+   * session passes through this hook now, so the common path has to be one string
+   * comparison and a null check - and the notices above deliberately do NOT fire on
+   * reads, which would otherwise repeat them dozens of times a turn.
+   *
+   * The full rationale is beside the helpers at the top of this file.
+   */
+  if (tool === 'Read' || tool === 'Grep' || tool === 'Glob') {
+    if (!agent) allow();                    // the operator and the main session are not scoped
+
+    const scopes = readJsonOrNull(path.join(PLUGIN_ROOT, 'agents', 'agent-scopes.json'));
+    if (!scopes) {
+      // Same fail-closed rule as edit scope: an unreadable scopes file means the
+      // control cannot be enforced, and silently allowing would disable it by
+      // deleting one file.
+      if (agent.startsWith('mavci-')) {
+        deny('agents/agent-scopes.json could not be read, so per-agent read scope cannot be '
+          + 'enforced. Refusing the read rather than allowing it unchecked. Reinstall the plugin.');
+      }
+      allow();
+    }
+
+    const rs = scopes[agent]?.read_scope;
+    if (!rs) allow();                       // no declared read scope: this agent reads freely
+
+    const denyGlobs = rs.deny ?? [];
+    const rel = readTarget(root, tool, ti);
+
+    if (rel === '..' || rel.startsWith('../')) {
+      deny(`${agent} may only read inside this project, and ${rel} is outside it. `
+        + 'If following an identifier requires a file beyond this project, that is an escalation: '
+        + 'say so and stop.');
+    }
+
+    // A Glob pattern can escape its own root, so the pattern is checked too. Grep's
+    // `glob`/`type` narrow results and cannot widen the root.
+    const pattern = String(ti.pattern ?? '');
+    if (tool === 'Glob' && pattern.split('/').includes('..')) {
+      deny(`${agent} may not use a pattern that climbs out of its search root (${pattern}).`);
+    }
+
+    // The one dynamic exception, taken before the deny list: the worklist this run
+    // was opened with. Exactly that path - not a glob over the directory.
+    if (rs.ticket_worklist) {
+      const ticket = readJsonOrNull(abs(root, PATHS.guardianTicket));
+      const wl = ticket?.worklist_path ? toPosix(String(ticket.worklist_path)) : null;
+      if (wl && rel === wl) allow();
+    }
+
+    const reason = (what) => `${agent} may not read ${what}. Its read scope excludes `
+      + `${denyGlobs.join(', ')}, and nothing there bears on the question it answers. `
+      + 'The worklist it was given is the exception, and it is allowed by path.';
+
+    if (within(rel, denyGlobs)) deny(reason(rel === '' ? 'the project root' : rel));
+
+    if (contains(rel, denyGlobs)) {
+      deny(`${agent} may not search from ${rel === '' ? 'the project root' : rel}, because that `
+        + `subtree contains ${denyGlobs.join(', ')}, which it may not read. Name a directory below `
+        + 'it instead. The search is refused rather than narrowed on your behalf: a result set that '
+        + 'differs from the one you asked for is worse than a refusal, because nothing in the '
+        + 'result says it was filtered.');
+    }
+
+    if (rs.allow && !within(rel, rs.allow)) deny(reason(rel === '' ? 'the project root' : rel));
+
+    allow();
+  }
+
 
   const manifest = readJsonOrNull(abs(root, PATHS.manifest));
   const state = readJsonOrNull(abs(root, PATHS.state));
@@ -826,8 +977,15 @@ function main() {
   allow();
 }
 
+// Guarded so the scope predicates above can be imported by a demonstration.
+// check-read-scope.mjs needs `within`/`contains` as functions to show which scope
+// SHAPES break which corpus case - a question about the predicate, not about a
+// hook invocation. The hook itself is still driven end to end in the same file,
+// because a predicate that is right in a build that never runs proves nothing.
+const INVOKED_AS_HOOK = path.basename(process.argv[1] ?? '') === 'risk-guard.mjs';
+
 try {
-  main();
+  if (INVOKED_AS_HOOK) main();
 } catch (err) {
   // A guard that crashes must not block ordinary work, but it must say so:
   // silence here would look exactly like "allowed".

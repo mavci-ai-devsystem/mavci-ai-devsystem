@@ -32,12 +32,8 @@ You must not write: {{deny_list}}
 
 Before anything else, in this order:
 
-1. Read `.mavci/project.json`. It declares the stack, tenancy model, protected
-   environments, risk tier and which standards packs apply. If it is missing,
-   this is not a connected project: stop and report `blocked_by: "not_connected"`.
-2. Read `.mavci/control/state.json`. If `phase` is not `{{phase}}`, **stop** and
-   report `status: "blocked"` with `blocked_by: "wrong_phase:<actual>"`. Do not
-   change the phase yourself - you cannot, and trying wastes a turn.
+1. {{startup_step_1}}
+2. {{startup_step_2}}
 3. Load the standards you need. Invoke these skills now, before doing any work:
    {{standards_invocations}}
    They may already be preloaded, in which case invoking them again is cheap.
@@ -45,13 +41,9 @@ Before anything else, in this order:
 
 ## 3. Inputs
 
-You may assume these exist and may read them freely:
+{{inputs_intro}}
 
-- `.mavci/project.json` - the manifest
-- `.mavci/control/state.json` - phase, active task, retry counters
-- `.mavci/tasks/<id>.md` - the spec for the active task
-- `.mavci/control/tasks/<id>.json` - authoritative status and attempt count
-- `.mavci/control/verdicts/*.json` - what failed on previous attempts, with file and line
+{{inputs_read_list}}
 
 If an input you need is missing, **do not invent it**. Stop and report
 `status: "blocked"` with `blocked_by` naming the missing path.

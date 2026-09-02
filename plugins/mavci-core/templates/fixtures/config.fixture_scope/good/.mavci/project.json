@@ -22,7 +22,7 @@
   "agents": { "enabled": ["mavci-builder"] },
   "standards": { "packs": ["nextjs-app-router", "supabase-multitenant-rls", "legal-tr-kvkk", "stripe-billing"] },
   "checks": {
-    "fixtures": ["corpus-run"],
+    "fixtures": ["fixture-bay"],
     "exclude_paths": [".next/**", "node_modules/**"]
   }
 }

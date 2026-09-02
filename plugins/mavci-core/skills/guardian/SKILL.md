@@ -21,11 +21,24 @@ This command is how that question gets asked.
 
 ## Steps
 
-### 1. Refuse if this is the wrong project
+### 1. Refuse if this is the wrong project, or the wrong phase
 
 If `tenancy.isolation` is not `application-filters`, stop. Guardian answers a
 question about application-code filters; on an `rls` project it would be asking
 about a mechanism that is not the one in use. Say so and stop.
+
+**Then check the phase here, before anything else happens.** If
+`.mavci/control/state.json` does not say `verify`, stop and say so. Do not emit a
+worklist, do not open a ticket, do not dispatch.
+
+This check used to live inside guardian, as step 2 of the shared agent contract:
+every agent reads `state.json` and refuses on the wrong phase. Guardian no longer
+does, and it moved here for two reasons. It is a capability held for one fact the
+caller already has — this command emits the worklist in the verify phase, so it
+knows the phase before it dispatches — and every path left open in `.mavci/` is an
+exception guardian's read scope has to carry. Checking before dispatch is also
+strictly cheaper: a phase refusal costs nothing here, and cost a dispatched Opus
+turn that came back `blocked` when it lived on the other side.
 
 ### 2. Enumerate — you do this, not guardian
 
@@ -71,8 +84,13 @@ Invoke `mavci-guardian` with a prompt that names the file:
 
 **NEVER INLINE THE WORKLIST INTO THE PROMPT.** Not when the file write fails, not
 when the path looks awkward, not for a one-site worklist where inlining seems
-harmless. Guardian has `Read`; the control plane is readable; the path is all it
-needs.
+harmless. Guardian has `Read` and the path is all it needs.
+
+Note what guardian can and cannot open now. Its read scope excludes `.mavci/`
+entirely, with exactly one exception: **the worklist named by the open ticket**.
+That is why step 3 is not a style preference any more — a dispatch with no ticket
+leaves guardian unable to read its own worklist, and it will report
+`blocked_by: "no_worklist"` rather than run against nothing.
 
 The reason is that inlining reintroduces truncation, and a truncated worklist
 answered completely is indistinguishable from a complete one: the subtraction is

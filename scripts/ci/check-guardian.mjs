@@ -149,8 +149,20 @@ check(GUARDIAN_FAIL_REASON.includes('empty_worklist'),
   const def = JSON.parse(fs.readFileSync(path.join(ROOT, 'agent-defs/guardian.json'), 'utf8'));
   check(typeof def._note_corpus === 'string' && /must not be able to tell/i.test(def._note_corpus),
     'and the constraint IS recorded, in a _-prefixed note the generator does not emit');
+  // The property is WRITE containment, and this message used to say "fully natively
+  // contained". That stopped being true when guardian's reads were scoped by
+  // risk-guard.mjs (ARCHITECTURE 1.1): reads are hook-enforced now and
+  // `disableAllHooks` removes them. The assertion is unchanged and still worth
+  // having - no Bash means no write path of any kind - but an assertion whose
+  // message overstates what it proves is a green check making a false claim, which
+  // is the failure mode this repository keeps finding in its own probes.
   check(!def.tools.includes('Bash'),
-    `guardian holds no Bash (tools: ${def.tools.join(', ')}) - fully natively contained`);
+    `guardian holds no Bash (tools: ${def.tools.join(', ')}) - so its WRITE containment is native `
+    + 'and total. Its reads are scoped by a hook, which disableAllHooks defeats');
+  check(!!def.read_scope && Array.isArray(def.read_scope.deny) && def.read_scope.deny.length > 0,
+    `and its reads are actually scoped, not merely instructed (deny: ${(def.read_scope?.deny ?? []).join(', ') || 'NOTHING'})`);
+  check(typeof def._note_tools === 'string' && /not native/i.test(def._note_tools),
+    'and the definition says so where the grant is made, rather than leaving the old claim standing');
   check(/BOUNDED ANSWERER, NOT AN ASSESSOR/.test(def.role),
     "the role opens by saying what guardian is: a bounded answerer, not an assessor");
   check(/unknown` IS A REAL ANSWER/i.test(def.role) || /IS A REAL ANSWER/.test(def.role),

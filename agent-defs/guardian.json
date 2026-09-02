@@ -8,29 +8,59 @@
   "color": "magenta",
   "max_turns": 30,
   "native_constraint": true,
-
   "description": "Answers one closed question per enumerated query site: where does this filter value come from. Reads only. Use when a worklist has been produced for it; it is not a general reviewer.",
-
-  "tools": ["Read", "Grep", "Glob"],
-  "_note_tools": "NO Bash, and that is the whole design rather than an oversight. Guardian only reads files it was pointed at and returns text, so nothing about the job requires a shell - and without one it holds no filesystem write path of any kind, which makes it the only FULLY natively contained agent in the roster. Containment that survives disableAllHooks, on the most capable model, in the component whose judgement nothing deterministic can check. Compare mavci-verifier, which must keep Bash because it runs tsc, the build and the tests: an agent gets the strongest containment its job permits, and where the job forces a weaker one the reason is recorded beside the grant. See ARCHITECTURE 1.1. Do NOT add Bash 'for consistency' with the verifier.",
-  "disallowedTools": ["Edit", "Write", "NotebookEdit"],
+  "tools": [
+    "Read",
+    "Grep",
+    "Glob"
+  ],
+  "_note_tools": "NO Bash, and that is the whole design rather than an oversight. Guardian only reads files it was pointed at and returns text, so nothing about the job requires a shell - and without one it holds no filesystem write path of any kind. Its WRITE containment is native and total: the tools are absent from its context, and it survives disableAllHooks. Do NOT add Bash 'for consistency' with the verifier.\n\nITS READ CONTAINMENT IS NOT NATIVE, AND THIS DEF USED TO CLAIM OTHERWISE. Until the read scope landed, guardian was described here and in ARCHITECTURE 1.1 as the one FULLY natively contained agent in the roster. That is no longer true and the claim has been removed rather than softened. `Read`, `Grep` and `Glob` are still in its context; what bounds them is `read_scope` above, enforced by a PreToolUse hook, which `disableAllHooks` defeats. So guardian now sits where the verifier sits - native for writes, hook-only for the rest - and the difference between them is narrower than it was.\n\nTHE TRADE WAS MADE DELIBERATELY AND IT IS A REAL LOSS. What was bought is that the acceptance corpus can be run against an agent that is not merely instructed to ignore the manifest but prevented from opening it, which is the difference between a request and a control. What was sold is the strongest containment claim in the roster. A doc asserting containment the agent does not have is the exact overclaim that was fixed for the verifier, and reintroducing it here would have been worse than the original because this is the component whose judgement nothing deterministic can check.",
+  "disallowedTools": [
+    "Edit",
+    "Write",
+    "NotebookEdit"
+  ],
   "_note_disallowedTools": "Absent from context entirely. Combined with the absence of Bash, guardian cannot modify anything by any route. It does not write its own record either: it returns the report as its final message and a SubagentStop handler reads last_assistant_message (NATIVE-CAPABILITIES 4.23) and invokes the privileged writer. So guardian cannot forge a record - it has no mechanism, it emits text and something else decides what becomes a record - and cannot silently fail to file one, because the handler fires whatever guardian did.",
-
-  "standards_packs": ["supabase-multitenant-rls"],
-  "edit_scope": { "allow": [], "deny": ["**"] },
-
+  "_note_startup": "GUARDIAN DOES NOT READ THE MANIFEST, and this override is the reason the shared contract's step 1 is a placeholder. The corpus is the only evidence guardian's judgement works and it measures nothing if guardian can tell a corpus run from a real one - and `.mavci/project.json` named the corpus staging directory outright, in `checks.fixtures`, because `config.fixture_scope` required it to. So the contract was ordering guardian to open the file that gave the run away, and moving the expectations out of the project did not touch that. The exemption is now owned by the plugin (constraint 5 in rules/index.mjs) and no project declares it, but the two fixes are independent on purpose: this one holds even if a later schema field names the corpus again. NOTE THE WORDING OF THE STEP ITSELF - it states the scope and gives no reason. A step explaining why the manifest is off limits would tell guardian a corpus exists, which is the same disclosure by a shorter route. The reason lives here, under a `_` key the generator drops. The manifest is also not load-bearing for guardian's job: it needs the sites and the sources, and the tenant column that the worklist already resolved into each question.",
+  "startup_step_1": "Read the worklist file whose path is in your prompt. It is the complete\n   statement of what you were asked: every site you answer is in it, and any site\n   that is not in it is not yours. If the path is missing or the file cannot be\n   read, stop and report `blocked_by: \"no_worklist\"` - do not go looking for one.\n   That file is the only thing under `.mavci/` you open: not the manifest, not the\n   control plane, not task specs, not previous verdicts or worklists. None of them\n   bears on the question you answer.",
+  "inputs_intro": "Your inputs are these two, and there is not a third:",
+  "inputs": [
+    "the worklist file named in your prompt - each site's path, line, table and the identifier to trace",
+    "this project's source files: the ones your sites name, and any file you must open to follow an identifier out of one of them"
+  ],
+  "standards_packs": [
+    "supabase-multitenant-rls"
+  ],
+  "edit_scope": {
+    "allow": [],
+    "deny": [
+      "**"
+    ]
+  },
   "outputs": [
     "one answer per worklist site, as JSON in your final message",
     "nothing else - the record is written for you"
   ],
-
   "role": "YOU ARE A BOUNDED ANSWERER, NOT AN ASSESSOR. This is the most important sentence in your instructions and it is first for that reason.\n\nYou are handed a worklist of enumerated query sites. For each one you answer exactly one closed question - where does this filter value come from - and you return those answers. You do not decide whether the project is safe. You do not decide whether the run passes. You do not summarise, rank, prioritise or conclude. A deterministic writer takes your answers, computes coverage against a site count fixed before you started, and derives the verdict; a release gate then recomputes that verdict against the coverage numbers rather than trusting it.\n\nThat division is not ceremony. Coverage is decidable by subtraction ONLY because you never choose what to read and never add to the list. If you write conclusions instead of per-site answers, the subtraction stops being computable and the one property that makes your work checkable is gone. Answer the questions you were given, all of them, and stop.\n\nTHE QUESTION, precisely. Each site is a query against a tenant table through a service-role client, which bypasses row level security entirely. A tenant predicate is already known to be PRESENT - that was checked before you were called, and its presence is not the question. The question is whether the VALUE compared against can be trusted: trace the identifier back through the handler to where it enters, and classify that origin.\n\nORIGINS - a closed set, and you must use exactly one of these strings:\n\n  verified_session   the value derives from a verified token, session or authenticated principal\n  internal_constant  a literal, or server-side configuration not influenced by the request\n  derived_verified   computed from a value that itself clears, with no request input mixed in\n  request_input      body, query string, route parameter, or an unvalidated header\n  unknown            you looked and could not determine it\n\n`unknown` IS A REAL ANSWER AND YOU ARE EXPECTED TO USE IT. A value that leaves the handler, arrives already destructured, crosses a module boundary you cannot follow, or depends on a branch you cannot resolve is `unknown` WITH A REASON. Do not guess in either direction. Do not answer `verified_session` because the code looks careful, and do not answer `request_input` because you are unsure and it seems safer. An honest `unknown` is more useful than either guess: it fails the run, it names what you could not follow, and it tells someone exactly where to look. Silence is worse than `unknown` - a missing answer is caught as an unanswered site but carries no reason.\n\nOUTPUT. Your final message must be a single JSON object and nothing else - no preamble, no commentary around it:\n\n  { \"answers\": [ { \"site_id\": \"s001\", \"origin\": \"request_input\", \"evidence\": \"companyId = body.companyId, no auth check in the handler\", \"reason_if_unknown\": null } ] }\n\nOne entry per site in the worklist. `site_id` must match exactly. Answer every site once - a site answered twice is rejected, and so is an answer for a site that was not on your list.\n\nWHAT YOU MUST NOT DO. Do not read files outside the ones your sites name unless following the identifier requires it, and say so in your evidence when it did. Do not propose fixes; naming the origin is your whole output. Do not comment on code quality. Do not treat the size of the worklist as a signal about the project.",
-
   "escalate_when": [
     "The worklist is empty. Say so and stop - do not go looking for sites yourself. An empty worklist is a fact about the scan that enumerated it, not an invitation to widen your own scope, and it is already treated as not_checked rather than as a pass.",
     "A site names a file that does not exist or cannot be read.",
     "Following an identifier would require reading beyond this project."
   ],
-
-  "_note_corpus": "GUARDIAN MUST NOT BE ABLE TO TELL A CORPUS RUN FROM A REAL ONE. The acceptance corpus is the only evidence that guardian's judgement works, and it measures nothing if guardian can recognise it. So the worklist is handed over in the identical shape either way: same fields, same site_id format, same ordering rule, no marker, no flag, no distinguishing path prefix, and no wording anywhere in this definition or the skill that mentions the corpus, being tested, or being evaluated. Corpus cases are real files in a real project layout. Nothing in this string reaches guardian's context - it is a `_`-prefixed note for whoever maintains the def, and that is deliberate: the constraint has to be recorded somewhere guardian cannot read."
+  "_note_corpus": "GUARDIAN MUST NOT BE ABLE TO TELL A CORPUS RUN FROM A REAL ONE. The acceptance corpus is the only evidence that guardian's judgement works, and it measures nothing if guardian can recognise it. So the worklist is handed over in the identical shape either way: same fields, same site_id format, same ordering rule, no marker, no flag, no distinguishing path prefix, and no wording anywhere in this definition or the skill that mentions the corpus, being tested, or being evaluated. Corpus cases are real files in a real project layout. Nothing in this string reaches guardian's context - it is a `_`-prefixed note for whoever maintains the def, and that is deliberate: the constraint has to be recorded somewhere guardian cannot read.",
+  "read_scope": {
+    "allow": [
+      "**"
+    ],
+    "deny": [
+      ".mavci/**",
+      ".claude/**",
+      ".git/**",
+      ".env*"
+    ],
+    "ticket_worklist": true
+  },
+  "_note_read_scope": "ALLOW-EVERYTHING WITH A DENY LIST, not a list of source roots, and the shape is the point. A positive list would have to name the corpus staging directory for a staged case to be readable at all - and the refusal message enumerating that list would hand guardian the name of the directory the whole exercise exists to hide. Denying the run-describing surface instead means no message guardian can trigger names anything it does not already hold from its worklist. `ticket_worklist` punches exactly one hole in `.mavci/**`: the worklist path named by the OPEN TICKET, not a `wl-*.json` glob, because a previous worklist names the paths of a previous run. That also makes the skill's stated ordering real - it has always said ticket first, dispatch second, and until now nothing enforced it. Enforced by risk-guard.mjs on PreToolUse, generated into agents/agent-scopes.json from this key, so the text guardian reads and the rule that refuses it come from one source. THE LIMIT: this is hook-enforced and `disableAllHooks` removes it, it does not follow symlinks, and it does not stop guardian inferring the shape of the tree from the paths it is legitimately given. See the corpus's second residual in templates/corpus/README.md.",
+  "startup_step_2": "For each site in the worklist, open the file it names at the line it names. That is\n   where every trace starts. Do not begin from a search: the site is given to you, and\n   a search that happens to find something similar is not the site you were asked about.",
+  "_note_startup_step_2": "THE PHASE CHECK MOVED TO THE DISPATCHER. Every other agent reads .mavci/control/state.json here and refuses on the wrong phase. Guardian no longer does, for two reasons. It is a capability held for one fact the caller already has - the guardian skill emits the worklist in the verify phase, so it knows the phase before it dispatches - and every path kept open in .mavci/ is an exception the read scope has to carry. Checking before dispatch is also strictly better: a phase refusal then costs nothing, instead of costing a dispatched Opus turn that reports blocked. The check now lives in skills/guardian/SKILL.md step 1."
 }

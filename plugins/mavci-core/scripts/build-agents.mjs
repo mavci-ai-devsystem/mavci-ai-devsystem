@@ -49,11 +49,92 @@ function constraintNote(def) {
       + 'are absent from your context entirely. There is nothing to resist - you could not edit a '
       + 'file if you decided to.';
   }
+  return HOOK_NOTE;
+}
+
+/**
+ * The READ half, appended when a definition declares a `read_scope`.
+ *
+ * An agent is told the truth about its own constraints (ARCHITECTURE 1.1), and a
+ * read scope is a different KIND of constraint from the write one: guardian's write
+ * limit is native - the tools are absent from its context - while its read limit is
+ * a hook. One sentence covering both as "natively enforced" would be the same
+ * overclaim section 1.1 was written to correct. So the two are stated separately,
+ * each in the terms that are true of it.
+ *
+ * It gives no reason beyond the one that is honest and complete for the agent:
+ * nothing in the excluded paths bears on the question it answers.
+ */
+function readScopeNote(def) {
+  if (!def.read_scope) return '';
+  const denied = (def.read_scope.deny ?? []).map((g) => '`' + g + '`').join(', ');
+  return [
+    '\n\n',
+    'Your **reads** are bounded separately, and by a **PreToolUse hook** rather than by your ',
+    "tool list. You hold `Read`, `Grep` and `Glob` over this project's source. A call naming ",
+    denied,
+    ' is refused with a reason, and so is a SEARCH ROOTED where those sit - including the ',
+    'project root, which contains them. The search is refused rather than quietly narrowed: a ',
+    'result set that differs from the one you asked for is worse than a refusal, because nothing ',
+    'in the result would tell you it had been filtered. Name a directory below the root instead. ',
+    'Nothing in those paths bears on the question you answer.',
+  ].join('');
+}
+
+function hookNote() {
   return 'These limits are enforced by a **PreToolUse hook**, not by your tool list. You do have '
     + '`Edit` and `Write`, because you need them for the paths in your allow list. A write outside '
     + 'that list is refused with a reason. Treat the list as the boundary, not the hook: the hook is '
     + 'a backstop, and the reason you were given the narrow scope is that the narrow scope is correct.';
 }
+
+const HOOK_NOTE = hookNote();
+
+/**
+ * §2 step 1, and §3's list of what an agent may open.
+ *
+ * WHY THESE ARE PER-AGENT AND NOT FIXED PROSE. Both used to name
+ * `.mavci/project.json` for everyone: step 1 ordered every agent to read the
+ * manifest before anything else, and §3 listed it as freely readable. For four of
+ * the five agents that is correct - the manifest is how they learn the stack, the
+ * tenancy model and which packs apply.
+ *
+ * For guardian it was a leak. The guardian acceptance corpus is the only evidence
+ * guardian's judgement works, and it measures nothing if guardian can tell a corpus
+ * run from a real one. The manifest named the corpus staging directory outright, in
+ * `checks.fixtures`, so the contract was ordering guardian to open the file that
+ * gave the run away. The exemption has since moved into the plugin and the manifest
+ * no longer names it - but the two fixes are separate, and this half must hold on
+ * its own: a future manifest field could name the corpus again, and a contract that
+ * does not send guardian there is the part that does not have to be re-audited each
+ * time the schema grows.
+ *
+ * Guardian's replacement text states its read scope positively and gives NO REASON.
+ * A step that explained why it must not read the manifest would tell guardian a
+ * corpus exists, which is the same disclosure by a shorter route. `guardian.json`
+ * records the reason under a `_`-prefixed key the generator drops.
+ */
+const DEFAULT_STARTUP_STEP_1 = [
+  'Read `.mavci/project.json`. It declares the stack, tenancy model, protected',
+  '   environments, risk tier and which standards packs apply. If it is missing,',
+  '   this is not a connected project: stop and report `blocked_by: "not_connected"`.',
+].join('\n');
+
+const DEFAULT_STARTUP_STEP_2 = [
+  'Read `.mavci/control/state.json`. If `phase` is not `{{phase}}`, **stop** and',
+  '   report `status: "blocked"` with `blocked_by: "wrong_phase:<actual>"`. Do not',
+  '   change the phase yourself - you cannot, and trying wastes a turn.',
+].join('\n');
+
+const DEFAULT_INPUTS_INTRO = 'You may assume these exist and may read them freely:';
+
+const DEFAULT_INPUTS = [
+  '`.mavci/project.json` - the manifest',
+  '`.mavci/control/state.json` - phase, active task, retry counters',
+  '`.mavci/tasks/<id>.md` - the spec for the active task',
+  '`.mavci/control/tasks/<id>.json` - authoritative status and attempt count',
+  '`.mavci/control/verdicts/*.json` - what failed on previous attempts, with file and line',
+];
 
 function standardsInvocations(def) {
   const packs = def.standards_packs ?? [];
@@ -61,7 +142,7 @@ function standardsInvocations(def) {
   return packs.map((p) => `   - \`/mavci-core:standards-${p}\``).join('\n').trimStart();
 }
 
-function render(contract, def) {
+export function render(contract, def) {
   const frontmatterTools = def.tools.join(', ');
   const map = {
     name: def.name,
@@ -76,10 +157,14 @@ function render(contract, def) {
     role: def.role,
     allow_list: list(def.edit_scope?.allow),
     deny_list: list(def.edit_scope?.deny),
-    constraint_note: constraintNote(def),
+    constraint_note: constraintNote(def) + readScopeNote(def),
     standards_invocations: standardsInvocations(def),
     outputs_list: list(def.outputs),
     escalate_list: bullets(def.escalate_when),
+    startup_step_1: def.startup_step_1 ?? DEFAULT_STARTUP_STEP_1,
+    startup_step_2: (def.startup_step_2 ?? DEFAULT_STARTUP_STEP_2).split('{{phase}}').join(def.phase),
+    inputs_intro: def.inputs_intro ?? DEFAULT_INPUTS_INTRO,
+    inputs_read_list: bullets(def.inputs ?? DEFAULT_INPUTS),
   };
 
   let out = contract;
@@ -123,7 +208,9 @@ function stripNotes(obj) {
   return obj;
 }
 
-function loadDefs({ keepNotes = false } = {}) {
+export const CONTRACT_PATH = CONTRACT;
+
+export function loadDefs({ keepNotes = false } = {}) {
   return fs.readdirSync(DEFS_DIR)
     .filter((f) => f.endsWith('.json') && !f.startsWith('_'))
     .sort()
@@ -152,6 +239,9 @@ function build() {
       allow: def.edit_scope?.allow ?? [],
       deny: def.edit_scope?.deny ?? [],
       native_constraint: !!def.native_constraint,
+      // Read scope is enforced by risk-guard.mjs on PreToolUse, from THIS file, so
+      // the text the agent reads and the rule that refuses it come from one source.
+      read_scope: def.read_scope ?? null,
     };
   }
   files.set('agent-scopes.json', JSON.stringify(scopes, null, 2) + '\n');
@@ -200,4 +290,7 @@ function main() {
   else console.log(`built ${files.size} file(s) from ${loadDefs().length} definition(s)`);
 }
 
-main();
+// Guarded so this module can be imported. check-corpus-blind.mjs renders guardian
+// from a MODIFIED definition to demonstrate its assertions failing, which needs
+// `render` as a function rather than as a side effect of loading the file.
+if (path.basename(process.argv[1] ?? '') === 'build-agents.mjs') main();

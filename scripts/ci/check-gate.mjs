@@ -651,8 +651,16 @@ function assertDelivered(label, r, want) {
 {
   const tmp = makeProject(); cleanup.push(tmp);
   // A violation on a path no agent scope grants: not app/, src/, lib/, ...
-  fs.mkdirSync(path.join(tmp, 'corpus-run', 'lib'), { recursive: true });
-  fs.writeFileSync(path.join(tmp, 'corpus-run', 'lib', 'supabase.ts'),
+  //
+  // NOT `corpus-run/`, which is what this fixture used until the guardian corpus
+  // staging root became exempt from `next.env_centralised` and
+  // `next.no_service_role_client` with no manifest declaration (constraint 5 in
+  // rules/index.mjs). Under that name the fixture stopped producing a violation at
+  // all, so there was nothing for the gate to release on, and this assertion failed
+  // as `kind=silent` - which reads like a broken release and was a stale fixture.
+  // `vendor/` is granted by no agent's allow list and is exempted by nothing.
+  fs.mkdirSync(path.join(tmp, 'vendor', 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(tmp, 'vendor', 'lib', 'supabase.ts'),
     'export const k = process.env.SUPABASE_SERVICE_ROLE_KEY;\n');
   state.seal(tmp);
 
@@ -671,7 +679,7 @@ function assertDelivered(label, r, want) {
   }
   // The release must still SAY what was wrong and who owns it, or it is a
   // silent pass - the 0.1.10 failure in the opposite direction.
-  if (/corpus-run\/lib\/supabase\.ts/.test(dg.reason ?? '') && /AUTHORITY:/.test(dg.reason ?? '')) {
+  if (/vendor\/lib\/supabase\.ts/.test(dg.reason ?? '') && /AUTHORITY:/.test(dg.reason ?? '')) {
     ok('the release names the unreachable path and the actor who owns it');
   } else {
     bad('the release must name the path and carry an AUTHORITY note; it is a record, not a pass');

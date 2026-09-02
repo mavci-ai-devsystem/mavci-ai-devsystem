@@ -72,6 +72,54 @@ jobs:
       - name: Corpus has both controls and no expectation guardian will never be asked
         run: node scripts/ci/check-corpus.mjs
 
+      # The corpus's OTHER deterministic half, and the one that was missing until
+      # 0.1.17: the SCORING. Whether guardian answers correctly needs a model, but
+      # comparing what it answered against what was expected does not - and until now
+      # that comparison was done by a model reading two JSON files, which made the
+      # acceptance test for guardian's judgement the one step in the corpus that
+      # nothing checked. This asserts the scorer catches a broken record on each of
+      # the three scored fields SEPARATELY, including one that fields 1 and 2 both
+      # accept, and that its positive control still passes - without which a scorer
+      # that failed everything would satisfy every negative in the file.
+      - name: Corpus scorer catches a broken record on each scored field
+        run: node scripts/ci/check-corpus-score.mjs
+
+      # The corpus's isolation, which is the property the whole thing rests on and the
+      # one that failed first. Through 0.1.17 the expectations sat inside the project,
+      # filed as a known compromise - "out of the way, not out of reach" - and guardian
+      # grepped an identifier and hit one, on a line carrying the answer. So this does
+      # not assert the expectations are hard to find. It stages a case and asserts they
+      # are NOT IN THE PROJECT AT ALL, then reconstructs the 0.1.17 layout and confirms
+      # every assertion fails against it - including a prose-only variant that the
+      # structural check accepts and the identifier check must not.
+      - name: Corpus expectations are outside every project the scanner sees
+        run: node scripts/ci/check-corpus-isolation.mjs
+
+      # The OTHER half of the same property, and the half that moving the
+      # expectations did not touch. The corpus staging root needs a fixture
+      # exemption or the corpus cannot run - every case reads the service-role key
+      # on purpose - and that exemption used to be DECLARED in .mavci/project.json,
+      # which the shared agent contract ordered every agent to read first. Guardian
+      # was instructed to open the file that named the corpus directory. Both sides
+      # moved: the exemption is plugin-owned and undeclared, and guardian's startup
+      # protocol overrides step 1. Asserted together because either alone reopens
+      # the leak - and including the one assertion that catches an override which
+      # explains itself, since the reason IS the disclosure.
+      - name: A corpus run is invisible in the manifest, and guardian is not sent there
+        run: node scripts/ci/check-corpus-blind.mjs
+
+      # The third leak, and the only one that removes a CAPABILITY rather than an
+      # instruction: guardian's Read/Grep/Glob are now scoped by risk-guard.mjs.
+      # Narrowing a read grant is the change most likely to break the thing the grant
+      # exists for - a scope that stops a trace makes guardian answer `unknown`, which
+      # is a legitimate value, so the run completes and records a verdict and the
+      # failure is silent. So this asserts FIRST that every corpus case is still
+      # traceable, then demonstrates the obvious scope - the worklist paths - failing:
+      # it breaks q3v7k, the degenerate-pass control, and lets t5w9d pass for the wrong
+      # reason. Every negative is asserted on the REFUSAL REASON, not the decision.
+      - name: Guardian's reads are scoped without breaking the trace, and refuse with a reason
+        run: node scripts/ci/check-read-scope.mjs
+
       # scribe.json promises this check by name, which under this repo's own rule is
       # a debt until it exists. Two things beyond existence: a citation that resolves
       # to the WRONG thing fails (a task id carrying another task's title, a verdict

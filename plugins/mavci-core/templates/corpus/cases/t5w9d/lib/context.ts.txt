@@ -1,0 +1,8 @@
+type RequestContext = { scopeId: string };
+
+// The tenant id is read from a request-scoped store. Whatever writes it does so
+// upstream of this module, and neither the writer nor the middleware that runs it
+// is part of this project's source.
+export function currentContext(): RequestContext {
+  return (globalThis as unknown as { __ctx: RequestContext }).__ctx;
+}

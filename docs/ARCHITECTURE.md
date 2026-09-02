@@ -78,7 +78,7 @@ Five agents at `plugins/mavci-core/agents/<name>.md`, generated from `agent-defs
 | `mavci-architect` | `opus` | plan | No (hook-enforced) | Planning errors are the most expensive class: a wrong data model or tenancy boundary is paid for across the life of the SaaS. Volume is low — once per feature. On a Max subscription this is the cheapest place to spend the best model. |
 | `mavci-builder` | `sonnet` | build | **Yes** | Highest-volume agent by an order of magnitude, working against a written spec, preloaded standards, and a verifier that fails the task. Quality is guaranteed by the verification layer, not the tier. Putting the highest-volume agent on Opus exhausts a weekly limit fastest for the least marginal gain. **Escape hatch:** `CLAUDE_CODE_SUBAGENT_MODEL=opus` for a session, or one line in `agent-defs/builder.yaml`. |
 | `mavci-verifier` | `sonnet` | verify | No via `Edit`/`Write` (native); **`Bash` hook-only** | Deterministic work is done by `verify.mjs` at zero token cost. The agent interprets a failing build and attributes it. Bounded reasoning. |
-| `mavci-guardian` | `opus` | verify / release gate | No — **fully contained** (no `Bash`) | Multi-tenant isolation, RLS correctness, Stripe webhook idempotency, KVKK and ToS completeness, ad-policy. A miss here is a data breach, a legal exposure, or a payment bug. Runs once per release. |
+| `mavci-guardian` | `opus` | verify / release gate | No via `Edit`/`Write` (native, no `Bash`); **reads hook-scoped** | Multi-tenant isolation, RLS correctness, Stripe webhook idempotency, KVKK and ToS completeness, ad-policy. A miss here is a data breach, a legal exposure, or a payment bug. Runs once per release. |
 | `mavci-scribe` | `haiku` | any | No (hook-enforced) | Changelogs, ADRs, task summaries, SEO copy, lessons. Mechanical, high-volume, low-stakes. The tier that makes the roster affordable. |
 
 ### 1.1 How each agent is actually constrained — corrected
@@ -88,7 +88,7 @@ The previous revision implied all four non-builder agents were natively constrai
 | Agent | Native constraint | Hook-only constraint | Consequence |
 |---|---|---|---|
 | `mavci-verifier` | `disallowedTools: Edit, Write, NotebookEdit` — **those tools are absent from its context** and nothing it can do restores them. | **It also has `Bash`.** A shell reaches the filesystem whatever the file-tool grant is; only `risk-guard.mjs`'s write-target matching (0.1.12) stands between it and app code. | Cannot modify anything **via the file tools**, ever. **Can** reach the filesystem via `Bash`, and under `disableAllHooks` nothing constrains that. |
-| `mavci-guardian` | `disallowedTools: Edit, Write, NotebookEdit` **and no `Bash`.** It holds `Read`, `Grep`, `Glob` and no filesystem write path of any kind. | — | **Fully natively contained.** Cannot modify anything by any route, including under `disableAllHooks`. It returns its report as its final message; a `SubagentStop` handler reads `last_assistant_message` (4.23) and writes the record. |
+| `mavci-guardian` | `disallowedTools: Edit, Write, NotebookEdit` **and no `Bash`.** It holds `Read`, `Grep`, `Glob` and no filesystem write path of any kind. | **Its reads are scoped by `risk-guard.mjs`**, from `read_scope` in `agents/agent-scopes.json`: `.mavci/`, `.claude/`, `.git/` and `.env*` are refused, as is a search rooted where those sit, with one exception for the worklist named by the open ticket. | **Write containment is native and total** — cannot modify anything by any route, including under `disableAllHooks`. **Read containment is hook-only** and `disableAllHooks` removes it, leaving `Read`/`Grep`/`Glob` over the whole tree. It returns its report as its final message; a `SubagentStop` handler reads `last_assistant_message` (4.23) and writes the record. |
 | `mavci-architect` | **None.** It has `Edit` and `Write`, because it must write task specs to `.mavci/tasks/`. | Path restriction to `.mavci/tasks/**`, `.mavci/decisions/**` is enforced **only** by `risk-guard.mjs` on `PreToolUse`. | If hooks are disabled, the architect can edit application code. The prompt says not to; nothing stops it. |
 | `mavci-scribe` | **None.** Has `Edit`/`Write` for `docs/**`, `README.md`, `.mavci/lessons/**`, and SEO metadata. | Path restriction hook-only, same as architect. | Same exposure. |
 | `mavci-builder` | **None** by design — it is the agent that writes code. | Denied `.mavci/control/**`, `.env*`, `.claude/settings.json` by deny rules **and** hook. | The deny rules survive hook loss; the phase gate does not. |
@@ -112,15 +112,38 @@ ends of the containment range on purpose:
   in `agent-defs/verifier.json`.
 - `mavci-guardian` **only reads and reasons.** Its worklist is enumerated for it,
   its input is files it was pointed at, and its output is a message. Nothing about
-  the job requires a shell, so nothing forced a compromise — and it is therefore
-  granted the strongest containment available, on the most capable model, in the one
-  component whose judgement nothing deterministic can check.
+  the job requires a shell, so nothing forced a compromise on the WRITE side, and it
+  holds the strongest write containment available — on the most capable model, in the
+  one component whose judgement nothing deterministic can check.
+
+  **It is no longer the fully contained agent this section used to call it, and the
+  claim was removed rather than softened.** Guardian's reads are now bounded by
+  `read_scope`, enforced by `risk-guard.mjs` on `PreToolUse` — so on reads it sits
+  exactly where the verifier sits, and `disableAllHooks` returns it to `Read`, `Grep`
+  and `Glob` over the whole tree.
+
+  **What the trade bought, and what it cost.** The acceptance corpus is the only
+  evidence guardian's judgement works, and it measures nothing if guardian can tell a
+  corpus run from a real one. Moving the expectations out of the project and removing
+  the manifest from guardian's instructions closed two leaks and left the capability
+  untouched: an agent with unrestricted `Read` over a tree cannot be shown blind from
+  inside that tree, and a prompt saying otherwise is a request rather than a control.
+  The scope makes it a control. What it cost is the strongest containment claim in
+  the roster, and that is a real loss and was accepted as one. A document asserting
+  containment the agent does not have is the exact overclaim this section was written
+  to correct for the verifier; reintroducing it for guardian would have been worse,
+  because guardian is the component nothing deterministic checks.
 
 The rule that produces this, stated so the next reader applies it rather than
 flattening it: **an agent gets the strongest containment its job permits, and where
 the job forces a weaker one, the reason is recorded beside the grant.** A future
 revision that gives guardian `Bash` "for consistency", or removes it from the
 verifier "for symmetry", would be breaking both halves of that.
+
+The corollary, which guardian's read scope is the first case of: **where a property
+the system relies on is only requested by a prompt, the choice is to enforce it or to
+stop claiming it.** Narrowing a grant is the change most likely to break the thing it
+protects, so it earns its own demonstrations — `scripts/ci/check-read-scope.mjs`.
 
 What actually contains an agent with `Bash` is `risk-guard.mjs`'s **write-target
 matching** — the 0.1.12 rewrite that resolves redirection targets and the operand
