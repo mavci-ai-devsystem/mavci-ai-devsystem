@@ -171,9 +171,51 @@ export function readState(root) {
   return s;
 }
 
+/**
+ * THREE VERSION FACTS, AND THIS FUNCTION OWNS EXACTLY ONE OF THEM.
+ *
+ * Until 0.1.22 state.json carried a single `plugin_version` with three readers:
+ * `--init` stamped it (created-by), `mavci-verify.yml` cloned the tag it named
+ * (the CI pin), and `doctor` compared it against the installed version (the skew
+ * signal). This function never restamped it, so plugin 0.1.21 wrote a gate4c
+ * state.json at 2026-09-02T14:06:27Z that said "0.1.20", and in that project the
+ * live value had in fact been set by `doctor --sync` - a fourth provenance no
+ * reader's contract named.
+ *
+ * `written_by_plugin_version` is stamped HERE, on every write, because that is
+ * the only place that knows the answer. It is also the fact finding 24's remedy
+ * needs: reporting a schema rejection as version skew requires knowing which
+ * version wrote the document being rejected.
+ *
+ * `ci_pinned_plugin_version` is deliberately NOT stamped here. The pin's whole
+ * value is that it moves only when somebody means it - `doctor --sync` followed
+ * by a commit. Restamping it on every write would repin CI from any machine with
+ * a newer plugin installed, as a side effect of allocating a task.
+ */
 export function setState(root, patch) {
-  const next = { ...readState(root), ...patch, updated: nowIso() };
+  const cur = readState(root);
+  const next = { ...cur, ...patch, updated: nowIso(), written_by_plugin_version: pluginVersion() };
+  // LEGACY. A project connected before 0.1.22 carries `plugin_version`, and what
+  // it holds is the pin - that is what CI cloned from it. Carry it across on the
+  // first write rather than dropping it, or CI loses its pin silently.
+  if (next.plugin_version && !next.ci_pinned_plugin_version) {
+    next.ci_pinned_plugin_version = next.plugin_version;
+  }
+  delete next.plugin_version;
   return writeControl(root, PATHS.state, next, 'state');
+}
+
+/** The CI pin. Operator-initiated only: `--init` and `doctor --sync`. */
+export function setPin(root, version) {
+  if (!/^[0-9]+[.][0-9]+[.][0-9]+$/.test(String(version))) {
+    throw new Error(`not a plugin version: ${version}`);
+  }
+  return setState(root, { ci_pinned_plugin_version: version });
+}
+
+/** The pin, reading the pre-0.1.22 field for projects that still carry it. */
+export function ciPin(state) {
+  return state?.ci_pinned_plugin_version ?? state?.plugin_version ?? null;
 }
 
 export function setPhase(root, phase) {
@@ -199,9 +241,9 @@ export function allocateTaskId(root) {
   return id;
 }
 
-export function createTask(root, { title, spec, owner_agent = null, max_attempts = 3 }) {
+/** Both halves of a task under a caller-supplied id. Touches no state. */
+function writeTaskHalves(root, id, { title, spec, owner_agent = null, max_attempts = 3 }) {
   const s = readState(root);
-  const id = allocateTaskId(root);
   const now = nowIso();
   writeControl(root, controlTaskPath(id), {
     schema_version: 1, id, project_id: s.project_id,
@@ -212,6 +254,53 @@ export function createTask(root, { title, spec, owner_agent = null, max_attempts
     schema_version: 1, id, project_id: s.project_id,
     title, spec, artifacts: [], notes: [],
   }, 'task');
+  return id;
+}
+
+export function createTask(root, opts) {
+  return writeTaskHalves(root, allocateTaskId(root), opts);
+}
+
+/**
+ * THE PLAN TRANSITION, AS ONE SANCTIONED ACT.
+ *
+ * gate4c, 2026-09-02: the plan skill ran `--set-phase plan` and then
+ * `--new-task`. The first succeeded; an external classifier denied the second.
+ * The phase stayed advanced with no task allocated, and because risk-guard
+ * freezes application code whenever `phase !== 'build'`, the project sat frozen
+ * with nothing to plan against until a human ran the blocked command by hand.
+ *
+ * WE DO NOT OWN THAT CLASSIFIER. Two external gates ordered the risk of this
+ * script backwards from our own classification - the privileged write went
+ * through unconfirmed and the agent-safe one was refused - and no rule written
+ * here changes that. What we own is that the sequence had an interruptible
+ * middle for their decision to land in. It no longer has one.
+ *
+ * TWO REJECTED FIXES, for whoever reads this next and reaches for the smaller
+ * change:
+ *
+ *   `--new-task` moving the phase. It is AGENT_OK and connect calls it once per
+ *   baselined check, so that hands the gate deciding whether app code is
+ *   writable to an unattended subagent. A privilege escalation dressed as an
+ *   atomicity fix.
+ *
+ *   `--set-phase` refusing to enter plan with no task. There is no such state to
+ *   test: `next_task_id` always increments, and `{phase: plan, active_task:
+ *   null}` is exactly what `--init` writes, so the refusal would reject every
+ *   fresh project's first legal transition and still guard only the half that
+ *   succeeded.
+ *
+ * ORDER IS THE MECHANISM. The task halves go first and the SINGLE state write
+ * goes last, so an interruption anywhere leaves the phase where it was. The
+ * residue in that case is an orphan task file at an id that will be handed out
+ * again and overwritten - the benign direction. The reverse order buys nothing
+ * and reproduces the bug.
+ */
+export function beginPlan(root, { title, spec }) {
+  const s = readState(root);
+  const id = String(s.next_task_id).padStart(4, '0');
+  writeTaskHalves(root, id, { title, spec });
+  setState(root, { phase: 'plan', active_task: id, next_task_id: s.next_task_id + 1 });
   return id;
 }
 
@@ -553,7 +642,10 @@ export function init(root, manifest) {
     next_task_id: 1,
     baseline_debt: 0,
     updated: nowIso(),
-    plugin_version: pluginVersion(),
+    // The pin CI clones, and the version that wrote this document. At init they
+    // are equal and that agreement proves nothing - see check-state-transition.
+    ci_pinned_plugin_version: pluginVersion(),
+    written_by_plugin_version: pluginVersion(),
   }, 'state');
 
   writeControl(root, PATHS.waivers, {
@@ -957,15 +1049,27 @@ async function main() {
         console.log(id);
         return;
       }
+      case '--begin-plan': {
+        const title = arg('--begin-plan');
+        if (title === true || !title) die('usage: --begin-plan "<title>" [--spec <path>]');
+        const id = beginPlan(root, { title, spec: arg('--spec', `${PATHS.tasks}/pending.md`) });
+        console.log(`phase = plan, active_task = ${id}`);
+        return;
+      }
       case '--show': {
         const ctx = loadContext(root);
         console.log(canonicalJson({
           connected: isConnected(root),
           phase: ctx.state?.phase ?? null,
+          // Without this a seeded project, a project whose transition halted
+          // half-way, and a project with a task in hand all read identically -
+          // which is why the gate4c halt was visible only in the transcript.
+          active_task: ctx.state?.active_task ?? null,
           baseline_debt: ctx.baseline?.entries.length ?? 0,
           waivers: ctx.waivers?.waivers.length ?? 0,
           plugin_version: ctx.pluginVersion,
-          state_plugin_version: ctx.state?.plugin_version ?? null,
+          ci_pinned_plugin_version: ciPin(ctx.state),
+          written_by_plugin_version: ctx.state?.written_by_plugin_version ?? null,
           integrity: exists(abs(root, PATHS.integrity)) ? verifyIntegrity(root) : { ok: false, reason: 'not sealed' },
         }));
         return;
@@ -985,6 +1089,7 @@ async function main() {
           '  --waive <check_id> --path <f> --reason "..." [--days N]',
           '  --baseline-prune               retire baseline entries that now pass',
           '  --new-task "<title>"           allocate an id and create both task halves',
+          '  --begin-plan "<title>"         enter the plan phase AND allocate the task, as one write',
           '  --show                         one-line status as JSON',
         ].join('\n'), 2);
     }

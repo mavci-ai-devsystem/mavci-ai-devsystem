@@ -2,10 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "state.schema.json",
   "title": "Mavci control state",
-  "description": "CONTROL PLANE. Written only by state.mjs. Agents are denied Edit on .mavci/control/**.",
+  "description": "CONTROL PLANE. Written only by state.mjs. Agents are denied Edit on .mavci/control/**. THREE VERSION FACTS, THREE FIELDS: ci_pinned_plugin_version is the tag CI clones and moves only by an operator act (--init, doctor --sync); written_by_plugin_version is stamped by setState on every write and answers 'which version wrote this document'; plugin_version is the pre-0.1.22 field that meant all three at once and is accepted on read so already-connected projects stay valid - it is never written, and the first write migrates it.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "project_id", "phase", "next_task_id", "updated", "plugin_version"],
+  "required": ["schema_version", "project_id", "phase", "next_task_id", "updated"],
   "properties": {
     "schema_version": { "type": "integer", "const": 1 },
     "project_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,63}$" },
@@ -14,6 +14,8 @@
     "next_task_id": { "type": "integer", "minimum": 1 },
     "baseline_debt": { "type": "integer", "minimum": 0 },
     "updated": { "type": "string", "format": "date-time" },
+    "ci_pinned_plugin_version": { "type": "string", "pattern": "^[0-9]+[.][0-9]+[.][0-9]+$" },
+    "written_by_plugin_version": { "type": "string", "pattern": "^[0-9]+[.][0-9]+[.][0-9]+$" },
     "plugin_version": { "type": "string", "pattern": "^[0-9]+[.][0-9]+[.][0-9]+$" }
   }
 }

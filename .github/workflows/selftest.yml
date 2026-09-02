@@ -41,6 +41,15 @@ jobs:
       - name: Scaffold a project and verify it, using nothing but node
         run: node scripts/ci/check-escape-hatch.mjs
 
+      # The plan transition was two writes to state.json with an interruptible
+      # middle. On 2026-09-02 an external classifier landed in it: --set-phase
+      # plan committed, --new-task was denied, and gate4c sat frozen with nothing
+      # to plan against. The assertion is on the state after a FAILED SECOND HALF
+      # and on which key each version reader reads - never on the two halves
+      # separately, which are green either way.
+      - name: The plan transition is one write, and each version field has one reader
+        run: node scripts/ci/check-state-transition.mjs
+
       # Prediction 2a of the guardian design: guardian has two properties and only
       # one of them needs a model. The worklist, the enumeration and the coverage
       # arithmetic are node scripts with no model in the loop, so they belong HERE -

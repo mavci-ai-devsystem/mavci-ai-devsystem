@@ -34,7 +34,7 @@ import {
 import { abs, exists, readJson, readJsonOrNull, readTextOrNull, todayIso } from './lib/fsx.mjs';
 import {
   pluginVersion, verifyIntegrity, validateAll, expiredWaivers, expiringWaivers, projectRoot,
-  stampHookRun, lastHookRun, lastGate, MANIFEST_SCHEMA_VERSION,
+  stampHookRun, lastHookRun, lastGate, MANIFEST_SCHEMA_VERSION, setPin, ciPin,
 } from './state.mjs';
 // The queue is a directory, and retro.mjs is the one place that says what is in
 // it. doctor used to compose its own path to the same file, which is how it came
@@ -364,7 +364,17 @@ function checkVersionSkew(root, out, { sync = false } = {}) {
       + ' compared with the tag CI clones.' + '\n         This is unknown, not passing. Run /mavci-core:connect, then re-run doctor.') });
     return;
   }
-  const recorded = state.plugin_version;
+  // THE PIN, BY ITS OWN NAME. Before 0.1.22 this read `plugin_version`, a field
+  // that also meant created-by to `--init` and the skew signal here, and that in
+  // practice held whatever the last --sync wrote. `ciPin` reads the new field and
+  // falls back to the legacy one so an already-connected project still reports.
+  const recorded = ciPin(state);
+  if (!recorded) {
+    out.push({ status: WARN, text: line(WARN, 'version skew NOT CHECKED',
+      `${PATHS.state} records no CI pin, so the installed plugin cannot be compared with the tag`
+      + ' CI clones.\n         Run /mavci-core:doctor --sync, then commit .mavci/control/state.json.') });
+    return;
+  }
   if (recorded === installed) {
     out.push({ status: OK, text: line(OK, `plugin ${installed} (CI clones tag v${recorded})`) });
     return;
@@ -373,10 +383,13 @@ function checkVersionSkew(root, out, { sync = false } = {}) {
   const [rm] = recorded.split('.');
   const major = im !== rm;
   if (sync) {
-    const next = { ...state, plugin_version: installed, updated: new Date().toISOString().replace(/[.]\d{3}Z$/, 'Z') };
-    fs.writeFileSync(abs(root, PATHS.state), JSON.stringify(next, null, 2) + '\n');
-    execFileSync(process.execPath, [path.join(HERE, 'state.mjs'), '--reseal'], { cwd: root, stdio: 'ignore' });
-    out.push({ status: OK, text: line(OK, `synced plugin version ${recorded} -> ${installed}`, 'Commit .mavci/control/ so CI clones the matching tag.') });
+    // Through the sanctioned writer. This used to be a bare fs.writeFileSync
+    // followed by --reseal, so the one write that set the pin skipped schema
+    // validation and redaction and the seal then certified a document nothing
+    // had validated - while CLAUDE.md states the control plane is written only
+    // by state.mjs. setPin goes through writeControl, which validates and seals.
+    setPin(root, installed);
+    out.push({ status: OK, text: line(OK, `synced CI pin ${recorded} -> ${installed}`, 'Commit .mavci/control/ so CI clones the matching tag.') });
     return;
   }
   out.push({

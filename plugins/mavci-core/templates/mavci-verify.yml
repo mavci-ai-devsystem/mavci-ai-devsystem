@@ -53,7 +53,17 @@ jobs:
             echo "::error::.mavci/control/state.json is missing. Run /mavci-core:connect and commit .mavci/."
             exit 1
           fi
-          v=$(node -p "require('./.mavci/control/state.json').plugin_version")
+          # ci_pinned_plugin_version is the pin under its own name (0.1.22+).
+          # Before that the field was `plugin_version`, which simultaneously meant
+          # created-by to --init and the skew signal to doctor. The fallback keeps
+          # a project that has not been written since the upgrade cloning the
+          # right tag; it is not a second source, because the first setState
+          # migrates the value across.
+          v=$(node -p "const s=require('./.mavci/control/state.json'); s.ci_pinned_plugin_version || s.plugin_version || ''")
+          if [ -z "$v" ]; then
+            echo "::error::.mavci/control/state.json records no CI pin. Run /mavci-core:doctor --sync and commit .mavci/control/."
+            exit 1
+          fi
           echo "ref=v$v" >> "$GITHUB_OUTPUT"
           echo "Mavci system pinned to v$v"
 

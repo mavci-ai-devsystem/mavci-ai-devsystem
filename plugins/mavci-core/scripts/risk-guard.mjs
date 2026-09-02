@@ -768,6 +768,7 @@ function main() {
       const AGENT_OK = [...READ_ONLY, '--baseline-prune', '--new-task'];
       const PRIVILEGED = {
         '--set-phase': 'change the workflow phase, which is the gate deciding whether app code is writable at all',
+        '--begin-plan': 'enter the plan phase and allocate the task in one write, which moves the gate deciding whether app code is writable at all',
         '--reset-attempts': 'clear the retry ceiling, which is the mechanism that ends a failing loop',
         '--waive': 'grant an exception to a standards check',
         '--reseal': 're-seal the control plane, which launders any tampering that preceded it',
@@ -797,7 +798,12 @@ function main() {
         }
       } else {
         // Main session: a human is present, but these are still deliberate acts.
-        const f = privileged.find((x) => x !== '--set-phase');
+        // The two phase transitions are exempt because they ARE the workflow -
+        // /mavci-core:plan and /mavci-core:verify run them on the operator's own
+        // instruction, and a confirm on every step of the normal path teaches
+        // the operator to dismiss confirms.
+        const PHASE_MOVES = ['--set-phase', '--begin-plan'];
+        const f = privileged.find((x) => !PHASE_MOVES.includes(x));
         if (f) confirm(`this will ${PRIVILEGED[f]}. Confirm you intend it.`);
       }
     }
