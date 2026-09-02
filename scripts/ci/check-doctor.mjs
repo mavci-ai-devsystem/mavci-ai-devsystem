@@ -347,6 +347,83 @@ try {
   } else {
     bad('doctor was SILENT with no marketplace clone present. An absent line reads as a pass.');
   }
+
+  /* --- 8b. uncommitted work in the marketplace clone -------------------
+   * BROKEN BUILD THIS MUST CATCH: every version through 0.1.17, in which nothing
+   * in the system ever looked at the clone's working tree. The propagation
+   * procedure runs `git checkout -B main origin/main` there, which discards
+   * uncommitted work silently, and the first symptom is CI green on a version
+   * that does not contain the change.
+   *
+   * Both directions, because this is a FAIL on a directory that is dirty for
+   * perfectly ordinary reasons on a developer machine: a check that fires on a
+   * clean clone would be turned off, and then it protects nothing (0.1.12 item 5).
+   */
+  const gitClone = (version, { dirty }) => {
+    const cfg = stageClone(version);
+    const clone = path.join(cfg, 'plugins', 'marketplaces', MARKETPLACE_NAME);
+    const g = (args) => execFileSync('git', args, { cwd: clone, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    g(['init', '-q']);
+    g(['config', 'user.email', 'selftest@example.invalid']);
+    g(['config', 'user.name', 'selftest']);
+    g(['add', '-A']);
+    g(['commit', '-q', '-m', 'clone']);
+    if (dirty) fs.writeFileSync(path.join(clone, 'RECOVERED-WORK.mjs'), 'export const x = 1;\n');
+    return cfg;
+  };
+
+  // 8b-i. the dirty clone must FAIL, name the path, and name the command that
+  //       would destroy it. "Something is uncommitted" is not a pointer.
+  {
+    const cfg = gitClone(PLUGIN_VERSION, { dirty: true });
+    const r = runDoctor(tmp, { env: { CLAUDE_CONFIG_DIR: cfg } });
+    const clone = path.join(cfg, 'plugins', 'marketplaces', MARKETPLACE_NAME);
+    const failed = /\[FAIL\] marketplace clone has 1 uncommitted change\b/.test(r.stdout);
+    const named = r.stdout.includes(clone) && r.stdout.includes('RECOVERED-WORK.mjs');
+    const warned = r.stdout.includes('git checkout -B main origin/main');
+    const recovery = /cherry-pick FETCH_HEAD/.test(r.stdout) && /never through a patch file/.test(r.stdout);
+    if (failed && named) {
+      ok('doctor FAILs on a dirty marketplace clone, naming the clone and the files');
+    } else {
+      bad('doctor did NOT fail on uncommitted work in the marketplace clone. The next propagation '
+        + 'discards it silently and the first symptom is CI green on a version missing the change.');
+    }
+    if (warned) {
+      ok('the failure names the propagation command that would destroy the work');
+    } else {
+      bad('the failure does not name `git checkout -B main origin/main`, so it reports a state '
+        + 'without saying what makes it dangerous');
+    }
+    if (recovery) {
+      ok('the failure gives the git-to-git recovery and rules out the patch round-trip');
+    } else {
+      bad('the failure gives no recovery path. A patch round-trip was tried first on 2026-09-02 '
+        + 'and failed on every hunk (encoding and renames); the fetch + cherry-pick worked untouched.');
+    }
+  }
+
+  // 8b-ii. THE FALSE-POSITIVE GUARD. A clean clone must produce no failure.
+  {
+    const cfg = gitClone(PLUGIN_VERSION, { dirty: false });
+    const r = runDoctor(tmp, { env: { CLAUDE_CONFIG_DIR: cfg } });
+    if (!/uncommitted change/.test(r.stdout) && /marketplace clone working tree is clean/.test(r.stdout)) {
+      ok('a clean marketplace clone is reported clean, with no failure');
+    } else {
+      bad('doctor reports a clean clone as dirty. A control that fires wrongly is a control that '
+        + 'gets turned off, and then it protects nothing.');
+    }
+  }
+
+  // 8b-iii. a clone that is not a git repository at all is UNKNOWN, never clean.
+  {
+    const r = runDoctor(tmp, { env: { CLAUDE_CONFIG_DIR: stageClone(PLUGIN_VERSION) } });
+    if (/\[WARN\] marketplace clone working tree UNREADABLE/.test(r.stdout)) {
+      ok('a clone git cannot read is reported unknown rather than passing');
+    } else {
+      bad('doctor treated an unreadable clone working tree as clean. A failed probe reported as a '
+        + 'pass is the one thing this file exists to prevent.');
+    }
+  }
 }
 
 /* --- 9. install scope: which record is holding the plugin up ----------

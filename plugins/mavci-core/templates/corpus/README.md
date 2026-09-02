@@ -216,9 +216,27 @@ moved:
 
 `scripts/ci/check-corpus-blind.mjs` asserts both, each against its own broken build.
 
-**What is still open: guardian's `Read` grant is the whole project tree.** Nothing
-above narrows it; they remove the instruction and the declaration, not the
-capability. An agent with unrestricted `Read` over a tree cannot be shown blind from
-inside that tree however the files are arranged, so the remaining work is scoping the
-grant itself — and narrowing an agent's read grant is the change most likely to break
-the thing it protects, so it gets its own pass with its own demonstrations.
+**That pass has now happened: guardian's `Read` grant is scoped.** The paragraph
+here used to say the grant was still the whole project tree and that narrowing it
+remained the open work. It was written before the scope landed and was left
+standing in the same change that closed it - the drift this repository treats as
+worse than no text at all, because it is what a reader consults *instead of*
+looking.
+
+What is actually built: `agent-defs/guardian.json` declares `read_scope`, rendered
+into `agents/agent-scopes.json`, and `risk-guard.mjs` enforces it on `PreToolUse`
+for `Read`, `Grep` and `Glob`. `.mavci/**`, `.claude/**`, `.git/**` and `.env*` are
+denied; the open ticket's own `worklist_path` is allowed by exact match; a search
+whose ROOT contains a denied subtree is refused rather than silently narrowed, so a
+scope decision is never disguised as an empty result. An agent with no declared
+scope, and the main session, are unaffected. `scripts/ci/check-read-scope.mjs`
+asserts guardian can still read every file each corpus trace needs, that the
+refusals carry a reason, and that the reason never discloses the corpus.
+
+**What is still open**, stated narrowly so this paragraph does not repeat the
+mistake above: the scope is enforced by a hook, and hooks fail open on timeout and
+crash (NATIVE-CAPABILITIES 4.17/4.18) - so this is a strong control against an agent
+following its instructions and a weak one against a runtime fault. And nothing
+automates a corpus RUN: staging, dispatching guardian and scoring are three operator
+steps with deterministic tooling behind each, not one command. Guardian's answers
+remain unmeasured until an operator runs it.

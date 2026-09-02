@@ -382,6 +382,44 @@ function checkDistribution(out, { network = true } = {}) {
     return;
   }
 
+
+  /* --- 0. is there uncommitted work in the clone? ---
+   * The clone is GENERATED STATE: every propagation runs
+   * `git checkout -B main origin/main` in it (ARCHITECTURE section 2 step 5), which
+   * discards a dirty working tree with no prompt, no warning and no reflog entry
+   * for the lost content. Nothing else in this system looks at it, so work
+   * written here is invisible until the moment it is destroyed - and the first
+   * symptom is CI passing on a version that does not contain the change.
+   *
+   * Observed 2026-09-02: 43 files and 2510 insertions of 0.1.18 sat uncommitted
+   * here for twenty-seven minutes. They survived only because the next fetch had
+   * not run yet.
+   *
+   * FAIL, not WARN. A dirty clone is always one of exactly two things, and both
+   * need a person: work about to be lost, or a consumer someone has edited by
+   * hand. There is no third reading in which it is fine.
+   */
+  const dirty = git(clone, ['status', '--porcelain']);
+  if (dirty === null) {
+    out.push({ status: WARN, text: line(WARN, 'marketplace clone working tree UNREADABLE',
+      `git could not report status in ${clone}. Could not check whether uncommitted work is`
+      + '\n         about to be discarded by the next propagation, so this is unknown, not clean.') });
+  } else if (dirty !== '') {
+    const files = dirty.split('\n').filter(Boolean);
+    const shown = files.slice(0, 5).map((f) => `           ${f}`).join('\n');
+    out.push({ status: FAIL, text: line(FAIL,
+      `marketplace clone has ${files.length} uncommitted change${files.length === 1 ? '' : 's'}`,
+      `${clone}\n${shown}${files.length > 5 ? `\n           ...and ${files.length - 5} more` : ''}`
+      + '\n         This directory is generated state. The next propagation runs'
+      + '\n         `git checkout -B main origin/main` here and discards all of it silently.'
+      + '\n         If this is real work, move it GIT TO GIT - never through a patch file:'
+      + `\n           git -C ${clone} add -A && git -C ${clone} commit -m wip`
+      + '\n           git -C <system-repo> fetch <clone-path> main && git -C <system-repo> cherry-pick FETCH_HEAD'
+      + '\n         then reset the clone. A patch round-trip re-encodes the diff and loses renames.'
+      + '\n         If it is not real work, `git -C <clone> reset --hard` before propagating.') });
+  } else {
+    out.push({ status: OK, text: line(OK, 'marketplace clone working tree is clean') });
+  }
   /* --- 1. is the LOADED plugin what the clone holds? --- */
   const mk = readJsonOrNull(path.join(clone, '.claude-plugin', 'marketplace.json'));
   const subtree = mk?.plugins?.[0]?.source?.replace(/^\.\//, '') ?? `plugins/${PLUGIN_ID.split('@')[0]}`;

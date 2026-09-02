@@ -131,16 +131,20 @@ from the tree, and the check is named beside it.
     5 agents      architect, builder, verifier, guardian, scribe   agents/*.md
     15 rules      RULES in scripts/rules/index.mjs                 rules/index.mjs
     13 skills     3 of them the standards packs                    skills/
-    13 scripts    state, redact, verify, gate, risk-guard,         scripts/*.mjs
+    15 scripts    state, redact, verify, gate, risk-guard,         scripts/*.mjs
                   doctor, retro, release-check, guardian-record,
-                  worklist, render, build-agents, config
+                  worklist, render, build-agents, config, and
+                  0.1.18's corpus-stage and corpus-score
     9 hooks       every one silent outside a Mavci project         hooks.json
                   (6.23). NINE, not the eight this file and
                   check-hooks-quiet's header both still said:
                   0.1.15 added guardian-record on SubagentStop.
                   Entries below that name eight are dated
                   observations and correct as history.
-    24 checks     the release suite, DERIVED from release.yml      check-pretag.mjs
+    28 checks     the release suite, DERIVED from release.yml      check-pretag.mjs
+                  TWENTY-EIGHT, not the 24 this file said: 0.1.18
+                  added four, to selftest.yml only, where no
+                  release gate ever ran them. See the 0.1.18 entry.
 
 `/mavci-core:release` exists, which is carried-forward item 8's condition met:
 the fourteen references that were reworded to name the operator may name the
@@ -883,6 +887,122 @@ unmeasured. That is carried-forward items 1 and 2 arriving through a third door:
 a forward-looking version value steering a project's CI at a rule set nobody
 chose. **The two tags are owed after the corpus run, not before it**, and this
 paragraph is the record of what is owed and why it is not overdue.
+
+### 0.1.18 — the corpus becomes measurable, and the clone stops being invisible
+
+**Cut 2026-09-02.** Three things, in the order they were found rather than the
+order they were built.
+
+**1 — the corpus can be staged, run blind, and scored by a program.** Guardian's
+answers have been the largest unproven claim in this system since Phase 2
+shipped, and the reason was never that nobody ran the corpus: it was that a
+corpus run's *result* was a model reading two JSON files and reporting agreement.
+The least-scrutinised step in the run produced the only evidence guardian's
+correctness has.
+
+`corpus-stage.mjs` (`--case`, `--list`, `--clear`) copies exactly one case into a
+project's `corpus-run/`, stripping the `.txt` suffix, refusing any write that
+escapes the stage and refusing a case with no expectation; there is no partial
+stage. `corpus-score.mjs` compares three fields only — `record.verdict`,
+`record.fail_reason`, and per-site `origin` — and exits 0/1/2 for pass / case
+failed / **could not score**. That third exit is the point: an ambiguous join, an
+id mismatch or a `sites_total` disagreement is `CannotScore`, never a pass.
+
+The cases were renamed to opaque ids (`m8f2r`, `q3v7k`, `t5w9d`) because the old
+names — `00-degenerate-pass`, `01-chatbot-cross-tenant` — **stated their own
+expected answer**, and those paths went to guardian in the worklist. A green
+result against a case called `degenerate-pass` proves nothing about guardian and
+everything about the label. Run order moved into `run_order` in the expectation,
+because an opaque id cannot carry ordering. Expectations moved out of the project
+entirely after a recorded 0.1.17 incident in which guardian grepped `scopeId` and
+hit `corpus/expected/t5w9d.json` on the line carrying the expected origin.
+
+**2 — guardian's read grant is scoped, and the paragraph saying it wasn't is
+gone.** `read_scope` is declared in `agent-defs/guardian.json`, rendered into
+`agents/agent-scopes.json`, and enforced by `risk-guard.mjs` on `PreToolUse` for
+`Read`, `Grep` and `Glob`. A search whose ROOT contains a denied subtree is
+**refused, not silently narrowed** — a scope decision disguised as an empty
+result is the same fail-quiet shape as a gate that exits 0. Unscoped agents and
+the main session are unaffected, and an unreadable scopes file refuses rather
+than falling open.
+
+`templates/corpus/README.md` still carried *"What is still open: guardian's Read
+grant is the whole project tree. Nothing above narrows it"* — written before the
+scope landed and left standing **in the same commit that closed it.** Corrected,
+and the replacement states the residual narrowly: the scope is enforced by a
+hook, and hooks fail open on timeout and crash (4.17/4.18), so it is a strong
+control against an agent following instructions and a weak one against a runtime
+fault. `check-read-scope.mjs`'s header enumerated N1-N10 while the file
+implemented an unlisted N11; documented.
+
+**3 — the release gate was narrower than the workflow behind it, again.** Found
+while verifying the recovered work, not by anything failing. The four new checks
+— `check-corpus-score`, `check-corpus-isolation`, `check-corpus-blind` and
+`check-read-scope` — were added to `selftest.yml` and to `release.yml` **never**.
+This gate derives its suite from `release.yml` alone, so all four were checks no
+release gate had ever executed, and they looked covered because CI is green on
+every push.
+
+That is 0.1.14's finding through a third door. 0.1.14 fixed *check-pretag vs
+release.yml* by deriving one from the other; it never occurred to that fix that
+`selftest.yml` is a **second list of the same kind**, and the derivation made the
+gate exactly as wide as `release.yml` and not one check wider. Every prior check
+in `selftest.yml` — all eight — is also in `release.yml`, so "selftest is a
+subset of release" was an invariant held by every file in the repository and
+written down nowhere.
+
+`selftestCoverage()` now asserts it, `SELFTEST_ONLY` is the declared escape valve
+with a reason, and stale keys in it are a failure. The two recognisers became one
+shared `NODE_STEP_RE` rather than a second copy of the same pattern.
+**Confirmed failing first**, naming all four, while every other assertion in the
+file stayed green — which is the whole reason the arm is trustworthy: the suite
+was being derived perfectly, from a file that did not mention them.
+
+**4 — `doctor` FAILs when the marketplace clone has uncommitted changes.** The
+most dangerous near-miss so far, and the first finding about **a place the system
+does not look at all.** 43 files and 2510 insertions of this release sat
+uncommitted in `~/.claude/plugins/marketplaces/mavci` — a directory whose whole
+contract is that propagation overwrites it with `git checkout -B main
+origin/main`, which discards a dirty tree with no prompt, no error, and no reflog
+entry for content never committed. The work survived because the next fetch had
+not run. Twenty-seven minutes.
+
+Every failure before this one left a trace someone could eventually read. This
+one leaves none, and its first symptom is the worst signal the system has to
+give: **CI passing on a version that does not contain the fix** — the tag cut,
+the suite derived, every check green, because the checks are real and the code is
+simply absent.
+
+`doctor` has read the clone's *version* since 0.1.5. It walked past the working
+tree every time — the evidence in hand, the question never asked, the same shape
+as `check-pretag` calling `git ls-remote` twice and misreading the answer. It now
+names the clone, the files, the command that will destroy them, and the recovery.
+FAIL, not WARN: a dirty clone is always either work about to be lost or a
+consumer someone hand-edited, and both need a person. Asserted in **both**
+directions, because a control that fires on a clean clone gets turned off.
+
+**The recovery is recorded because it is not obvious.** `git apply` on a
+PowerShell-produced patch failed on every hunk — the redirection re-encodes the
+bytes, and the diff contained renames, which a patch round-trip flattens. What
+worked with no transformation was clone to repo `fetch` plus `cherry-pick`. **Git
+to git, never through a file.** A clone is already a git remote. Verified by tree
+hash rather than by diffstat: source and cherry-pick both resolve to
+`30b0101f...` on parent `6af89de`, which is the only form of that proof that
+asserts anything about content.
+
+Full record: `docs/lessons/0.1.18-the-clone-is-generated-state.md`.
+
+**Not built, deliberately.** The stronger prevention — a hook refusing edits
+under `~/.claude/plugins/` when the source repo exists on this machine — is
+filed, not guessed at. It would run on every write on the machine, `hooks.json`
+is the surface that shipped **zero hooks** in v0.1.2 silently, and "refuse edits
+here" is not yet a decidable predicate while `git rm` inside the clone is a
+legitimate operation. Also not built: nothing automates a corpus RUN. Staging,
+dispatch and scoring are three operator steps with deterministic tooling behind
+each, so **guardian's answers remain unmeasured** and `doctor` still FAILs every
+project until a corpus result exists. This release makes that measurement
+possible; it does not perform it, and the tag it earns is still owed to 0.1.15
+and 0.1.16 first.
 
 ### Carried forward — still not built
 

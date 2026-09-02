@@ -107,6 +107,7 @@ import { SYSTEM_REPO } from '../../plugins/mavci-core/scripts/config.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const MANIFEST = path.join(ROOT, 'plugins/mavci-core/.claude-plugin/plugin.json');
 const RELEASE_YML = path.join(ROOT, '.github/workflows/release.yml');
+const SELFTEST_YML = path.join(ROOT, '.github/workflows/selftest.yml');
 const OWNER = SYSTEM_REPO.split('/')[0];
 
 /* --- what release.yml runs that this gate deliberately does not --------- */
@@ -132,9 +133,35 @@ export const EXCLUDED_STEPS = new Map([
     + 'not claim to replace it, and says so on every pass.'],
 ]);
 
+/* --- what selftest.yml runs that release.yml does not ------------------- */
+// selftest.yml is the escape-hatch proof (ARCHITECTURE section 11), so every
+// check in it is a dependency-free node script with no model in the loop -
+// exactly the shape release.yml can also run. "selftest is a subset of release"
+// held for every check in the file until 0.1.18 added four that only selftest
+// ran, and because this gate derives its suite from release.yml ALONE, a check
+// absent there is a check no release gate has ever executed. That is 0.1.14's
+// finding through a different door: two lists, one edit, and the narrower list
+// is the one guarding the tag.
+//
+// Scripts are compared by PATH, not by full command: the two workflows may
+// legitimately pass different arguments, and this arm claims only that the
+// release gate runs the same checks - not that it runs them identically.
+// Non-node steps in selftest.yml (the "command -v claude" proof, the npm-surface
+// proof) are deliberately out of scope: they assert things about the RUNNER that
+// release.yml is not trying to assert.
+//
+// Declared with a reason rather than left silent, for the reason EXCLUDED_STEPS
+// gives - an exclusion implied by absence is indistinguishable from an omission.
+export const SELFTEST_ONLY = new Map([]);
+
 // A floor, not a second list. A recogniser that silently matched nothing would
 // otherwise report "0 checks pass" in the confident voice of a gate that ran.
 const MIN_DERIVED = 8;
+
+// ONE recogniser for "this step runs a node check", shared by the release
+// derivation and the selftest-coverage arm. Two copies of a pattern is the
+// shape this repository keeps finding: they agree until one is edited.
+const NODE_STEP_RE = /^node\s+(\S+\.mjs)(?:\s+(.*))?$/;
 
 /* --- deriving it -------------------------------------------------------- */
 // Deliberately NOT a general YAML parser. It reads the one file it owns, in
@@ -183,7 +210,7 @@ export function deriveReleaseSuite(yml) {
   for (const step of steps) {
     if (EXCLUDED_STEPS.has(step.name)) { seen.add(step.name); continue; }
     for (const command of step.commands) {
-      const m = /^node\s+(\S+\.mjs)(?:\s+(.*))?$/.exec(command);
+      const m = NODE_STEP_RE.exec(command);
       if (!m) { undeclared.push({ step: step.name, command }); continue; }
       suite.push([m[1], ...(m[2] ?? '').split(/\s+/).filter(Boolean)]);
     }
@@ -191,6 +218,29 @@ export function deriveReleaseSuite(yml) {
 
   const stale = [...EXCLUDED_STEPS.keys()].filter((k) => !seen.has(k));
   return { steps, suite, undeclared, stale };
+}
+
+/**
+ * Every node check selftest.yml runs, and which of them release.yml does not.
+ * Reuses parseSteps rather than recognising the same shape a second time.
+ */
+export function selftestCoverage(releaseYml, selftestYml) {
+  const released = new Set(deriveReleaseSuite(releaseYml).suite.map(([script]) => script));
+  const scripts = [];
+  for (const step of parseSteps(selftestYml)) {
+    for (const command of step.commands) {
+      const m = NODE_STEP_RE.exec(command);
+      if (m && !scripts.includes(m[1])) scripts.push(m[1]);
+    }
+  }
+  const seen = new Set();
+  const uncovered = [];
+  for (const script of scripts) {
+    if (SELFTEST_ONLY.has(script)) { seen.add(script); continue; }
+    if (!released.has(script)) uncovered.push(script);
+  }
+  const stale = [...SELFTEST_ONLY.keys()].filter((k) => !seen.has(k));
+  return { scripts, uncovered, stale };
 }
 
 /* --- the identity that is about to push ---------------------------------- */
@@ -380,6 +430,56 @@ function selftest() {
   const ghosts = real.suite.filter(([s]) => !fs.existsSync(path.join(ROOT, s)));
   ok('every derived script exists on disk',
     ghosts.length === 0, ghosts.length ? `missing: ${ghosts.map((g) => g[0]).join(' | ')}` : '');
+
+  /* --- the second pair of lists (v0.1.18) ------------------------------
+   *
+   * BROKEN BUILD THESE MUST CATCH: 0.1.18 as first recovered, where
+   * check-corpus-score, check-corpus-isolation, check-corpus-blind and
+   * check-read-scope were added to selftest.yml and to release.yml never.
+   * Every assertion above passes against that build - the suite is derived
+   * correctly, it is just derived from a file that does not mention them - so
+   * this gate would have certified a release whose own new checks it never ran.
+   */
+  const realSelftest = fs.readFileSync(SELFTEST_YML, 'utf8');
+
+  // 8b. the real pair. This is the one that fails if they diverge again.
+  {
+    const cov = selftestCoverage(realYml, realSelftest);
+    ok('every check selftest.yml runs is also run by release.yml',
+      cov.uncovered.length === 0,
+      cov.uncovered.length ? `release.yml never runs: ${cov.uncovered.join(' | ')}` : '');
+    // The floor. A recogniser matching nothing reports perfect coverage of
+    // nothing, in the confident voice of an arm that ran.
+    ok('selftest.yml yields a non-empty set of node checks',
+      cov.scripts.length >= 8, `found ${cov.scripts.length}`);
+  }
+
+  // 8c. negative control: a selftest-only check is NAMED, not counted.
+  //     "something is uncovered" is not a pointer - 0.1.13's rule.
+  {
+    const grown = realSelftest.replace(
+      '      - name: Prove Claude Code is absent',
+      '      - name: A check release.yml has never heard of\n'
+      + '        run: node scripts/ci/check-only-here.mjs\n\n'
+      + '      - name: Prove Claude Code is absent');
+    const cov = selftestCoverage(realYml, grown);
+    ok('a selftest-only check is reported by name',
+      cov.uncovered.includes('scripts/ci/check-only-here.mjs'),
+      `uncovered: ${cov.uncovered.join(' | ') || '(none)'}`);
+  }
+
+  // 8d. negative control: a declared exclusion whose step is gone is stale,
+  //     for the same reason EXCLUDED_STEPS carries that arm.
+  {
+    SELFTEST_ONLY.set('scripts/ci/check-never-existed.mjs', 'negative control');
+    try {
+      const cov = selftestCoverage(realYml, realSelftest);
+      ok('a declared selftest-only exclusion with no matching step is stale',
+        cov.stale.includes('scripts/ci/check-never-existed.mjs'));
+    } finally {
+      SELFTEST_ONLY.delete('scripts/ci/check-never-existed.mjs');
+    }
+  }
 
   /* --- the identity arm (v0.1.17) --------------------------------------
    *
@@ -653,11 +753,14 @@ function main() {
   // deliberately does not push.
 
   let derived;
+  let coverage;
   try {
-    derived = deriveReleaseSuite(fs.readFileSync(RELEASE_YML, 'utf8'));
+    const releaseYml = fs.readFileSync(RELEASE_YML, 'utf8');
+    derived = deriveReleaseSuite(releaseYml);
+    coverage = selftestCoverage(releaseYml, fs.readFileSync(SELFTEST_YML, 'utf8'));
   } catch (err) {
-    console.error(`check-pretag: could not read ${path.relative(ROOT, RELEASE_YML)}: ${err.message}`);
-    console.error('The suite is derived from that file, so an unreadable workflow is a refusal, not an empty suite.');
+    console.error(`check-pretag: could not read a workflow it derives from: ${err.message}`);
+    console.error('The suite is derived from those files, so an unreadable workflow is a refusal, not an empty suite.');
     process.exit(2);
   }
 
@@ -667,6 +770,20 @@ function main() {
       + '\n    Either it is a node <script>.mjs check (and is then run here automatically), or it\n'
       + '    belongs in EXCLUDED_STEPS with the reason. An exclusion implied by absence is\n'
       + '    indistinguishable from an omission - that is the defect this arm exists to stop.');
+  }
+
+  if (coverage.uncovered.length) {
+    failures.push('selftest.yml runs checks release.yml does not, so this gate never runs them:\n'
+      + coverage.uncovered.map((c) => `      ${c}`).join('\n')
+      + '\n    This suite is derived from release.yml ALONE, so a check absent there is a check no\n'
+      + '    release gate has ever executed - and it looks covered, because CI is green on push.\n'
+      + '    Add it to release.yml, or declare it in SELFTEST_ONLY with the reason.');
+  }
+
+  if (coverage.stale.length) {
+    failures.push('SELFTEST_ONLY names checks selftest.yml no longer runs:\n'
+      + coverage.stale.map((c) => `      ${c}`).join('\n')
+      + '\n    A stale exemption outlives the check it excused and silently excuses its replacement.');
   }
 
   if (derived.stale.length) {

@@ -76,6 +76,23 @@ deliberate: a lesson edited to fit its new home stops being evidence.
                                       evidence of a condition that was never
                                       tampering.
 
+    0.1.18-the-clone-is-generated-state.md
+                                      NO ORIGIN PROJECT. plugin 0.1.17,
+                                      2026-09-02. 43 files and 2510 insertions
+                                      of 0.1.18 found uncommitted in
+                                      ~/.claude/plugins/marketplaces/mavci, a
+                                      directory every propagation overwrites
+                                      with `git checkout -B main origin/main`.
+                                      Recovered intact with 27 minutes to spare.
+                                      The first finding about a place the system
+                                      does not look at all: doctor has read the
+                                      clone's VERSION since 0.1.5 and walked
+                                      past its working tree every time. Also
+                                      records the recovery - git to git, never
+                                      through a patch file - and why the
+                                      PowerShell patch round-trip failed on
+                                      every hunk.
+
 ## The exception to "copied from its origin"
 
 `pending-system-change-0.1.15.md` was **authored here**, not copied. It has no

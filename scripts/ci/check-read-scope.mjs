@@ -56,6 +56,10 @@
  *   N10     no refusal reason discloses the corpus. The reasons are the one text
  *           guardian can make the system emit at will, so a word in them is a
  *           disclosure channel that no amount of care in the prompt closes.
+ *   N11     an allowed read is SILENT. The scope block returns before the
+ *           repeating notices, so a read guardian is permitted to make emits
+ *           nothing - otherwise every allowed read narrates itself into the
+ *           trace the corpus is trying to read cleanly.
  *
  * Every assertion here is on the DECISION AND THE REASON TEXT. A check on the
  * decision alone passes against a guard that refuses with an empty string, and this
