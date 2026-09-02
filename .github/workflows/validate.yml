@@ -115,6 +115,17 @@ jobs:
       - name: Corpus writer computes the result it records
         run: node scripts/ci/check-corpus-writer.mjs
 
+      # The version key was not enough, and the gap is not hypothetical: q3v7k's
+      # fixture was rewritten mid-0.1.18, so a result recorded before that edit still
+      # equalled the running version and was current evidence about a library it had
+      # never run against. The fingerprint is measured from the files; this asserts
+      # that it moves for a case edit, an EXPECTATION edit and a rename, that it does
+      # NOT move for line endings alone, and - the half that stops it being a recorded
+      # field nothing reads - that doctor FAILs on a mismatch and on an absence, in
+      # words that tell those two states apart.
+      - name: The corpus result names the library it graded, and doctor reads it
+        run: node scripts/ci/check-corpus-fingerprint.mjs
+
 
       # scribe.json promises this check by name, which under this repo's own rule is
       # a debt until it exists. Two things beyond existence: a citation that resolves

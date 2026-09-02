@@ -9,6 +9,14 @@ An absent corpus result is a `doctor` **FAIL**, not a warning, keyed on the
 **plugin version** — a result recorded against 0.1.14 says nothing about 0.1.16's
 guardian, whose worklist, feeding rule and definition may all differ.
 
+It is keyed on the **case library** as well, and the version alone was not enough.
+A version is a declared string that moves when someone decides to move it, and this
+library gets edited inside a version: `q3v7k`'s fixture was rewritten mid-0.1.18,
+below, under an unchanged version number. A result recorded before that edit still
+equalled the running version, so it would have read as current evidence about a
+library it had never been run against. `library_fingerprint` is measured from the
+files themselves — see "The fingerprint" below.
+
 ---
 
 ## The limit of this corpus, stated first because it is the important part
@@ -289,15 +297,55 @@ across every case in ONE invocation:
         --run t5w9d=<worklist-id>
 
 **That command computes the result; it does not accept one.** It re-runs the scorer
-over each case's record, derives `result` from what the scorer returns, and stamps
-`recorded_for` from the running plugin - `--result` and `--recorded-for` are refused
-outright rather than ignored. Every case in the library must appear in the one
+over each case's record, derives `result` from what the scorer returns, stamps
+`recorded_for` from the running plugin and `library_fingerprint` from the files on
+disk - `--result`, `--recorded-for` and `--library-fingerprint` are refused outright
+rather than ignored. Every case in the library must appear in the one
 invocation: a subset is the cheapest green corpus there is, and `cases_total` would
 still read plausibly beside a `doctor` line that only prints it. It is operator-only,
 classified privileged in `risk-guard.mjs` beside `--set-phase`.
 
 `scripts/ci/check-corpus-writer.mjs` demonstrates each of those refusals failing
 against the broken build it names.
+
+## The fingerprint, and the half of it that reads
+
+`library_fingerprint` is a sha256 over **every file under `cases/` and every file under
+`expected/`**, paths hashed with contents, line endings normalised. `doctor` recomputes
+it from the installed library on every run and FAILs when it disagrees with the recorded
+one.
+
+Four decisions in it, each of which is a way to get it wrong:
+
+- **Both halves are hashed.** The cases are what guardian reads; the expectations are
+  what "correct" means. Editing an expectation changes the pass criterion as completely
+  as editing a fixture, and it is the move that turns a failing case green without
+  touching one line guardian will ever see. A fingerprint over `cases/` alone would be
+  blind to exactly the edit most worth catching.
+- **Paths are hashed with the content**, so adding, removing or renaming a case moves it
+  even when no file's bytes differ.
+- **Line endings are normalised**, which is a deliberate loss of sensitivity. A raw-byte
+  hash changes on every CRLF checkout, so `doctor` would FAIL a correctly recorded result
+  for a reason that has nothing to do with the corpus - and the cheapest relief for a
+  check that cries wolf is switching it off.
+- **`README.md` is excluded.** This file is prose about the corpus, not an input to a run.
+  A fingerprint that moved when the documentation was edited would be re-recorded so often
+  it would stop meaning anything.
+
+THE READER IS THE POINT, and it was built in the same change as the field. A recorded
+value that nothing acts on is not a weaker version of this - it is its own anti-pattern:
+it looks like evidence in the file, changes no outcome, and the next reader assumes
+something checked it. `doctor` tells three states apart and all three are FAIL, because
+the remedies differ: **absent** (recorded before the field existed - it may well have
+graded this exact library, and nothing can now say so), **mismatched** (it graded a
+different library, and which one is knowable from neither end), and **uncomputable** (no
+library on disk to hash, so the result names evidence that is not here).
+
+`scripts/ci/check-corpus-fingerprint.mjs` demonstrates each assertion failing against the
+broken build it names: a names-only digest for the case edit, a cases-only digest for the
+expectation edit, a content-only digest for the rename, a raw-byte digest for the line
+endings, `doctor` with each branch disabled for the two reader cases, and the refusal list
+without the flag for the writer.
 
 ## How a run is scored
 

@@ -5,7 +5,7 @@
   "description": "The outcome of running the guardian acceptance corpus against one plugin version. Written only by `state.mjs --record-corpus`, which computes `result` by running corpus-score.mjs over every case in the library and stamps `recorded_for` from the running plugin. Swept by state.schema_valid so a malformed record is caught by something that is not the writer - the same reasoning that put hook-run, unverified and the guardian records into that sweep, and it matters here because this file is the only thing standing between a doctor FAIL and a green tick.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "recorded_for", "result", "cases_total", "run_at", "scored_by", "cases"],
+  "required": ["schema_version", "recorded_for", "library_fingerprint", "result", "cases_total", "run_at", "scored_by", "cases"],
   "properties": {
     "schema_version": { "type": "integer", "const": 1 },
     "project_id": { "type": ["string", "null"] },
@@ -14,6 +14,11 @@
       "minLength": 1,
       "pattern": "^[0-9]+[.][0-9]+[.][0-9]+$",
       "description": "The plugin version this result is evidence about. doctor compares it for EQUALITY with the running version - newer is as wrong as older, because it is evidence about a different component. Stamped by the writer from pluginVersion(); never supplied by a caller."
+    },
+    "library_fingerprint": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "A sha256 over every file in the case library AND every expectation, paths included, line endings normalised. Measured by the writer from the files on disk; never supplied. It covers what recorded_for cannot: the library is edited INSIDE a version - q3v7k's fixture was rewritten mid-0.1.18 - and a version-keyed result then reads as current evidence about a library it never graded. REQUIRED, so a result written before this field existed is rejected here rather than read as though it had one: 'no fingerprint' and 'a fingerprint that does not match' are different facts, and neither is a pass."
     },
     "result": {
       "type": "string",

@@ -656,7 +656,13 @@ export function validateAll(root) {
  *   1. `recorded_for` is stamped from `pluginVersion()` and can never be supplied.
  *      An argument-settable version key is worse than no key at all: `doctor`
  *      compares it for EQUALITY with the running version, so one flag would let a
- *      result from any tree satisfy any release.
+ *      result from any tree satisfy any release. `library_fingerprint` is measured
+ *      here for the same reason and covers what the version cannot: the version is a
+ *      DECLARED string that moves when someone decides to move it, and the library
+ *      gets edited inside a version - q3v7k's fixture was rewritten mid-0.1.18 - so
+ *      a version-keyed result can be current evidence about a library it never saw.
+ *      A caller-supplied fingerprint would be worse than a caller-supplied version:
+ *      it would let a result name a library it never ran against.
  *   2. EVERY case in the library must be scored in one invocation. Recording a
  *      subset is the cheapest possible green corpus - drop the case that fails and
  *      the remaining ones all pass - and `cases_total` would still look plausible
@@ -675,7 +681,7 @@ export function validateAll(root) {
  * @param {Array<{caseId: string, worklistId: string}>} runs
  */
 export async function recordCorpus(root, runs) {
-  const { listCases, EXPECTATIONS } = await import('./corpus-stage.mjs');
+  const { listCases, EXPECTATIONS, libraryFingerprint } = await import('./corpus-stage.mjs');
   const { scoreCase, CannotScore } = await import('./corpus-score.mjs');
 
   const library = listCases();
@@ -753,11 +759,24 @@ export async function recordCorpus(root, runs) {
     });
   }
 
+  // Refusal 1 covers the LIBRARY as well as the version, and for a reason the
+  // version cannot cover. `recorded_for` catches a result carried across a release;
+  // it cannot catch the library being edited INSIDE one, which is what happened to
+  // q3v7k's fixture mid-0.1.18. So the fingerprint is measured here, from the files
+  // on disk at the moment of recording, and is as uncomputable by the caller as the
+  // result and the version are.
+  const fingerprint = libraryFingerprint();
+  if (!fingerprint) {
+    throw new Error('the case library produced no fingerprint, so there is nothing to tie this '
+      + 'result to. A result that cannot name the library it graded is not evidence about one.');
+  }
+
   const doc = {
     schema_version: 1,
     project_id: manifest?.project_id ?? null,
     // Refusal 1: stamped here, never read from an argument.
     recorded_for: pluginVersion(),
+    library_fingerprint: fingerprint,
     // Derived from the scorer, never from the caller.
     result: cases.every((c) => c.ok) ? 'pass' : 'fail',
     cases_total: cases.length,
@@ -854,14 +873,18 @@ async function main() {
         // silently IGNORED is worse than one that is refused: the operator would
         // read the record afterwards and see the version they asked for, because it
         // happened to match, and never learn the flag did nothing.
-        const asserted = ['--result', '--recorded-for', '--version', '--plugin-version', '--pass']
+        const asserted = ['--result', '--recorded-for', '--version', '--plugin-version', '--pass',
+          '--library-fingerprint', '--fingerprint']
           .filter((f) => argv.includes(f));
         if (asserted.length) {
-          die(`--record-corpus does not accept ${asserted.join(', ')}. The result and the plugin `
-            + 'version are COMPUTED here, never supplied: the version is stamped from the running '
-            + "plugin, and the result comes from running corpus-score.mjs over each case's record. "
-            + "A writer that accepted either would put the model back in the chair "
-            + "corpus-score.mjs was written to take it out of.");
+          die(`--record-corpus does not accept ${asserted.join(', ')}. The result, the plugin `
+            + 'version and the library fingerprint are COMPUTED here, never supplied: the version is '
+            + "stamped from the running plugin, the result comes from running corpus-score.mjs over "
+            + "each case's record, and the fingerprint is hashed from the case library and its "
+            + 'expectations on disk. A writer that accepted any of the three would put the model back '
+            + 'in the chair corpus-score.mjs was written to take it out of - and a supplied '
+            + 'fingerprint is the worst of them, because it would let a result name a library it '
+            + 'never ran against.');
         }
 
         const runs = [];
@@ -887,6 +910,7 @@ async function main() {
           console.log(`  ${c.ok ? 'pass' : 'FAIL'}  ${c.case_id}  ${c.worklist_id}`);
           for (const f of c.failures) console.log(`          ${f}`);
         }
+        console.log(`  library ${rec.library_fingerprint}`);
         console.log(`  -> ${PATHS.guardianCorpus}`);
         return;
       }

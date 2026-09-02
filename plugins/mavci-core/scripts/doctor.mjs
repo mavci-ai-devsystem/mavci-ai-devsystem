@@ -40,6 +40,10 @@ import {
 // it. doctor used to compose its own path to the same file, which is how it came
 // to answer "is anything queued?" by testing a name nobody had used.
 import { queuedLessons, parseFindings, PENDING_STEM } from './retro.mjs';
+// The library the corpus result claims to have graded. Imported rather than
+// re-hashed here: two implementations of one hash drift, and the half that drifts
+// is the READER - the half that reports green.
+import { libraryFingerprint } from './corpus-stage.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(HERE, '..');
@@ -156,13 +160,30 @@ function checkManifestVersion(root, out) {
  * rather than inferring health from the scripts behaving. A corpus result is the
  * same kind of artefact.
  *
- * THE KEY IS THE PLUGIN VERSION, NOT A DATE, and the distinction is the whole
- * point. A corpus passed against 0.1.14 tells you nothing about 0.1.16's guardian -
+ * THE KEY IS THE PLUGIN VERSION AND THE LIBRARY FINGERPRINT, NOT A DATE, and the
+ * distinction is the whole point. A corpus passed against 0.1.14 tells you nothing about 0.1.16's guardian -
  * the agent definition, the worklist, the rule feeding it and the prompt can all
  * have changed between them. A date-keyed record would let a recent result satisfy
  * a version it never examined. `recorded_for` must EQUAL the running plugin
  * version; newer is as wrong as older, because it is evidence about a different
  * component.
+ *
+ * AND THE VERSION IS NOT SUFFICIENT, which is why the fingerprint is read here. A
+ * version is a declared string that moves when someone decides to move it. The corpus
+ * library is edited INSIDE a version: on 0.1.18, guardian showed q3v7k's FIXTURE was
+ * wrong and `lib/auth.ts` was rewritten under an unchanged version number. A result
+ * recorded before that edit still satisfies the equality above, and would be reported
+ * as current evidence about a library it had never run against. `library_fingerprint`
+ * is measured from the files on disk, so it moves when the graded inputs move and
+ * cannot be held still by anyone's decision.
+ *
+ * THREE STATES, TOLD APART, because collapsing them is finding 17's defect one level
+ * out: an ABSENT fingerprint (recorded before the field existed - it may well have
+ * graded this exact library, and nothing here can say so), a MISMATCHED one (it graded
+ * a different library, and which one is knowable from neither end), and an
+ * UNCOMPUTABLE one (no library on disk to hash, so the result names evidence that is
+ * not here). All three are FAIL and each says which it is, because the remedies
+ * differ: re-run, re-run, reinstall.
  */
 function checkGuardianCorpus(root, out) {
   const running = pluginVersion();
@@ -187,6 +208,42 @@ function checkGuardianCorpus(root, out) {
       + 'older or newer. The operator re-runs the corpus against this version.') });
     return;
   }
+  // Recomputed from the installed library on every run. Reading the recorded value back
+  // and comparing it with itself would be the 0.1.10 defect exactly: doctor comparing
+  // the running plugin against its own copy of itself and reporting agreement.
+  const fingerprint = libraryFingerprint();
+  if (!fingerprint) {
+    out.push({ status: FAIL, text: line(FAIL,
+      'the guardian corpus case library is missing or empty, so the result is tied to nothing',
+      `There is a result for plugin ${running} and nothing on disk for it to be a result ABOUT.\n`
+      + '         The cases and expectations ship with the plugin, so an empty library means the\n'
+      + '         installed tree is incomplete. This is unknown, not passing. Reinstall the plugin,\n'
+      + '         then re-run the corpus.') });
+    return;
+  }
+  if (!rec.library_fingerprint) {
+    out.push({ status: FAIL, text: line(FAIL,
+      'the guardian corpus result names no case library (no library_fingerprint)',
+      'It was recorded before the result carried a fingerprint, so which cases and which\n'
+      + '         expectations it graded cannot be established from it. That is a DIFFERENT state from\n'
+      + '         a fingerprint that disagrees, and it is not a milder one: an unfingerprinted result\n'
+      + '         may have graded this exact library, and nothing here can say that it did.\n'
+      + '         The operator re-runs the corpus against this version.') });
+    return;
+  }
+  if (rec.library_fingerprint !== fingerprint) {
+    out.push({ status: FAIL, text: line(FAIL,
+      'the guardian corpus result graded a DIFFERENT case library than the one installed',
+      `recorded: ${rec.library_fingerprint}\n`
+      + `         on disk:  ${fingerprint}\n`
+      + '         The version matches, so the library was edited inside a version - a fixture or an\n'
+      + '         expectation changed after the result was recorded. An expectation edit is the one\n'
+      + '         worth naming: it changes what "correct" means without touching a line guardian\n'
+      + '         ever reads. A result is evidence about the library it ran against and no other.\n'
+      + '         The operator re-runs the corpus.') });
+    return;
+  }
+
   if (rec.result !== 'pass') {
     out.push({ status: FAIL, text: line(FAIL,
       `guardian corpus for plugin ${running} did not pass (result: ${rec.result})`,
@@ -195,7 +252,8 @@ function checkGuardianCorpus(root, out) {
     return;
   }
   out.push({ status: OK, text: line(OK, `guardian corpus passed for plugin ${running}`,
-    `${rec.cases_total ?? '?'} case(s), recorded ${rec.run_at ?? 'at an unstated time'}`) });
+    `${rec.cases_total ?? '?'} case(s), recorded ${rec.run_at ?? 'at an unstated time'}\n`
+    + `         against case library ${fingerprint}`) });
 }
 
 /**

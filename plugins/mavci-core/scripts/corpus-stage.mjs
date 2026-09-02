@@ -49,6 +49,7 @@
  * exit 0 = staged   exit 2 = could not stage (never a silent partial stage)
  */
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -162,6 +163,71 @@ export function stageCase(root, caseId) {
   walk(src, '');
   if (!staged.length) cannot(`case "${caseId}" contains no *${SUFFIX} sources`);
   return staged.sort();
+}
+
+/* ------------------------------------------------------------ fingerprint */
+
+/**
+ * A content fingerprint over the whole case library AND its expectations.
+ *
+ * WHY A VERSION IS NOT ENOUGH, which is the only reason this exists. `doctor`
+ * keys a corpus result on `recorded_for` equalling the running plugin version,
+ * and that catches a result carried across a release. It cannot catch the case
+ * that actually happens: the library is EDITED INSIDE A VERSION. That is not
+ * hypothetical - `q3v7k`'s `lib/auth.ts` was rewritten mid-0.1.18 after guardian
+ * showed the fixture, not the expectation, was wrong. The version string did not
+ * move, so a result recorded before that edit read as current evidence about a
+ * library it had never seen. A version is a DECLARED value that changes when
+ * someone decides to change it; this is a MEASURED one that changes when the
+ * graded inputs change, and the two fail in different directions.
+ *
+ * BOTH HALVES ARE IN THE HASH, and leaving either out is the obvious mistake.
+ * The cases are what guardian reads; the expectations are what "correct" means.
+ * Editing an expectation changes the pass criterion just as completely as editing
+ * a fixture - it is the move that turns a failing case green without touching a
+ * line guardian will ever see - so a fingerprint over `cases/` alone would be
+ * blind to exactly the edit most worth catching.
+ *
+ * LINE ENDINGS ARE NORMALISED, and that is a deliberate loss of sensitivity. The
+ * sources are checked out through git on Windows and Linux alike; a raw byte hash
+ * changes on every CRLF checkout, so `doctor` would FAIL on a correctly recorded
+ * result for a reason that has nothing to do with the corpus, and the cheapest
+ * relief for a check that cries wolf is switching it off. What is given up is
+ * detection of a change that is ONLY line endings, which changes neither what
+ * guardian reads nor what is expected of it.
+ *
+ * PATHS ARE HASHED WITH THE CONTENT, so adding, removing or renaming a case moves
+ * the fingerprint even when no file's content differs. `README.md` is excluded: it
+ * is prose about the corpus, not an input to a run, and a fingerprint that moves
+ * when the documentation is edited would be re-recorded so often it would stop
+ * meaning anything.
+ *
+ * @returns {string|null} `sha256:<hex>`, or null when there is nothing to hash -
+ *   which is not a fingerprint of an empty library, it is the absence of one, and
+ *   every caller must treat it as "could not establish" rather than as a value.
+ */
+export function libraryFingerprint() {
+  const parts = [];
+
+  const collect = (dir, prefix, filter) => {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const full = path.join(dir, entry.name);
+      const rel = path.posix.join(prefix, entry.name);
+      if (entry.isDirectory()) { collect(full, rel, filter); continue; }
+      if (filter && !filter(entry.name)) continue;
+      const text = fs.readFileSync(full, 'utf8').replace(/\r\n/g, '\n');
+      const digest = crypto.createHash('sha256').update(text, 'utf8').digest('hex');
+      parts.push(`${rel}::${digest}`);
+    }
+  };
+
+  collect(CASE_LIBRARY, 'cases', null);
+  collect(EXPECTATIONS, 'expected', (name) => name.endsWith('.json'));
+
+  if (!parts.length) return null;
+  parts.sort();
+  return `sha256:${crypto.createHash('sha256').update(parts.join('\n'), 'utf8').digest('hex')}`;
 }
 
 /* -------------------------------------------------------------------- CLI */

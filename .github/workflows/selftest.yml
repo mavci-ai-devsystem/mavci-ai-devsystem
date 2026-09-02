@@ -99,6 +99,13 @@ jobs:
       - name: Corpus writer computes the result it records
         run: node scripts/ci/check-corpus-writer.mjs
 
+      # The same reasoning one field further in: the result names the LIBRARY it
+      # graded, because the version alone cannot see a fixture edited inside a
+      # version. Here for the escape-hatch reason the rest of the corpus family is
+      # here - it hashes files and spawns doctor, and neither needs Claude Code.
+      - name: The corpus result names the library it graded, and doctor reads it
+        run: node scripts/ci/check-corpus-fingerprint.mjs
+
       # The corpus's isolation, which is the property the whole thing rests on and the
       # one that failed first. Through 0.1.17 the expectations sat inside the project,
       # filed as a known compromise - "out of the way, not out of reach" - and guardian
