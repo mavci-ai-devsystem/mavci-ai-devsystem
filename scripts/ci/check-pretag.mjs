@@ -51,16 +51,63 @@
  * and — the half that makes drift impossible rather than merely unlikely — a
  * step this file can neither run nor name in EXCLUDED_STEPS is a FAILURE. So
  * release.yml cannot grow a step that this gate silently skips.
+ *
+ * ---------------------------------------------------------------------------
+ * v0.1.17: THE IDENTITY THAT WILL PUSH, CHECKED AT THE MOMENT IT MATTERS.
+ *
+ * doctor has compared the active `gh` account against the system repo's owner
+ * since v0.1.13. Right check, wrong moment. It fires when someone runs doctor;
+ * the damage happens at `git push`, which consults no doctor. `gh` switches
+ * accounts globally, and against a PRIVATE repo the wrong one gets
+ * `Repository not found` - a permission error worded as absence, mentioning no
+ * account anywhere. On 2026-09-01 that message came up four times in one day
+ * and nearly had the operator recreate a repository that had never gone
+ * anywhere.
+ *
+ * This gate runs immediately before the one irreversible step, so this is where
+ * the question belongs. And it already held the answer without knowing it:
+ * `git ls-remote origin` is a live authorisation probe, made with the exact
+ * credential that is about to push. What it lacked was an explanation - the
+ * failing arm said "Check the network and re-run", which is this file's own copy
+ * of the wrong explanation doctor was fixed for.
+ *
+ * So the two are not redundant and neither is decorative. REACHABILITY IS THE
+ * GROUND TRUTH; the account comparison is what turns its silence into a sentence
+ * naming the cause. Origin answers => the pushing credential can read the repo,
+ * whatever `gh` reports, because git's credential helper need not be gh and a
+ * FAIL there would be a false positive in a release gate - the most expensive
+ * place in the system to put one (0.1.12 item 5: a guard that fires wrongly and
+ * often trains everyone to turn it off). Origin is silent => refuse, name the
+ * account, and stop BEFORE the suite: every remaining check compares this tree
+ * against a remote this machine cannot read, and each would volunteer its own
+ * wrong explanation for the same one cause.
+ *
+ * READ, NOT WRITE - and deliberately not a check. `ls-remote` proves the
+ * credential can READ the repository; it proves nothing about pushing, and a
+ * read-only token (`MAVCI_TOKEN` is exactly that shape) passes this gate and
+ * fails at the push. That gap is left open on purpose: `--cut` creates the tag
+ * LOCALLY and pushes nothing, so a credential that cannot write fails at the
+ * operator's own `git push`, immediately and in words, with the tag still local
+ * and deletable (`git tag -d <tag>`). The failure is loud and free to undo, and
+ * a control belongs where the loss is - which is the same argument that put the
+ * read probe here, applied honestly in the other direction.
  */
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+// Imported, not reimplemented. doctor owns the probe and the decision; this gate
+// owns the moment. A second copy of either would be the shape this system has
+// hit repeatedly - a value written down once, wrongly, and then propagated.
+import { ghAccountFinding, readGhAccounts } from '../../plugins/mavci-core/scripts/doctor.mjs';
+import { SYSTEM_REPO } from '../../plugins/mavci-core/scripts/config.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const MANIFEST = path.join(ROOT, 'plugins/mavci-core/.claude-plugin/plugin.json');
 const RELEASE_YML = path.join(ROOT, '.github/workflows/release.yml');
+const OWNER = SYSTEM_REPO.split('/')[0];
 
 /* --- what release.yml runs that this gate deliberately does not --------- */
 // Declared, with the reason, because an exclusion implied by absence is
@@ -146,6 +193,84 @@ export function deriveReleaseSuite(yml) {
   return { steps, suite, undeclared, stale };
 }
 
+/* --- the identity that is about to push ---------------------------------- */
+
+/**
+ * doctor's finding, re-indented for this file's failure list.
+ *
+ * The point is that the WORDING is doctor's - the remedy, the sentence
+ * explaining that "Repository not found" is a permission error and not a
+ * deletion, the caveat that only logins were compared. Two gates that disagree
+ * about what to tell the operator is the defect this system keeps finding; two
+ * gates that agree because one asked the other is the fix.
+ */
+export function reflow(text) {
+  return text.replace(/^\s*\[[^\]]+\]\s*/, '')
+    .split('\n')
+    .map((l, i) => (i === 0 ? l : '    ' + l.trim()))
+    .join('\n');
+}
+
+/**
+ * @param {{origin: string|null, accounts: object|null, owner?: string}} input
+ *        `origin` is the raw `git ls-remote origin refs/heads/main` result:
+ *        null means the command FAILED, '' means it answered and has no such
+ *        ref. That distinction is the whole check, so it is kept rather than
+ *        collapsed into a boolean by the caller.
+ * @returns {{status: 'ok'|'note'|'fail', text: string}}
+ */
+export function identityVerdict({ origin, accounts, owner = OWNER }) {
+  const finding = ghAccountFinding(accounts, owner);
+  const active = accounts?.active ?? null;
+
+  if (origin !== null) {
+    // Origin answered. Whatever gh reports, the credential that will push can
+    // read a private repository - which is the only thing being asked here.
+    if (active === owner) {
+      return { status: 'ok',
+        text: `origin answered and the active gh account is ${owner}, which owns ${SYSTEM_REPO}.` };
+    }
+    // NOT a failure, deliberately. git's credential helper need not be gh, so a
+    // login mismatch is not evidence of anything once origin has answered - and
+    // a release gate is the worst place in the system to put a false positive.
+    return { status: 'note',
+      text: `origin answered, so the credential that will push can read ${SYSTEM_REPO} - but gh `
+        + `reports ${active ? `"${active}"` : 'no active account'}, not ${owner}.\n`
+        + '    Reported, not failed: git need not use the gh credential helper, and origin has\n'
+        + '    already answered the question a login comparison could only estimate. doctor\n'
+        + '    reports the same mismatch in full, with the remedy - it is not repeated here,\n'
+        + '    because a remedy printed on a passing run is a remedy for nothing.' };
+  }
+
+  // Origin did not answer. From here the gate is blind, and the only question
+  // worth answering is WHICH of the two causes it is.
+  const stop = '\n    No tag is worth cutting against a remote this machine cannot read: the push would\n'
+    + '    fail, or "Repository not found" would come back and read as the repository being gone.';
+
+  if (accounts && active !== owner) {
+    return { status: 'fail',
+      text: 'git could not read origin, and the active gh account is why:\n'
+        + `    ${reflow(finding.text)}` + stop };
+  }
+
+  if (accounts) {
+    // The account is right, so do NOT accuse it. Name both candidates and
+    // assert neither: the defect this check exists for is a message that
+    // explained one cause confidently and wrongly.
+    return { status: 'fail',
+      text: 'git could not read origin.\n'
+        + `    The active gh account IS ${owner}, so this is not the mismatch doctor checks for. It\n`
+        + '    is the network, or a git credential helper holding a different identity than gh\n'
+        + '    does - which this gate cannot tell apart and does not guess between.\n'
+        + '    Check by hand: git ls-remote origin refs/heads/main' + stop };
+  }
+
+  return { status: 'fail',
+    text: 'git could not read origin, and gh could not be read either, so the account can be\n'
+      + '    neither ruled in nor ruled out:\n'
+      + `    ${reflow(finding.text)}` + stop };
+}
+
 /* --- the self-test ------------------------------------------------------ */
 // v0.1.13 recorded the rule this obeys: a component that reports on others
 // needs a test that EXERCISES it, not only checks that construct it. This gate
@@ -155,7 +280,9 @@ export function deriveReleaseSuite(yml) {
 
 function selftest() {
   const failed = [];
+  let ran = 0;
   const ok = (name, cond, detail = '') => {
+    ran += 1;
     if (cond) { console.log(`  ok    ${name}`); return; }
     failed.push(`${name}${detail ? `\n        ${detail}` : ''}`);
     console.log(`  FAIL  ${name}`);
@@ -254,13 +381,129 @@ function selftest() {
   ok('every derived script exists on disk',
     ghosts.length === 0, ghosts.length ? `missing: ${ghosts.map((g) => g[0]).join(' | ')}` : '');
 
+  /* --- the identity arm (v0.1.17) --------------------------------------
+   *
+   * BROKEN BUILD THESE MUST CATCH: every version through 0.1.16, where an
+   * unreachable origin was reported as "could not reach origin to check whether
+   * the tag already exists ... Check the network and re-run" - a confident wrong
+   * explanation for a wrong `gh` account, at the one moment nobody was looking.
+   *
+   * Asserted on the DECISION, which is a pure function of two inputs, and then
+   * on the wiring end to end - because a correct decision function that nothing
+   * calls is the shape this repository has now found eleven times.
+   */
+  const OTHER = 'globalmvpllc-oss';           // the account that was actually active
+  const REF = 'abc1234\trefs/heads/main';     // what a reachable origin answers
+  const mine = { active: OWNER, logins: [OWNER, OTHER] };
+  const theirs = { active: OTHER, logins: [OWNER, OTHER] };
+
+  // 9. the healthy case.
+  {
+    const v = identityVerdict({ origin: REF, accounts: mine });
+    ok('origin answering with the owner active reads as ok',
+      v.status === 'ok' && v.text.includes(OWNER), `got ${v.status}: ${v.text}`);
+  }
+
+  // 10. THE FALSE-POSITIVE GUARD, and the reason this is not doctor's check
+  //     moved. git's credential helper need not be gh, so once origin has
+  //     ANSWERED, a login mismatch is not evidence of anything. A release gate
+  //     is the most expensive place in this system to refuse wrongly.
+  {
+    const v = identityVerdict({ origin: REF, accounts: theirs });
+    ok('a login mismatch does NOT fail the gate once origin has answered',
+      v.status === 'note' && v.text.includes(OTHER),
+      `got ${v.status}. A fail here refuses releases on every machine whose git credential `
+      + 'helper is not gh - and a guard that fires wrongly is a guard that gets turned off.');
+  }
+
+  // 11. the observed case: origin silent, wrong account active.
+  const blind = identityVerdict({ origin: null, accounts: theirs });
+  ok('an unreachable origin with the wrong account FAILS and names the account',
+    blind.status === 'fail' && blind.text.includes(OTHER) && blind.text.includes(OWNER)
+      && blind.text.includes(`gh auth switch --user ${OWNER}`),
+    `got ${blind.status}: ${blind.text.split('\n')[0]}`);
+
+  ok('...and explains that "Repository not found" is a permission error, not a deletion',
+    /Repository not found/.test(blind.text),
+    'without that sentence the operator reads the 404 and concludes the repo is gone, which '
+    + 'is what nearly happened on 2026-09-01.');
+
+  ok('...and does not offer the network as the explanation, which is what it used to say',
+    !/network/i.test(blind.text), blind.text);
+
+  // 12. origin silent, but the account IS the owner. Do not accuse it. The
+  //     defect being fixed is a message that explained one cause confidently
+  //     and wrongly; inverting which cause it names is not a fix.
+  {
+    const v = identityVerdict({ origin: null, accounts: mine });
+    ok('an unreachable origin with the RIGHT account names both causes and accuses neither',
+      v.status === 'fail' && /network/i.test(v.text) && /credential helper/.test(v.text)
+        && !v.text.includes('gh auth switch'),
+      `got ${v.status}: ${v.text.split('\n')[0]}`);
+  }
+
+  // 13. gh unreadable. Invariant 5: could-not-check is never a pass - and here
+  //     it is not even a note, because origin is silent and the gate is blind.
+  {
+    const v = identityVerdict({ origin: null, accounts: null });
+    ok('an unreachable origin with an unreadable gh fails and says the account is unknown',
+      v.status === 'fail' && /gh auth status/.test(v.text),
+      `got ${v.status}: ${v.text.split('\n')[0]}`);
+  }
+
+  // 14. THE WORDING IS DOCTOR'S, NOT A COPY OF IT. Re-type the remedy here and
+  //     the two gates start telling the operator different things about the
+  //     same machine, which is this system's oldest defect shape.
+  ok('the failure renders the doctor finding rather than a second copy of it',
+    blind.text.includes(reflow(ghAccountFinding(theirs, OWNER).text)),
+    'the text no longer contains the rendered doctor finding, so the two can now disagree.');
+
+  // 15. WIRING, END TO END, and the assertion is that the gate STOPPED - not
+  //     merely that it failed. github.com is rewritten to a closed port, so
+  //     ls-remote fails offline and instantly; MAVCI_PRETAG_NO_SUITE marks the
+  //     line this run must never reach.
+  {
+    const cfgdir = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-pretag-'));
+    const cfg = path.join(cfgdir, 'gitconfig');
+    fs.writeFileSync(cfg, '[url "http://127.0.0.1:1/"]\n\tinsteadOf = https://github.com/\n');
+    const authorised = `v${JSON.parse(fs.readFileSync(MANIFEST, 'utf8')).version}`;
+    let out = '';
+    let status = 0;
+    try {
+      execFileSync(process.execPath, [path.join(ROOT, 'scripts/ci/check-pretag.mjs'), authorised], {
+        cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120000,
+        env: {
+          ...process.env,
+          GIT_CONFIG_GLOBAL: cfg,
+          GIT_TERMINAL_PROMPT: '0',
+          MAVCI_PRETAG_NO_SUITE: '1',
+        },
+      });
+    } catch (err) {
+      status = err.status ?? -1;
+      out = String(err.stderr ?? '') + String(err.stdout ?? '');
+    }
+    fs.rmSync(cfgdir, { recursive: true, force: true });
+
+    ok('the gate itself refuses when origin cannot be read, and stops before the suite',
+      status === 2 && /could not read origin/.test(out) && /SKIPPED/.test(out)
+        && !/MAVCI_PRETAG_NO_SUITE=1/.test(out),
+      `exit ${status}. ${/MAVCI_PRETAG_NO_SUITE=1/.test(out)
+        ? 'The run reached the release suite, so the identity arm did not stop it: the decision '
+          + 'function is correct and main() carries on regardless of it.'
+        : out.split('\n').slice(0, 6).join(' | ')}`);
+  }
+
   if (failed.length) {
     console.error(`\ncheck-pretag --selftest FAILED (${failed.length}):\n`);
     for (const f of failed) console.error('  - ' + f + '\n');
     process.exit(2);
   }
-  console.log(`\ncheck-pretag --selftest: 9 assertions pass; `
-    + `the suite is derived from release.yml and ${EXCLUDED_STEPS.size} exclusions are declared.`);
+  // Counted, not written down. A hardcoded total is a second list of the same
+  // thing, which is the defect this whole file was rewritten for in v0.1.14.
+  console.log(`\ncheck-pretag --selftest: ${ran} assertions pass; the suite is derived from `
+    + `release.yml, ${EXCLUDED_STEPS.size} exclusions are declared, and the gate refuses a `
+    + 'release it cannot authenticate.');
 }
 
 /* --- the gate ----------------------------------------------------------- */
@@ -274,6 +517,15 @@ function main() {
 
   const failures = [];
   const notes = [];
+
+  /** The one refusal path. `skipped` names what this run did NOT get to. */
+  const refuse = (skipped = '') => {
+    console.error(`\npre-tag check FAILED for ${wanted}:\n`);
+    for (const f of failures) console.error('  - ' + f + '\n');
+    if (skipped) console.error(skipped + '\n');
+    console.error('No tag was created. Fix the above and re-run.');
+    process.exit(2);
+  };
 
   const git = (args, { allowFail = false } = {}) => {
     try {
@@ -314,7 +566,7 @@ function main() {
       + `    bump plugin.json to ${wanted.replace(/^v/, '')}, or cut ${authorised} instead.`);
   }
 
-  /* --- 3. the tag must not already exist --------------------------------- */
+  /* --- 3. the tag must not already exist, on this machine ---------------- */
   // Moving a tag a machine has already fetched is worse than the mistake it fixes:
   // the clone keeps the object it holds, so one tag name means two different
   // commits on two machines. check-tags.mjs records that reasoning for v0.1.3/4.
@@ -322,16 +574,9 @@ function main() {
   const localTag = git(['tag', '--list', wanted]);
   if (localTag) failures.push(`${wanted} already exists locally. A released tag is immutable - bump the version instead of re-cutting.`);
 
-  const remoteTag = git(['ls-remote', '--tags', 'origin', `refs/tags/${wanted}`], { allowFail: true });
-  if (remoteTag === null) {
-    failures.push('could not reach origin to check whether the tag already exists.\n'
-      + '    Refusing rather than cutting blind: a tag that already exists on the remote is the\n'
-      + '    one case where proceeding is unrecoverable. Check the network and re-run.');
-  } else if (remoteTag !== '') {
-    failures.push(`${wanted} already exists ON ORIGIN. It may have been fetched already; do not move it. Bump the version.`);
-  }
-
   /* --- 4. the tree being tagged must be the tree that was tested --------- */
+  // Offline, and deliberately BEFORE anything touches the network: a machine
+  // that cannot reach origin should still be told its tree is dirty.
 
   const dirty = git(['status', '--porcelain']);
   if (dirty) {
@@ -344,20 +589,65 @@ function main() {
     failures.push(`HEAD is on "${branch}", not main. Every project clones the release tag; it must be the mainline.`);
   }
 
-  const head = git(['rev-parse', 'HEAD']);
+  /* --- 5. the identity that is about to push ----------------------------- */
+  // v0.1.17, and the header says why this is the moment rather than doctor's.
+  // ONE ls-remote, read twice: it is the live authorisation probe here, and the
+  // origin/main comparison in section 6. Two calls would be two answers to one
+  // question, which is how a gate comes to explain itself two different ways.
+
   const remoteMain = git(['ls-remote', 'origin', 'refs/heads/main'], { allowFail: true });
-  if (remoteMain === null) {
-    notes.push('could not reach origin to compare HEAD with origin/main - unverified, not passing.');
-  } else {
-    const remoteSha = remoteMain.split(/\s+/)[0];
-    if (remoteSha !== head) {
-      failures.push(`HEAD (${head.slice(0, 7)}) is not origin/main (${remoteSha.slice(0, 7)}).\n`
-        + '    Push the commit BEFORE tagging it. A tag pointing at an unpushed commit resolves\n'
-        + '    for nobody, and a tag pointing at a commit origin has moved past is not the mainline.');
-    }
+  const identity = identityVerdict({ origin: remoteMain, accounts: readGhAccounts() });
+  if (identity.status === 'note') notes.push(identity.text);
+  if (identity.status === 'fail') {
+    failures.push(identity.text);
+    // Stop HERE. Everything below compares this tree against a remote that did
+    // not answer, and each arm would offer its own confident wrong explanation
+    // for the one cause already named above - which is the defect this section
+    // exists to remove, not to reproduce three lines further down.
+    refuse('  The remaining checks compare this tree against origin, and then run the release suite.\n'
+      + '  Both were SKIPPED: neither can mean anything while the remote cannot be read.');
   }
 
-  /* --- 5. everything release.yml would run, run now ---------------------- */
+  /* --- 6. and the tag must not already exist ON ORIGIN ------------------- */
+
+  const remoteTag = git(['ls-remote', '--tags', 'origin', `refs/tags/${wanted}`], { allowFail: true });
+  if (remoteTag === null) {
+    failures.push('origin answered for refs/heads/main and then failed on refs/tags.\n'
+      + '    Refusing rather than cutting blind: a tag that already exists on the remote is the one\n'
+      + '    case where proceeding is unrecoverable, and this gate no longer knows whether it does.');
+  } else if (remoteTag !== '') {
+    failures.push(`${wanted} already exists ON ORIGIN. It may have been fetched already; do not move it. Bump the version.`);
+  }
+
+  const head = git(['rev-parse', 'HEAD']);
+  const remoteSha = remoteMain.split(/\s+/)[0] ?? '';
+  if (!remoteSha) {
+    failures.push('origin answered, but has no refs/heads/main to compare HEAD against.\n'
+      + '    Every project clones the release tag off the mainline; there is no mainline here.');
+  } else if (remoteSha !== head) {
+    failures.push(`HEAD (${head.slice(0, 7)}) is not origin/main (${remoteSha.slice(0, 7)}).\n`
+      + '    Push the commit BEFORE tagging it. A tag pointing at an unpushed commit resolves\n'
+      + '    for nobody, and a tag pointing at a commit origin has moved past is not the mainline.');
+  }
+
+  /* --- 7. everything release.yml would run, run now ---------------------- */
+
+  // A run FORBIDDEN to execute the suite can certify nothing, so it refuses at
+  // the point it would have run it. --selftest's wiring probe sets this: without
+  // it, a build whose identity arm failed to stop the run would reach the suite,
+  // which runs `check-pretag.mjs --selftest`, which spawns the gate again - the
+  // negative control would be a fork bomb rather than a failed assertion. There
+  // is no value of this variable that lets a tag be cut; it can only ADD a
+  // refusal, and reaching it at all is the thing the probe asserts must not
+  // happen.
+  if (process.env.MAVCI_PRETAG_NO_SUITE === '1') {
+    failures.push('MAVCI_PRETAG_NO_SUITE=1, and this run reached the release suite it is forbidden to\n'
+      + '    run, so it can certify nothing. If you did not set that variable, something in this\n'
+      + '    environment did, and no tag should be cut from it.');
+    refuse();
+  }
+
+
   // Not a substitute for CI - it is the same suite, DERIVED from the same file,
   // moved to before the irreversible step. CI still runs it after, and `--cut`
   // deliberately does not push.
@@ -404,16 +694,12 @@ function main() {
 
   /* --- verdict ----------------------------------------------------------- */
 
-  if (failures.length) {
-    console.error(`\npre-tag check FAILED for ${wanted}:\n`);
-    for (const f of failures) console.error('  - ' + f + '\n');
-    console.error('No tag was created. Fix the above and re-run.');
-    process.exit(2);
-  }
+  if (failures.length) refuse();
 
   for (const n of notes) console.log(`  note  ${n}`);
-  console.log(`pre-tag: ${wanted} agrees with plugin.json, tag is unused, tree is clean `
-    + `and equals origin/main, and ${derived.suite.length} checks derived from release.yml pass.`);
+  console.log(`pre-tag: ${wanted} agrees with plugin.json, tag is unused, tree is clean and equals `
+    + `origin/main, the credential that will push can read ${SYSTEM_REPO}, and `
+    + `${derived.suite.length} checks derived from release.yml pass.`);
   // Said on every pass, because a gate that does not name what it did NOT check
   // is asserting more than it verified.
   console.log(`  not covered here, by declaration: ${[...EXCLUDED_STEPS.keys()].join('; ')}`);

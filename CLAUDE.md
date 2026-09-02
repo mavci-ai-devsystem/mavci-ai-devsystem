@@ -118,10 +118,46 @@ unverified (6.16).
 
 ## Current state
 
-Phase 1 built: `architect`, `builder`, `verifier`; 15 checker rules; six scripts
-(`state`, `redact`, `verify`, `gate`, `risk-guard`, `doctor`) plus `retro` and
-`build-agents`; hooks; scaffold; CI. Not yet built, per plan: `guardian`,
-`scribe`, `/release`, `/research`, five standards packs, nine further rules.
+**Rewritten 2026-09-02, at 0.1.17.** It had said guardian, scribe and
+`/release` were unbuilt for two releases after they shipped, and named a script
+list that was six of thirteen. A summary that is wrong about what exists is
+worse than no summary: it is the thing a new session reads *instead of* looking,
+so it does not merely fail to help — it actively misinforms, and it is the same
+drift the release log was called out for below. Every count here is checkable
+from the tree, and the check is named beside it.
+
+**Phase 1 and Phase 2's roster are built.**
+
+    5 agents      architect, builder, verifier, guardian, scribe   agents/*.md
+    15 rules      RULES in scripts/rules/index.mjs                 rules/index.mjs
+    13 skills     3 of them the standards packs                    skills/
+    13 scripts    state, redact, verify, gate, risk-guard,         scripts/*.mjs
+                  doctor, retro, release-check, guardian-record,
+                  worklist, render, build-agents, config
+    9 hooks       every one silent outside a Mavci project         hooks.json
+                  (6.23). NINE, not the eight this file and
+                  check-hooks-quiet's header both still said:
+                  0.1.15 added guardian-record on SubagentStop.
+                  Entries below that name eight are dated
+                  observations and correct as history.
+    24 checks     the release suite, DERIVED from release.yml      check-pretag.mjs
+
+`/mavci-core:release` exists, which is carried-forward item 8's condition met:
+the fourteen references that were reworded to name the operator may name the
+command again, and `check-command-refs.mjs` is what makes restoring them safe.
+
+**Not built, per plan:** `/research`, two of the five standards packs, and nine
+further checker rules — `supabase.rls_policy_per_table` and
+`supabase.tenant_column` among them, deferred for the stated reason that they
+need a real SQL statement parser rather than regex.
+
+**Guardian's machinery is covered by CI; guardian's ANSWERS are not.** The
+acceptance corpus is operator-run and there is no result for it —
+`check-corpus.mjs` asserts the corpus is well-formed, which is a different
+question and must not be read as the first. `doctor` FAILs on every project
+until a result exists, deliberately: an absent corpus result is a failure, not a
+silence. This is the largest unproven claim in the system, and it is load-bearing
+— guardian is the component whose output the release gate reads.
 
 **Gate 4 is CLOSED** (2026-09-01, project gate4c, against v0.1.11). Enforcement
 passed end to end: detection, verdict, exact line number, refusal, and
@@ -762,6 +798,67 @@ five-false-positives-per-true-one, was the thing to check before trusting it.
 **A red mark on a green run is not cosmetic.** It trains precisely the habit
 that let run 33265540461 — a real failure — go unread for an entire release.
 That is the argument for spending a release on it.
+
+### 0.1.17 — the identity that will push, checked at the moment it matters
+
+**Cut 2026-09-01.** Fourth occurrence in one day of `Repository not found`
+against the system repo, and the first one worth a finding — because **the check
+existed and did not help.**
+
+`checkGhAccount` has compared the active `gh` account against `SYSTEM_REPO`'s
+owner since 0.1.13, and it is correct. It fires when someone runs `doctor`. The
+damage happens at `git push`, which consults no doctor. *A control placed where
+it is convenient to compute rather than where the loss occurs is not a control;
+it is a coincidence that sometimes fires first.*
+
+**And `check-pretag` was not merely silent about the account — it had the answer
+and misread it.** `git ls-remote origin` is a live authorisation probe made with
+the exact credential that is about to push, which is strictly better evidence
+than a login comparison because it tests the thing rather than a proxy for it.
+The gate called it twice and, when it failed, said *"could not reach origin …
+Check the network and re-run"*: this file's own copy of the misleading message
+doctor was fixed for, one layer further down, at the moment the operator is least
+inclined to doubt it. The second consumer — `HEAD` vs `origin/main` — downgraded
+the same failure to a **note**, which does not block. A gate whose own header
+argues that a check nobody is required to read is a failure one layer up, and
+which then names the wrong cause.
+
+**Reachability is the ground truth; the account comparison explains its
+silence.** One `ls-remote`, read twice. Origin answers ⇒ pass whatever `gh`
+reports, as a note, never a failure — git's credential helper need not be gh, and
+a release gate is the most expensive place in this system to refuse wrongly
+(0.1.12 item 5: a guard that fires wrongly and often trains everyone to turn it
+off). Origin is silent ⇒ refuse, name **which** of the two causes it is, and
+stop **before the suite**, saying what was skipped: every arm below would
+volunteer its own confident wrong explanation for the one cause already named.
+Offline checks — dirty tree, branch — run first, so a machine that cannot reach
+origin is still told what is wrong with its tree.
+
+**Imported, not reimplemented.** `readGhAccounts` and `ghAccountFinding` are
+doctor's and check-pretag renders them; doctor's caveat narrowed in the same
+commit, because *"doctor compares logins … the only thing checkable without a
+network call"* was true only of doctor. Two gates that disagree about one machine
+is this system's oldest defect shape.
+
+**Nine assertions, five negative controls, each failing exactly one.** The
+summary line is now counted rather than written down — a hardcoded total is a
+second list of the same thing. The end-to-end assertion is that the gate
+**STOPPED**, not merely that it failed, which needed a marker for the line the
+run must never reach: a build whose identity arm does not stop the run reaches
+the suite, which runs `check-pretag.mjs --selftest`, which spawns the gate again,
+so without `MAVCI_PRETAG_NO_SUITE` the negative control would have been a fork
+bomb rather than a failed assertion. That variable can only **add** a refusal;
+no value of it lets a tag be cut.
+
+**Not covered, and said out loud:** the gate proves the credential can READ the
+repository, never that it can write. A read-only token — `MAVCI_TOKEN` is
+exactly that shape — passes this and fails the push, with the tag still local and
+recoverable. Full record: `docs/lessons/0.1.17-identity-at-the-moment-of-the-push.md`.
+
+**Note on this log:** 0.1.15 and 0.1.16 have no entry here. They are in the
+commit log and in `docs/lessons/`, and the gap is named rather than stepped over,
+because a release log that skips two releases silently reads as two releases in
+which nothing happened.
 
 ### Carried forward — still not built
 

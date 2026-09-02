@@ -473,8 +473,16 @@ function checkDistribution(out, { network = true } = {}) {
  * failure says so rather than asserting a state it has not established.
  */
 
-/** @returns {{active: string|null, logins: string[]}|null} null = could not check. */
-function readGhAccounts() {
+/**
+ * @returns {{active: string|null, logins: string[]}|null} null = could not check.
+ *
+ * Exported because doctor is not the only place that needs it. v0.1.17: the
+ * damage this explains happens at `git push`, which consults no doctor, so
+ * `scripts/ci/check-pretag.mjs` imports both this probe and the decision below
+ * rather than growing its own copy of either. One definition of who owns the
+ * system repo, and one wording of the remedy.
+ */
+export function readGhAccounts() {
   const gh = (args) => {
     try {
       return execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 });
@@ -542,8 +550,11 @@ export function ghAccountFinding(accounts, owner = SYSTEM_REPO.split('/')[0]) {
     + '         in that message mentions accounts, and it reads as the repo having been deleted.\n'
     + `         Fix: ${fix}`
     + (others.length ? `\n         Also authenticated here: ${others.join(', ')}` : '')
-    + '\n         doctor compares logins. If the active account is a collaborator with access,\n'
-    + '         this line is wrong - and it is the only thing checkable without a network call.') };
+    // Narrowed in v0.1.17: check-pretag renders this same finding, and "doctor
+    // compares logins ... without a network call" was true only of doctor. The
+    // claim now states what was established, which is true wherever it is read.
+    + '\n         Only logins were compared. If the active account is a collaborator with access\n'
+    + '         to the repository, this line is wrong.') };
 }
 
 function checkGhAccount(out, { network = true } = {}) {

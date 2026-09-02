@@ -42,6 +42,39 @@ deliberate: a lesson edited to fit its new home stops being evidence.
                                       realised cost: a 404 that reads as absence
                                       had already caused two history restarts and
                                       left ten commits on one disk.
+                                      The file holds SEVENTEEN findings; the
+                                      summary above describes 1-8. 0.1.15 and
+                                      0.1.16 were built from a subset of them and
+                                      the rest are still queued, which is why the
+                                      file is still here.
+
+    0.1.16-fixture-class-and-actor-aware-gate.md
+                                      gate4c, plugin 0.1.15, 2026-09-01.
+                                      Findings 3, 6 and 7 from one guardian
+                                      dispatch that looped ten times and produced
+                                      nothing. The corpus deadlock: an exemption
+                                      that existed as a concept, in the wrong
+                                      rule, naming a path no project tree could
+                                      match.
+
+    0.1.17-identity-at-the-moment-of-the-push.md
+                                      NO ORIGIN PROJECT. plugin 0.1.16,
+                                      2026-09-01. The account check existed, was
+                                      correct, and fired where it was convenient
+                                      to compute rather than where the loss
+                                      occurs. Fourth `Repository not found`
+                                      against the system repo in one day.
+
+    pending-system-change-0.1.18.md   NO ORIGIN PROJECT. plugin 0.1.17,
+                                      2026-09-02. One finding, not built:
+                                      state.schema_valid judges every control
+                                      file by the CURRENT schema and never reads
+                                      the schema_version the file declares, so 55
+                                      correct pre-0.1.15 verdicts in gate4c read
+                                      as 55 blockers - and the remedy sends the
+                                      operator to --reseal, which launders the
+                                      evidence of a condition that was never
+                                      tampering.
 
 ## The exception to "copied from its origin"
 

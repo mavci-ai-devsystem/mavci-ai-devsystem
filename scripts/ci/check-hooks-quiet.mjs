@@ -6,14 +6,18 @@
  * section 2), which is what makes a project's committed settings.json
  * sufficient everywhere afterwards. It also means the plugin resolves in every
  * repository on the machine - a scratch clone, someone else's library, a repo
- * that has never heard of Mavci - and all eight hook entries in hooks.json run
- * there, on every tool call, every turn, every session start.
+ * that has never heard of Mavci - and EVERY hook entry in hooks.json runs
+ * there, on every tool call, every turn, every session start. The count is not
+ * written here on purpose: it was "eight" until 0.1.15 added guardian-record's
+ * SubagentStop, and a number in prose beside a number this file computes is the
+ * two-lists defect that 0.1.14 removed from check-pretag. `HOOKS.length` is
+ * asserted against hooks.json below, which is the only place the count belongs.
  *
  * So the blast radius of user scope is exactly this file. A standards plugin
  * that fires enforcement, or even prints a health warning, in an unrelated
  * repository is a standards plugin that gets uninstalled, and uninstalling it
- * removes enforcement from the projects that DO want it. The gate for all eight
- * is the same fact: no `.mavci/project.json`, nothing to say.
+ * removes enforcement from the projects that DO want it. The gate for all of
+ * them is the same fact: no `.mavci/project.json`, nothing to say.
  *
  * Seven of the eight were already gated when this test was written. The eighth,
  * `doctor.mjs --preflight` on SessionStart, was not: it reported "not a Mavci
