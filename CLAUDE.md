@@ -1587,6 +1587,44 @@ null`, both attributed verdicts linked, seal intact, release gate passing.
 `release.yml` and `selftest.yml`, and `check-pretag` derives the suite from
 `release.yml` as before.
 
+#### 7. And the queued finding it turned out to be making worse
+
+`pending-system-change-0.1.23.md` finding 1, filed the day before by another
+session: `blankSource` has **no notion of a regex literal at all**, so a backtick
+inside one - `/!`([^`]+)`/g` - opens a template-literal state and every byte after
+it in the file is blanked. Not a false positive; a silent false NEGATIVE, because
+an empty match set is indistinguishable from a clean file.
+
+It was filed at **2 of 34** CI scripts scanning differently than they read. It was
+**4 of 36** when this release measured it, and one of the two new ones was a regex
+added earlier in this same session, by the fix for something else. The finding
+predicted its own growth and was right, which is the argument for its priority.
+
+**The root fix was chosen over the narrow one, and the finding left that open
+deliberately.** The narrow fix - have `check-plugin` detect the desynchronisation
+and refuse - has no remedy: the only way to satisfy it is to rewrite the regex,
+which is contorting source to suit a broken scanner, and is finding 16's shape.
+So `blankSource` now recognises a regex literal and **skips it whole, leaving the
+contents untouched**. Skipping rather than blanking is the conservative half:
+blanking would be consistent with how strings are treated and would also mean
+every rule suddenly sees LESS inside a regex, which is a loosening in shipped code
+that decides enforcement on every project. Skipping changes nothing a rule sees
+inside a regex; the only change is that the rest of the file stops disappearing.
+
+**The rule found its own live instance the moment it could see.**
+`check-scribe-refs.mjs:182` called `execFileSync` with no `stdio` - a real
+violation of the class 0.1.14 declared *"fixed as a class, not an instance"*,
+standing in the tree, unreported, because the rule that polices it was blind in
+that file. The rule came back blind and the class came back with it.
+
+Assertion A shipped anyway and was watched failing against the reverted scanner:
+`check-plugin` counts the same needle in raw and blanked text, and a mismatch is a
+FAILURE naming both counts, with the stdio rule not consulted for that file. It is
+not made redundant by the root fix - it is what catches the scanner desynchronising
+again for a reason nobody has met yet. Measured after: **0 of 60 scanned files
+desynchronised.** Assertion B, the honest wording on an unestablished match, is
+NOT shipped and stays open.
+
 #### What is NOT in this release, and is filed rather than guessed at
 
 `pending-system-change-0.1.23.md` findings 2-4: the risk guard reading every flag

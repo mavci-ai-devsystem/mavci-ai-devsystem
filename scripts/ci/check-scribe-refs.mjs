@@ -179,7 +179,13 @@ function selftest() {
     'a path that EXISTS but may be the wrong file passes - existence only, and the header says so');
 
   // git-backed half, against this repository.
-  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim().slice(0, 12);
+  // stdio pinned: Node forwards a child's stderr to this process by default, which
+  // annotates a passing job red. Unpinned here since 0.1.14 declared it fixed "as a
+  // class, not an instance" - and invisible, because a backtick inside a regex in
+  // this file desynchronised the scanner the class rule reads. The rule came back
+  // blind and the class came back with it. See jsscan.mjs, REGEX LITERALS.
+  const head = execFileSync('git', ['rev-parse', 'HEAD'],
+    { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim().slice(0, 12);
   check(verify(ROOT, 'doc.md', `Shipped in ${head}, see docs/ARCHITECTURE.md.`).length === 0,
     'a real ancestor sha and a real path pass together');
   check(verify(ROOT, 'doc.md', 'Shipped in deadbeefdead, see docs/ARCHITECTURE.md.')

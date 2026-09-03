@@ -444,6 +444,37 @@ if (!exists(path.join(agentsDir, 'agent-scopes.json'))) {
   for (const name of fs.readdirSync(dir).filter((n) => n.endsWith('.mjs'))) {
     const src = fs.readFileSync(path.join(dir, name), 'utf8');
     const blanked = blankSource(src);
+
+    /* THE SCANNER MUST PROVE IT CAN SEE THE FILE, BEFORE THE RULE BELOW MEANS
+     * ANYTHING. `blankSource` knew nothing about regex literals, so a backtick
+     * inside one - `/!`([^`]+)`/g` - opened a template-literal state and blanked
+     * every byte after it. That is not a false positive. It is a silent false
+     * NEGATIVE: an empty match set is indistinguishable from a clean file, and
+     * four of thirty-six CI scripts were in that state, hiding six real calls
+     * from the rule that exists to police them.
+     *
+     * Invariant 5 applied to the scanner rather than to the thing scanned: a
+     * probe that could not run is never a pass. Counting the same needle in the
+     * raw and blanked text is the cheapest way to say whether it ran. A mismatch
+     * is a FAILURE naming both counts - the rule below is then not consulted for
+     * this file, because it has nothing trustworthy to consult.
+     *
+     * This survives the root fix rather than being replaced by it: it is what
+     * catches the scanner desynchronising again, for a reason nobody has met yet.
+     */
+    const NEEDLE = /exec(?:File)?Sync\s*\(/g;
+    const rawSeen = (src.match(NEEDLE) ?? []).length;
+    const blankedSeen = (blanked.match(NEEDLE) ?? []).length;
+    if (rawSeen !== blankedSeen) {
+      failures.push(`${name}: the source scanner is desynchronised on this file - `
+        + `${rawSeen} exec*Sync call(s) in the raw text, ${blankedSeen} visible after blanking. `
+        + 'A rule cannot match what it cannot see, so the stdio rule below reports nothing about '
+        + 'this file and that silence is indistinguishable from a clean one. Usually a delimiter '
+        + 'inside a literal that jsscan misreads as an opener. Fix jsscan; do not rewrite the '
+        + 'source to suit it.');
+      continue;
+    }
+
     for (const m of blanked.matchAll(/exec(?:File)?Sync\s*\(/g)) {
       let depth = 0;
       let end = -1;

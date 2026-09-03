@@ -12,6 +12,46 @@ the same way.
 
 ---
 
+# Finding 1 — APPLIED in 0.1.23 — the checker that polices the checkers is blind in exactly the files whose regexes contain a backtick
+
+> **Applied 2026-09-03.** The ROOT fix was chosen, not the narrow one, and the
+> reason is that the narrow one had no remedy: a rule that fails a file for
+> containing a backtick inside a regex can only be satisfied by rewriting the
+> regex, which is contorting source to suit a broken scanner and is finding 16's
+> shape - an instruction addressed to someone who cannot reasonably carry it out.
+>
+> `blankSource` had **no notion of a regex literal at all**, which is why every
+> delimiter inside one opened a state. It now recognises a regex and **skips it
+> whole, leaving the contents untouched**. Skipping rather than blanking is
+> deliberate: blanking would be consistent with strings and would also mean every
+> rule suddenly sees LESS inside a regex than it does today - a loosening, in
+> shipped code that decides enforcement on every project. Skipping changes nothing
+> a rule sees inside a regex; the only change is that the rest of the file stops
+> being blanked, which is strictly more visible.
+>
+> Assertion A shipped anyway, in `check-plugin.mjs`, and was watched failing
+> against the reverted scanner: it names both counts and refuses to consult the
+> stdio rule for a file it cannot see. It is not made redundant by the root fix -
+> it is what catches the scanner desynchronising again for a reason nobody has met.
+>
+> The live instance is fixed: `check-scribe-refs.mjs:182` now pins `stdio`. It was
+> found by the rule itself the moment the scanner could see the file, which is the
+> proof the fix works. Measured after: **0 of 60 scanned files desynchronised**,
+> across `scripts/ci/`, `scripts/`, `lib/` and `rules/`.
+>
+> Assertion B - the honest wording for a match that cannot be established - is NOT
+> shipped and stays open below. The `end === -1` arm it concerns is unchanged and
+> still reachable.
+>
+> The count in the finding was 2 of 34 when it was written. It was **4 of 36** by
+> the time it was applied, and one of the two new ones was a regex added earlier in
+> the same session that fixed it. The finding predicted its own growth and was
+> right.
+
+---
+
+## The original finding follows, unedited.
+
 # Finding 1 — the checker that polices the checkers is blind in exactly the files whose regexes contain a backtick
 
 Target: `scripts/ci/check-plugin.mjs` (the `exec*Sync` stdio rule, ~line 440-468)
