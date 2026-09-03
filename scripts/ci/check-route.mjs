@@ -54,6 +54,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -81,15 +82,24 @@ const check = (c, m) => (c ? ok(m) : bad(m));
 const task = (over = {}) => ({
   id: '0001', phase: 'build', status: 'in_progress',
   attempts: 1, max_attempts: 3, owner_agent: 'mavci-builder',
-  blocked_by: null, verdicts: [], title: 't', spec: '.mavci/tasks/0001.md', ...over,
+  blocked_by: null, verdicts: [], title: 't', spec: '.mavci/tasks/0001.md',
+  spec_approved: approvalFor(), ...over,
 });
 const verdict = (over = {}) => ({
   task_id: '0001', attempt: 1, verdict: 'fail', run_at: '2026-09-03T00:00:00Z',
   summary: { blockers: 2 }, ...over,
 });
+/* The spec text, and an approval helper whose hash MATCHES it. Every case that
+ * expects the chain to move past `plan` needs one, because an unapproved spec is
+ * now an operator gate rather than a green light - which is the point. */
+const SPEC_TEXT = '# spec\n\nreal content';
+const SPEC_SHA = createHash('sha256').update(SPEC_TEXT).digest('hex');
+const approvalFor = (sha = SPEC_SHA, spec = '.mavci/tasks/0001.md') => ({
+  at: '2026-09-03T00:00:00Z', by: 'operator', spec_path: spec, spec_sha256: sha,
+});
 const base = (over = {}) => ({
   connected: true, state: { phase: 'build' }, tasks: [task()], verdicts: [],
-  unverified: null, specText: '# spec\n\nreal content', request: null, ...over,
+  unverified: null, specText: SPEC_TEXT, request: null, ...over,
 });
 
 /* ================================================== A. THE ROUTING TABLE */
@@ -130,14 +140,43 @@ console.log('\nA. the routing table:');
     + `steps: ${r.steps.map((s) => s.why).join(' | ').slice(0, 160)}`);
 }
 {
-  const r = route(base({
-    tasks: [task({ phase: 'plan', status: 'pending', attempts: 0 })],
-    specText: '# 0001\n\nAcceptance: the route returns 200.',
+  const PLAN = { phase: 'plan', status: 'pending', attempts: 0, attempts_total: 0 };
+
+  /* A5-GATE: A WRITTEN SPEC IS NOT A GREEN LIGHT.
+   *
+   * Operator, this turn: "The approval that unlocks it is the operator's,
+   * recorded in the task record, so the orchestrator is executing a decision
+   * rather than making one."
+   *
+   * A5-GATE and A5 must BOTH be here, and the operator named the reason in the
+   * same turn: an --advance-phase that refuses every time "would have refused
+   * every time and looked like a working gate". A gate that always says no is
+   * indistinguishable from one that works until someone has a legitimate
+   * transition to make, so the refusal and the permission are asserted together.
+   */
+  const unapproved = route(base({ tasks: [task({ ...PLAN, spec_approved: null })] }));
+  check(unapproved.action === 'awaiting_approval' && unapproved.dispatch === null,
+    `A5-GATE a written but UNAPPROVED spec stops at the operator, dispatching nobody - `
+    + `got ${unapproved.action}/${unapproved.dispatch}`);
+  check(unapproved.steps.some((x) => /--approve-spec 0001/.test(x.run)),
+    'A5-GATE-b and it names the command that records the decision');
+
+  const stale = route(base({
+    tasks: [task({ ...PLAN, spec_approved: approvalFor('f'.repeat(64)) })],
   }));
+  check(stale.action === 'awaiting_approval' && /changed after it was approved/.test(stale.why),
+    `A5-GATE-c an approval whose hash no longer matches the spec is STALE, not valid - `
+    + `got ${stale.action}. Without this the approval is a permanent unlock and the spec `
+    + `can be rewritten after it.`);
+
+  const r = route(base({ tasks: [task(PLAN)] }));
   check(r.action === 'build' && r.dispatch === 'mavci-builder',
-    `A5 a task with a real spec goes to the builder - got ${r.action}`);
-  check(r.steps.some((s) => /--attempt 0001/.test(s.run)) && r.steps.some((s) => /--set-phase build/.test(s.run)),
-    'A5b and the steps consume an attempt and unfreeze application code, in that order');
+    `A5 and an APPROVED spec goes to the builder - got ${r.action}`);
+  check(r.steps.some((x) => /--advance-phase 0001 --from plan --to build/.test(x.run))
+    && r.steps.some((x) => /--attempt 0001/.test(x.run))
+    && !r.steps.some((x) => /--set-phase/.test(x.run)),
+    'A5b and it names the SCOPED transition, never a free --set-phase - '
+    + `steps: ${r.steps.map((x) => x.run).join(' | ')}`);
 }
 {
   const r = route(base({ tasks: [task({ attempts: 0, status: 'pending' })] }));
@@ -147,8 +186,8 @@ console.log('\nA. the routing table:');
   const r = route(base({ tasks: [task({ attempts: 1 })], verdicts: [] }));
   check(r.action === 'verify' && r.dispatch === 'mavci-verifier',
     `A7 a built attempt with no verdict routes to the VERIFIER - got ${r.action}/${r.dispatch}`);
-  check(r.steps.some((s) => /--set-phase verify/.test(s.run)),
-    'A7b and freezes application code first');
+  check(r.steps.some((x) => /--advance-phase 0001 --from build --to verify/.test(x.run)),
+    'A7b and freezes application code first, through the scoped transition');
 }
 
 console.log('\nB. the four that discriminate:');
@@ -156,8 +195,9 @@ console.log('\nB. the four that discriminate:');
   const r = route(base({ tasks: [task({ attempts: 1 })], verdicts: [verdict()] }));
   check(r.action === 'rework' && r.dispatch === 'mavci-builder',
     `R-REWORK a failing verdict under the ceiling routes BACK to the builder - got ${r.action}/${r.dispatch}`);
-  check(r.steps.some((s) => /--set-phase build/.test(s.run)),
-    'R-REWORK-b and the steps include the phase move without which the builder refuses to start');
+  check(r.steps.some((x) => /--advance-phase 0001 --from verify --to build/.test(x.run)),
+    'R-REWORK-b and the phase move back to build goes through the SAME gate as every other move '
+    + '- operator, this turn - so the rework edge is not a free --set-phase either');
   check(r.steps.some((s) => /VERBATIM/.test(s.why)),
     'R-REWORK-c and the retry carries the failing verdict rather than a fresh start');
 }
@@ -184,6 +224,32 @@ console.log('\nB. the four that discriminate:');
     `R-ATTEMPT a verdict about attempt 1 does not settle attempt 2 - got ${r.action} (must be verify)`);
 }
 {
+  /* R-RESET: after --reset-attempts the two counters DISAGREE, and the router
+   * must key the verdict lookup on the identity counter, not the ceiling one.
+   *
+   * `attempts` is 1 (one try against the new ceiling) while the newest verdict is
+   * tagged 4 (the fourth try ever, which is what it is named from). A router
+   * reading `attempts` misses the lookup and sends the builder back over work
+   * that has already been verified - silently, and only ever after a reset, which
+   * is why every pure-function case above passed while this was broken. It was
+   * caught by the end-to-end walk, and is asserted here so it does not depend on
+   * the walk happening to reset. */
+  const r = route(base({
+    tasks: [task({ attempts: 1, attempts_total: 4 })],
+    verdicts: [verdict({ attempt: 4, verdict: 'pass' })],
+  }));
+  check(r.action === 'document',
+    `R-RESET a verdict tagged with the IDENTITY counter is found when the ceiling counter `
+    + `disagrees - got ${r.action} (must be document)`);
+  const stale = route(base({
+    tasks: [task({ attempts: 1, attempts_total: 4 })],
+    verdicts: [verdict({ attempt: 1, verdict: 'pass' })],
+  }));
+  check(stale.action === 'verify',
+    `R-RESET-b and a PRE-RESET verdict tagged 1 does not settle the fourth try - `
+    + `got ${stale.action} (must be verify)`);
+}
+{
   // MID-BUILD, deliberately. A router that only consults unverified when idle
   // passes an idle-state test and lets the chain run on unchecked code.
   const r = route(base({
@@ -206,7 +272,7 @@ console.log('\nC. completion and the operator gates:');
   // first is left behind at `verify` while the project moves to `release` -
   // reproducing, through the close path, the divergence --set-phase was fixed to
   // prevent. Observed on gate5 before this was ordered.
-  const iPhase = r.steps.findIndex((s) => /--set-phase release/.test(s.run));
+  const iPhase = r.steps.findIndex((s) => /--advance-phase 0001 --from verify --to release/.test(s.run));
   const iClose = r.steps.findIndex((s) => /--task-status 0001 --status done/.test(s.run));
   check(iPhase !== -1 && iClose !== -1 && iPhase < iClose,
     `C1c and the phase move comes BEFORE the close, or the task is left behind - `
@@ -260,6 +326,7 @@ console.log('\nD. the answer is well formed, and the owners exist:');
     route(base({ tasks: [task({ attempts: 1 })], verdicts: [verdict({ verdict: 'pass' })] })),
     route(base({ state: { phase: 'release' }, tasks: [task({ attempts: 1, status: 'done' })], verdicts: [verdict({ verdict: 'pass' })] })),
     route(base({ unverified: { x: 1 } })),
+    route(base({ tasks: [task({ phase: 'plan', attempts: 0, status: 'pending', spec_approved: null })] })),
   ];
   let wellFormed = true;
   for (const r of cases) {
@@ -363,8 +430,16 @@ console.log('\nF. the CLI over a real control plane:');
   fs.mkdirSync(path.join(tmp, '.mavci', 'tasks'), { recursive: true });
   fs.writeFileSync(path.join(tmp, '.mavci', 'tasks', '0001.md'), '# 0001\n\nAcceptance: /api/health returns 200.\n');
   d = decide();
+  check(d.action === 'awaiting_approval' && d.dispatch === null,
+    `F4 with the spec on disk and unapproved, the chain stops at the OPERATOR - got `
+    + `${d.action}/${d.dispatch}. This is the one place a written spec waits on a person.`);
+
+  const appr = run(STATE, ['--approve-spec', '0001']);
+  check(appr.status === 0, `F4b the operator records the decision - exit ${appr.status}`);
+
+  d = decide();
   check(d.action === 'build' && d.dispatch === 'mavci-builder',
-    `F4 once the spec is on disk it routes to the builder - got ${d.action}`);
+    `F4c and ONLY THEN does it route to the builder - got ${d.action}`);
 
   run(STATE, ['--attempt', '0001', '--agent', 'mavci-builder']);
   run(STATE, ['--set-phase', 'build']);
@@ -440,7 +515,8 @@ console.log('\nF. the CLI over a real control plane:');
     executed.push(args.join(' '));
     run(STATE, args);
   }
-  check(executed.length === 2 && /--set-phase release/.test(executed[0]) && /--status done/.test(executed[1]),
+  check(executed.length === 2 && /--advance-phase 0001 --from verify --to release/.test(executed[0])
+    && /--status done/.test(executed[1]),
     `F10a the document steps were executed in the router's order - ran: ${executed.join(' THEN ') || '(none)'}`);
   const doneTask = JSON.parse(fs.readFileSync(path.join(tmp, PATHS.controlTasks, '0001.json'), 'utf8'));
   const doneState = JSON.parse(fs.readFileSync(path.join(tmp, PATHS.state), 'utf8'));

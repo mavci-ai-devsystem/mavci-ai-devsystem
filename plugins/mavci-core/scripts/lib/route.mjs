@@ -48,6 +48,8 @@
  * accumulating it.
  */
 
+import { createHash } from 'node:crypto';
+
 /** Every action carries a code, so callers assert on the code and not the prose. */
 export const ACTIONS = [
   'not_connected',   // no manifest - nothing to route
@@ -57,6 +59,7 @@ export const ACTIONS = [
   'rework',          // builder again, starting from the failing verdict
   'verify',          // verifier: run the checker and the build against the criteria
   'document',        // scribe: render what happened from sources that already exist
+  'awaiting_approval', // the spec is written and the operator has not approved it. Operator.
   'blocked',         // the ceiling, or a declared blocker. Operator.
   'release_gate',    // everything a task can prove is proved. Operator.
   'idle',            // connected, nothing open, no request given
@@ -83,6 +86,28 @@ const STUB_SPEC = '.mavci/tasks/pending.md';
 export const REVIEW_MARKER = 'REVIEW REQUIRED';
 
 const step = (run, why) => ({ run, why });
+
+/**
+ * Is the recorded approval about the spec that is on disk NOW?
+ *
+ * `createHash` is a Node builtin, so hashing here costs no dependency and keeps
+ * the decision in the decision module. Hashing a string is pure; this function
+ * reads no files - `specText` was gathered for it.
+ *
+ * THE ROUTER HAS TO ASK THIS, not just leave it to `--advance-phase`. The command
+ * refuses on a missing or stale approval, which is correct - but a router that
+ * emits a step it knows will be refused sends the orchestrator into a loop it
+ * cannot fix, burning its iteration ceiling on the same refusal. Worse, the
+ * ceiling is what would eventually stop it, so the symptom would be "the
+ * orchestrator gave up" rather than "nobody approved the spec".
+ */
+export function approvalCurrent(task, specText) {
+  const a = task?.spec_approved;
+  if (!a || typeof a.spec_sha256 !== 'string') return false;
+  if (typeof specText !== 'string') return false;
+  if (a.spec_path && task.spec && a.spec_path !== task.spec) return false;
+  return createHash('sha256').update(specText).digest('hex') === a.spec_sha256;
+}
 
 /**
  * The verdict that is ABOUT the current attempt.
@@ -237,9 +262,27 @@ export function route(input) {
   }
 
   const id = task.id;
+
+  /* TWO COUNTERS, TWO USES, AND CONFLATING THEM IS WHAT BROKE THE WALK.
+   *
+   * `attempts` is the retry POLICY counter - tries against the current ceiling,
+   * zeroed by `--reset-attempts`. It answers "may this be retried".
+   *
+   * `attempts_total` is the verdict IDENTITY counter - tries ever, never reset. It
+   * answers "which verdict is about the try that just happened", because that is
+   * what a verdict is named and tagged from.
+   *
+   * This router keyed BOTH off `attempts`, which is correct right up until a
+   * reset: after one, `attempts` is 1 while the newest verdict is tagged 4, the
+   * lookup misses, and the router sends the builder back over work that had
+   * already been verified. Every pure-function case passed while this was broken,
+   * because none of them had been through a reset; the end-to-end walk caught it,
+   * and R-RESET asserts it so it no longer depends on the walk resetting.
+   */
   const attempts = task.attempts ?? 0;
+  const tries = typeof task.attempts_total === 'number' ? task.attempts_total : attempts;
   const max = task.max_attempts ?? 3;
-  const verdict = verdictForAttempt(verdicts, id, attempts);
+  const verdict = verdictForAttempt(verdicts, id, tries);
   const failed = verdict && verdict.verdict !== 'pass';
   const passed = verdict && verdict.verdict === 'pass';
   const exhausted = attempts >= max;
@@ -282,12 +325,41 @@ export function route(input) {
         ],
       });
     }
+    /* THE OPERATOR GATE THE CHAIN DID NOT HAVE.
+     *
+     * A spec exists and nobody has approved it, or it changed after approval.
+     * `--advance-phase` refuses either way, so the router stops HERE instead of
+     * emitting a step that cannot succeed. This is the gate that makes the
+     * orchestrator an executor of decisions rather than a maker of them, and it
+     * is the one place in the chain where a written spec waits on a person. */
+    if (!approvalCurrent(task, specText)) {
+      const stale = !!task.spec_approved;
+      return out('awaiting_approval', {
+        task_id: id,
+        why: `task ${id} has a spec at ${task.spec} and `
+          + (stale
+            ? 'the recorded approval is for a different version of it - the spec changed after it '
+              + 'was approved, so the approval no longer describes the document the builder would '
+              + 'implement.'
+            : 'no recorded operator approval. The orchestrator carries a decision forward; it does '
+              + 'not make one, and there is no decision on record yet.')
+          + ' Read the acceptance criteria before approving: a wrong spec is the most expensive '
+          + 'thing in this system to discover late.',
+        steps: [
+          step(`state.mjs --approve-spec ${id}`, 'records YOUR decision, together with the hash of the spec it is about'),
+          step(`/mavci-core:ship`, 'then the chain continues from here on its own'),
+        ],
+      });
+    }
+
     return out('build', {
       task_id: id,
-      why: `task ${id} has a spec and no attempt yet.`,
+      why: `task ${id} has an approved spec and no attempt yet.`,
       steps: [
+        step(`state.mjs --advance-phase ${id} --from plan --to build`,
+          'the SCOPED transition, not a free --set-phase: it refuses unless the spec is approved '
+          + 'and the task is where this says it is. App code is not writable in any other phase'),
         step(`state.mjs --attempt ${id} --agent mavci-builder`, 'consume an attempt before the work, not after'),
-        step('state.mjs --set-phase build', 'app code is not writable in any other phase'),
         step('dispatch mavci-builder', `it implements ${task.spec}`),
       ],
     });
@@ -310,7 +382,8 @@ export function route(input) {
         task_id: id,
         why: `attempt ${attempts} of task ${id} has been built and no verdict names it.`,
         steps: [
-          step('state.mjs --set-phase verify', 'this also freezes application code, which is the point'),
+          step(`state.mjs --advance-phase ${id} --from build --to verify`,
+            'this also freezes application code, which is the point'),
           step('dispatch mavci-verifier', `it runs verify.mjs --record --task ${id}`),
         ],
       });
@@ -341,8 +414,10 @@ export function route(input) {
         + 'left the phase at `verify`, which the builder refuses, so the loop the ceiling was written '
         + 'for could not be entered without a privileged phase move.',
       steps: [
+        step(`state.mjs --advance-phase ${id} --from verify --to build`,
+          'the rework redispatch moves the phase back through the SAME gate as every other move, '
+          + 'not through a free set - operator, this turn'),
         step(`state.mjs --attempt ${id} --agent mavci-builder`, 'attempt ' + (attempts + 1) + ` of ${max}`),
-        step('state.mjs --set-phase build', 'unfreeze application code'),
         step('dispatch mavci-builder',
           `pass the failing verdict's checks[] VERBATIM - file paths and line numbers. `
           + 'Re-deriving them spends the attempt that is left.'),
@@ -368,7 +443,9 @@ export function route(input) {
        * Phase first, close second, and the two halves agree at rest. */
       steps: [
         step('dispatch mavci-scribe', 'it transcribes from named sources; it does not reconstruct'),
-        step('state.mjs --set-phase release', 'FIRST: it carries the in-progress task with it, and a task closed beforehand is left behind'),
+        step(`state.mjs --advance-phase ${id} --from verify --to release`,
+          'FIRST: the scoped transition moves this task and the project together, and a task '
+          + 'closed beforehand is left behind'),
         step(`state.mjs --task-status ${id} --status done`, 'then close it - that is what marks the record written'),
       ],
     });

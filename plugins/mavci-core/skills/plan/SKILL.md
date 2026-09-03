@@ -47,7 +47,25 @@ project is connected, and do not assume a phase.
 4. When it returns, show the operator the acceptance criteria and **ask whether
    they are right before building**. A wrong spec is the most expensive thing in
    this system to discover late.
-5. On approval: `node "${CLAUDE_PLUGIN_ROOT}/scripts/state.mjs" --set-phase build`
-   and tell them to run `/mavci-core:build <id>`.
+5. On approval, RECORD it rather than acting on it directly:
+
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/state.mjs" --approve-spec <id>`
+
+   That writes `spec_approved` on the control task, with the spec's content hash.
+   It is what turns step 4's conversation into a fact the rest of the system can
+   read - and it is the difference between the orchestrator executing a decision
+   and making one. Nothing advances a phase without it.
+
+   Then the transition, which is scoped to the task and refuses if the approval
+   is missing or if the spec has changed since:
+
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/state.mjs" --advance-phase <id> --from plan --to build`
+
+   Do NOT use `--set-phase build` here. That is the free override - any phase, any
+   time, no precondition - and it is the operator's, confirmed. The scoped command
+   is the one the normal path uses.
+
+   Then tell them to run `/mavci-core:build <id>`, or `/mavci-core:ship` to let the
+   chain carry it the rest of the way.
 
 If the architect escalates, relay the question rather than deciding for them.

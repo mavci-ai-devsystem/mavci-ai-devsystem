@@ -162,7 +162,28 @@ const CASES = [
   ['allow', { ...bash('node scripts/state.mjs --show'), agent_type: 'mavci-builder' }, 'agent reads state'],
   ['allow', { ...bash('node scripts/state.mjs --validate'), agent_type: 'mavci-verifier' }, 'verifier validates state'],
   ['allow', { ...bash('node scripts/state.mjs --baseline-prune'), agent_type: 'mavci-builder' }, 'pruning only retires fixed debt'],
-  ['allow', bash('node scripts/state.mjs --set-phase build'), 'MAIN SESSION changes the phase (slash commands do this)'],
+  /* THIS CASE REVERSED, AND THE REVERSAL IS THE POINT OF IT.
+   *
+   * It asserted `allow`: `--set-phase` was the one privileged flag exempt from
+   * the operator confirm, "because slash commands run it routinely". That was
+   * true when the slash commands were the only caller. It stopped being true when
+   * an orchestrator held it, because a free phase set - any phase, any time, no
+   * precondition, no task - is not a transition, it is the absence of a phase gate.
+   *
+   * The operator's ruling: "not a flat grant... The orchestrator can advance a
+   * task it is driving; it cannot set an arbitrary phase. Free --set-phase stays
+   * operator-only."
+   *
+   * So the routine caller is now `--advance-phase`, which is scoped to one task,
+   * directional, and refuses without a recorded spec approval - asserted in
+   * check-provenance.mjs section D. `--set-phase` keeps only the override role and
+   * confirms like every other privileged flag. A reader finding `allow` here again
+   * should look for an orchestrator that has been handed the override.
+   */
+  ['deferToUser', bash('node scripts/state.mjs --set-phase build'),
+    'MAIN SESSION free phase set is the OVERRIDE and confirms - the routine path is --advance-phase'],
+  ['allow', bash('node scripts/state.mjs --advance-phase 0007 --from plan --to build'),
+    'MAIN SESSION scoped transition is the routine one, and is exempt because it carries four refusals'],
   // Tier-2 confirm, not allow: --set-phase is the ONLY privileged flag exempted from the
   // operator confirm, because slash commands run it routinely. Rewriting the manifest is not
   // routine. NOTE: this is the 6th case asserting the literal 'deferToUser', a value Claude Code

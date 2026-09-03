@@ -237,6 +237,22 @@ export function ciPin(state) {
  * It returns the task it moved so the CLI can say so. A control-plane write the
  * operator was not told about is the kind that gets discovered by `git diff`.
  */
+/**
+ * The steps `--advance-phase` will make, forward and back.
+ *
+ * `verify -> build` is the REWORK edge and it is deliberately here: a redispatch
+ * after a failure needs the phase to move back, and the operator's instruction was
+ * that it goes through the same gate as every other move rather than through a
+ * free set. `release` is terminal - nothing advances out of it, because leaving it
+ * means starting another task, which is `--begin-plan`.
+ */
+export const PHASE_STEPS = Object.freeze({
+  plan: ['build'],
+  build: ['verify'],
+  verify: ['build', 'release'],
+  release: [],
+});
+
 export function setPhase(root, phase) {
   if (!PHASES.includes(phase)) throw new Error(`unknown phase "${phase}". One of: ${PHASES.join(', ')}`);
   let moved = null;
@@ -272,7 +288,7 @@ function writeTaskHalves(root, id, { title, spec, owner_agent = null, max_attemp
   const now = nowIso();
   writeControl(root, controlTaskPath(id), {
     schema_version: 1, id, project_id: s.project_id,
-    phase: 'plan', status: 'pending', attempts: 0, max_attempts,
+    phase: 'plan', status: 'pending', attempts: 0, attempts_total: 0, max_attempts,
     owner_agent, blocked_by: null, verdicts: [], created: now, updated: now,
   }, 'control-task');
   writeSurface(root, surfaceTaskPath(id), {
@@ -366,6 +382,25 @@ export function assertSoleInProgress(root, id) {
   }
 }
 
+/**
+ * THE VERDICT IDENTITY COUNTER, read defensively.
+ *
+ * `attempts` is the retry POLICY counter: it counts tries against the current
+ * ceiling and `--reset-attempts` zeroes it. `attempts_total` is the verdict
+ * IDENTITY counter: tries ever, never reset. They are equal on every task that
+ * has not been reset, which is why the fallback is exactly right for records
+ * written before the field existed.
+ *
+ * Naming a verdict from the policy counter is what made the two collide. After a
+ * reset the next try was "attempt 1" again, and its verdict path was the path of a
+ * historical one - so recording it destroyed the evidence of the three failures
+ * the operator had just reset past. Write-once turned that from silent data loss
+ * into a refusal, and the refusal is what made the collision visible at all.
+ */
+export function attemptsTotal(task) {
+  return typeof task?.attempts_total === 'number' ? task.attempts_total : (task?.attempts ?? 0);
+}
+
 export function updateControlTask(root, id, patch) {
   const cur = readControlTask(root, id);
   return writeControl(root, controlTaskPath(id), { ...cur, ...patch, updated: nowIso() }, 'control-task');
@@ -381,8 +416,11 @@ export function incrementAttempt(root, id) {
   }
   assertSoleInProgress(root, id);
   const attempts = t.attempts + 1;
-  updateControlTask(root, id, { attempts, status: 'in_progress' });
-  return attempts;
+  // Both counters move together here, and only here. The ceiling counter is
+  // zeroed elsewhere; the identity counter never is.
+  const attempts_total = attemptsTotal(t) + 1;
+  updateControlTask(root, id, { attempts, attempts_total, status: 'in_progress' });
+  return { attempts, attempts_total };
 }
 
 /**
@@ -411,6 +449,129 @@ export function closeTask(root, id, status) {
   clearActiveTask(root, id);
 }
 
+/* ============================ SPEC APPROVAL AND THE SCOPED TRANSITION ======
+ *
+ * THE DISTINCTION THIS EXISTS TO KEEP: the orchestrator executing an operator
+ * decision and the orchestrator making one are different acts, and until now
+ * nothing in the control plane could tell them apart. `--set-phase` was a flat
+ * grant - any phase, any time, no precondition - so an orchestrator holding it
+ * was not carrying a decision forward, it was deciding.
+ *
+ * `spec_approved` is what separates them, which makes that field load-bearing;
+ * it says so where it is defined. `--approve-spec` is the operator recording the
+ * decision and is not reachable by any agent. `--advance-phase` is the
+ * orchestrator carrying an approved task from one named phase to the next, and it
+ * refuses on anything else.
+ *
+ * THE HASH IS NOT DECORATION. Approval is of a SPECIFIC spec, not of a task. An
+ * approval with no hash is a permanent unlock: the architect could rewrite the
+ * spec afterwards and every later transition would still pass, which is a stale
+ * exemption in exactly the shape 0.1.14 established is indistinguishable from a
+ * control that was never there.
+ */
+
+/** The spec's content hash, or null when there is no readable spec. */
+export function specHash(root, task) {
+  if (!task?.spec) return null;
+  const p = abs(root, task.spec);
+  if (!exists(p)) return null;
+  return sha256(readText(p));
+}
+
+export function approveSpec(root, id) {
+  const t = readControlTask(root, id);
+  const surface = readJsonOrNull(abs(root, surfaceTaskPath(id)));
+  const spec = surface?.spec ?? null;
+  if (!spec) {
+    throw new Error(`task ${id} has no spec pointer, so there is nothing to approve. `
+      + 'The architect writes the spec and repoints the surface half; approve it after that.');
+  }
+  const hash = specHash(root, { spec });
+  if (!hash) {
+    throw new Error(`task ${id} points at ${spec}, which does not exist. Approving a spec that is `
+      + 'not on disk would record a decision about a document nobody can read.');
+  }
+  updateControlTask(root, id, {
+    spec_approved: { at: nowIso(), by: 'operator', spec_path: spec, spec_sha256: hash },
+  });
+  return { spec, hash, phase: t.phase };
+}
+
+/**
+ * The orchestrator's transition. Scoped to one task, directional, and gated on a
+ * recorded approval.
+ *
+ * Four refusals, and each is a way a flat grant would have said yes:
+ *   1. the task's phase is not `from`      - the caller has stale state
+ *   2. `to` is not the phase after `from`  - no skipping verify to reach release
+ *   3. no `spec_approved`                  - no decision has been recorded
+ *   4. the spec has changed since approval - the decision was about another document
+ */
+export function advancePhase(root, id, from, to) {
+  if (!PHASES.includes(from) || !PHASES.includes(to)) {
+    throw new Error(`--from and --to must each be one of: ${PHASES.join(', ')}`);
+  }
+  const t = readControlTask(root, id);
+  /* THE PROJECT PHASE IS SHARED, AND THE IN-PROGRESS TASK OWNS IT.
+   *
+   * Found by running the chain: `--advance-phase 0002 --from plan --to build`
+   * succeeded while task 0001 was still `in_progress`, moving the project phase
+   * out from under a task that was mid-flight. Nothing else would have noticed -
+   * 0002's own halves stayed consistent, and 0001's phase simply stopped matching
+   * the project's, which is the divergence this whole release was closing.
+   *
+   * `assertSoleInProgress` already answers "is any OTHER task in progress", so
+   * this is the same invariant enforced at a third transition rather than a new
+   * rule. It was enforced at `--attempt` and `--task-status` and not here, which
+   * is a rule with a door - the shape of finding 20's one-of-two-doors.
+   */
+  assertSoleInProgress(root, id);
+  if (t.phase !== from) {
+    throw new Error(`task ${id} is in phase "${t.phase}", not "${from}". --advance-phase names the `
+      + 'phase it is moving FROM so a caller working from stale state is refused rather than '
+      + `obeyed. Read the current phase and try again, or use --set-phase if you mean to override.`);
+  }
+  if (!PHASE_STEPS[from] || !PHASE_STEPS[from].includes(to)) {
+    throw new Error(`"${from}" -> "${to}" is not a step this command makes. Legal steps: `
+      + Object.entries(PHASE_STEPS).map(([f, l]) => `${f} -> ${l.join('|')}`).join(', ')
+      + '. Skipping a phase is how a task reaches release without being verified, so it is '
+      + 'refused here rather than trusted to the caller.');
+  }
+  const ok = t.spec_approved;
+  if (!ok) {
+    throw new Error(`task ${id} has no recorded spec approval, so there is no decision for this `
+      + 'command to execute. The orchestrator carries an operator decision forward; it does not '
+      + `make one. The operator runs: state.mjs --approve-spec ${id}`);
+  }
+  const current = specHash(root, { spec: ok.spec_path });
+  if (current !== ok.spec_sha256) {
+    throw new Error(`task ${id}'s spec has changed since it was approved `
+      + `(${ok.spec_path}: approved ${ok.spec_sha256.slice(0, 12)}, now `
+      + `${current ? current.slice(0, 12) : 'MISSING'}). The approval was of a specific document. `
+      + `Re-approve it if the change is intended: state.mjs --approve-spec ${id}`);
+  }
+  /* BOTH HALVES, EXPLICITLY, AND NOT THROUGH `setPhase`.
+   *
+   * `setPhase` is the free command and has to GUESS which task it carries: it
+   * moves the one whose status is `in_progress`. That heuristic is right for a
+   * global override and wrong here, because this command was given the task id.
+   * Delegating to it moved the project and left a `pending` task behind - the
+   * exact surface/control divergence this release was fixing, reintroduced by the
+   * scoped command that exists to make transitions precise. Caught by D3b, which
+   * asserts both halves rather than the command's exit status.
+   *
+   * ORDER IS THE MECHANISM, as it is in `beginPlan`: the task half goes first and
+   * the single state write goes last, so an interruption between them leaves the
+   * project phase where it was. The residue is a task one phase ahead of the
+   * project, which the router reads as authoritative (ARCHITECTURE 4.1) and
+   * reconciles - the benign direction. The reverse order leaves application code
+   * writable for a task that never moved.
+   */
+  updateControlTask(root, id, { phase: to });
+  setState(root, { phase: to });
+  return { from, to, task: id };
+}
+
 export function blockTask(root, id, blocked_by) {
   updateControlTask(root, id, { status: 'blocked', phase: 'plan', blocked_by });
   setPhase(root, 'plan');
@@ -419,6 +580,31 @@ export function blockTask(root, id, blocked_by) {
 
 /* -------------------------------------------------------------- verdicts */
 
+/**
+ * WRITE-ONCE, AND THE REWORK LOOP IS WHY.
+ *
+ * ARCHITECTURE 4.3: "Verdicts are write-once and never deleted - they are the
+ * audit trail", and section 9: "Each attempt writes its own immutable verdict."
+ * Neither was enforced. `writeControl` writes atomically over whatever is there,
+ * so verifying the SAME attempt twice replaced the first verdict with no trace -
+ * and `verdicts[]` dedupes by path, so the control task could not show it either.
+ *
+ * The loop is exactly where it costs. A second verdict on attempt N is one of two
+ * things, and both are bad silently:
+ *
+ *   - the code changed without an attempt being consumed, so the counter that
+ *     bounds the rework loop has been stepped around and the history now claims
+ *     the task passed in fewer tries than it took;
+ *   - the code did not change, so the existing verdict already answers and the
+ *     rewrite destroys a dated record to say the same thing.
+ *
+ * So it REFUSES, and names the move that makes a second verdict legitimate:
+ * consume an attempt. That is what keeps "the attempt counter is what bounds it"
+ * true rather than aspirational - a verdict cannot be obtained without one.
+ *
+ * The unattributed path is untouched: `adhoc-<epoch>.json` is unique per run, and
+ * those are per-turn gate receipts rather than attempt evidence.
+ */
 export function recordVerdict(root, verdict) {
   const id = verdict.task_id;
   const attempt = verdict.attempt;
@@ -426,6 +612,15 @@ export function recordVerdict(root, verdict) {
     ? `${id}-attempt-${String(attempt ?? 1).padStart(2, '0')}.json`
     : `adhoc-${Date.now()}.json`;
   const rel = `${PATHS.verdicts}/${name}`;
+  if (id && exists(abs(root, rel))) {
+    const prior = readJsonOrNull(abs(root, rel));
+    throw new Error(`a verdict for task ${id} attempt ${attempt} already exists at ${rel}`
+      + `${prior?.run_at ? ` (recorded ${prior.run_at}, verdict "${prior.verdict}")` : ''}. `
+      + 'Verdicts are write-once: they are the audit trail, and overwriting one destroys the '
+      + 'record of why a rework loop looped. If the code has changed, consume an attempt first '
+      + `- state.mjs --attempt ${id} - and the next verdict is attempt ${(attempt ?? 1) + 1}. `
+      + 'If it has not, the existing verdict already answers.');
+  }
   writeControl(root, rel, verdict, 'verdict');
   if (id) {
     const t = readControlTask(root, id);
@@ -1047,7 +1242,13 @@ async function main() {
         // from a caller remembering to look.
         const n = incrementAttempt(root, id);
         if (typeof agent === 'string') updateControlTask(root, id, { owner_agent: agent });
-        console.log(`task ${id}: attempt ${n} of ${readControlTask(root, id).max_attempts}`
+        // Both counters are printed when they disagree, because a disagreement is
+        // the record of a reset and the reader is about to see a verdict numbered
+        // from the second one.
+        const same = n.attempts === n.attempts_total;
+        console.log(`task ${id}: attempt ${n.attempts} of ${readControlTask(root, id).max_attempts}`
+          + (same ? '' : ` (try ${n.attempts_total} overall - the ceiling was reset; the verdict is`
+            + ` numbered ${String(n.attempts_total).padStart(2, '0')})`)
           + (typeof agent === 'string' ? `, owner ${agent}` : ''));
         return;
       }
@@ -1081,11 +1282,40 @@ async function main() {
         console.log(`task ${id}: blocked (${reason}); phase = plan`);
         return;
       }
+      case '--approve-spec': {
+        const id = arg('--approve-spec');
+        if (id === true || !id) die('usage: --approve-spec <task-id>');
+        const r = approveSpec(root, id);
+        console.log(`task ${id}: spec approved - ${r.spec} @ ${r.hash.slice(0, 12)}`);
+        console.log('This records YOUR decision. --advance-phase executes it and cannot make it, '
+          + 'and it refuses again if the spec changes.');
+        return;
+      }
+      case '--advance-phase': {
+        const id = arg('--advance-phase');
+        const from = arg('--from');
+        const to = arg('--to');
+        if (id === true || !id || typeof from !== 'string' || typeof to !== 'string') {
+          die('usage: --advance-phase <task-id> --from <phase> --to <phase>\n'
+            + `phases: ${PHASES.join(', ')}; legal steps: `
+            + Object.entries(PHASE_STEPS).map(([f, l]) => `${f}->${l.join('|') || '(terminal)'}`).join(' '));
+        }
+        const r = advancePhase(root, id, from, to);
+        console.log(`task ${id}: ${r.from} -> ${r.to}`
+          + (r.task ? ` (task ${r.task} moved with the project)` : ''));
+        return;
+      }
       case '--reset-attempts': {
         const id = arg('--reset-attempts');
         if (id === true || !id) die('usage: --reset-attempts <task-id>');
+        // THE IDENTITY COUNTER IS NOT RESET. Zeroing it would make the next
+        // verdict collide with a historical one, and recording it would destroy
+        // the evidence of the very failures the operator is resetting past.
+        const before = readControlTask(root, id);
         updateControlTask(root, id, { attempts: 0, status: 'pending', blocked_by: null });
-        console.log(`task ${id}: attempts reset to 0`);
+        console.log(`task ${id}: attempts reset to 0 of ${before.max_attempts}. `
+          + `${attemptsTotal(before)} previous attempt(s) and their verdicts are kept - the next `
+          + `verdict is numbered ${String(attemptsTotal(before) + 1).padStart(2, '0')}, not 01.`);
         return;
       }
       case '--waive': {

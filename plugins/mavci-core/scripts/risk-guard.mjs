@@ -779,6 +779,8 @@ function main() {
         '--attempt': 'consume one of the three attempts a task has, which is the counter that decides when a failing task stops being retried',
         '--task-status': 'change the authoritative status of a task, which is what the orchestrator routes on',
         '--block': 'declare a task terminally blocked, which stops the rework loop and moves the phase',
+        '--approve-spec': 'record the operator decision that unlocks every phase transition on a task',
+        '--advance-phase': 'move one task from a named phase to the next, which for build means making application code writable',
       };
 
       const flags = cmd.match(/--[a-z-]+/g) ?? [];
@@ -823,7 +825,37 @@ function main() {
          * the one who typed the command that started the run - is asked to confirm
          * a step it just asked for.
          */
-        const WORKFLOW_MOVES = ['--set-phase', '--begin-plan', '--attempt', '--task-status', '--block'];
+        /* WHICH IS WHICH, AND WHY - the operator asked for this to be stated here.
+         *
+         * `--advance-phase` is the ORCHESTRATOR'S transition and is exempt from the
+         * confirm. It is not a grant over the phase: it names the phase it moves
+         * FROM, refuses a step that is not in `PHASE_STEPS`, refuses a task with no
+         * recorded `spec_approved`, and refuses again if the spec has changed since
+         * that approval. Every one of those is a way a flat grant would have said
+         * yes. So what it authorises is carrying forward a decision that is already
+         * on disk - and the orchestrator cannot put it there.
+         *
+         * `--set-phase` is FREE: any phase, any time, no precondition, no task. It
+         * is the override, and it is what the orchestrator used to hold. It now
+         * CONFIRMS in the main session, which is the only line in this table that
+         * got stricter rather than looser in this release. An orchestrator that can
+         * reach it has no phase gate at all, so the confirm is the thing that keeps
+         * `--advance-phase`'s four refusals from being decorative.
+         *
+         * `--approve-spec` also confirms, and that is the point rather than an
+         * oversight: it IS the decision. A command that records an operator's
+         * approval without asking the operator is not a record of anything.
+         *
+         * `--begin-plan`, `--attempt`, `--task-status` and `--block` stay exempt.
+         * None of them is a free phase set: the first is the one-write plan entry,
+         * the middle two do not touch the project phase, and `--block` only ever
+         * moves it toward `plan`, which is the direction that makes application code
+         * UNwritable.
+         *
+         * Agents are denied all seven either way - this whole block is the
+         * main-session arm.
+         */
+        const WORKFLOW_MOVES = ['--begin-plan', '--advance-phase', '--attempt', '--task-status', '--block'];
         const f = privileged.find((x) => !WORKFLOW_MOVES.includes(x));
         if (f) confirm(`this will ${PRIVILEGED[f]}. Confirm you intend it.`);
       }

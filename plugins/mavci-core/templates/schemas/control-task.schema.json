@@ -13,7 +13,20 @@
     "phase": { "type": "string", "enum": ["plan", "build", "verify", "release"] },
     "status": { "type": "string", "enum": ["pending", "in_progress", "done", "failed", "blocked"] },
     "attempts": { "type": "integer", "minimum": 0 },
+    "attempts_total": { "type": "integer", "minimum": 0, "description": "Tries EVER, monotonic, never reset. Distinct from attempts, which counts tries against the CURRENT ceiling and is zeroed by --reset-attempts. Two facts, not two copies of one: the ceiling counter is a retry POLICY, this is a verdict IDENTITY. A verdict is named <id>-attempt-NN.json from THIS, so the name is unique for the life of the task. Naming it from attempts meant that after a reset the next verdict collided with a historical one and overwrote it, destroying precisely the evidence the operator reset past; found when write-once was enforced, and silent before that. OPTIONAL, not required: a required field under additionalProperties:false invalidates every record written before it (0.1.21). Readers default it to attempts, which is exactly right for a task that has never been reset - that is, every task predating this field." },
     "max_attempts": { "type": "integer", "minimum": 1, "maximum": 10 },
+    "spec_approved": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["at", "by", "spec_path", "spec_sha256"],
+      "description": "LOAD-BEARING, and named as such here because nothing else in this file is. It is the whole difference between the orchestrator EXECUTING an operator decision and the orchestrator MAKING one. --advance-phase refuses unless this is present and its spec_sha256 still matches the spec on disk; free --set-phase, which needs no approval, is operator-only and confirmed. Written ONLY by --approve-spec, which is operator-only and is not reachable by any agent - so the orchestrator can carry a task forward through a decision that was recorded, and cannot record one. THE HASH IS THE POINT: approval is of a specific spec, not of a task. Without it an approval is a permanent unlock and the architect could rewrite the spec afterwards, which is a stale exemption in the shape this repository keeps finding. Fields: at (ISO-8601 UTC), by (who approved - operator), spec_path, spec_sha256.",
+      "properties": {
+        "at": { "type": "string", "format": "date-time" },
+        "by": { "type": "string", "enum": ["operator"] },
+        "spec_path": { "type": "string" },
+        "spec_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
     "owner_agent": { "type": ["string", "null"] },
     "blocked_by": { "type": ["string", "null"], "maxLength": 200 },
     "verdicts": { "type": "array", "items": { "type": "string" } },

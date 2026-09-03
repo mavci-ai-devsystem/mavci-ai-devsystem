@@ -62,7 +62,13 @@ function gather(root) {
     // The control copy wins on every field they share - ARCHITECTURE 4.1. The
     // surface half contributes only `title` and `spec`, which the control half
     // does not carry at all.
-    return { title: surface.title ?? null, spec: surface.spec ?? null, ...control };
+    //
+    // `attempts_total` is defaulted HERE rather than in the router, so the router
+    // stays a pure function over a shape that is already complete. A task written
+    // before the field existed has never been reset, so `attempts` is its value.
+    const merged = { title: surface.title ?? null, spec: surface.spec ?? null, ...control };
+    if (typeof merged.attempts_total !== 'number') merged.attempts_total = merged.attempts ?? 0;
+    return merged;
   });
 
   const verdictDir = abs(root, PATHS.verdicts);

@@ -346,3 +346,106 @@ That no reader consults `active_task`. `lib/route.mjs` deliberately does not —
 it selects on `status` — and `mavci-builder.md` line 64 still names "phase, active
 task, retry counters" in its inputs, which must change in the same commit or the
 next builder cites the deleted field.
+
+---
+
+# Finding 5 — the operator's own instruction had no field to land in, and the fallback would have hidden it
+
+Recorded 2026-09-03, plugin 0.1.23. **Filed by the operator, about the operator's
+own instruction, and kept because the shape generalises past this instance.**
+
+The instruction was: `--advance-phase` refuses unless the task's spec is approved,
+and "the approval that unlocks it is the operator's, recorded in the task record".
+There was no field in the task record to record it in. In the operator's words:
+
+> The instruction was correct in intent and unimplementable as written, and only
+> the first real use would have shown it — advance-phase would have refused every
+> time and looked like a working gate. That is a rule that cannot be satisfied,
+> which is finding 16's shape arriving in something I specified rather than
+> something the system did.
+
+**It was worse than "no field", and the reason is worth keeping.** The orchestrator
+had already shipped holding a FLAT `--set-phase` grant. So a `--advance-phase`
+reading a field that did not exist would have refused every transition while the
+free command underneath went on working - the chain would have kept running, the
+new gate would have looked correct, and nothing would have surfaced. A gate that
+always refuses is indistinguishable from a gate that works until someone has a
+legitimate transition to make, and a working fallback path is what stops anyone
+ever having one.
+
+**Closed in the same turn** by `spec_approved` on the control task, and the pairing
+is the durable part: `check-provenance.mjs` D1 asserts the refusal and D3b asserts
+the permission, because either alone is satisfied by a build that is wrong in one
+direction. `check-route.mjs` A5-GATE and A5 are the same pairing one layer out.
+
+### What is still owed, and it is not the field
+
+The tier-2 confirm this design leans on is **inert**. `confirm()` emits
+`permissionDecision: "deferToUser"`, which carried-forward item 7 records as a
+value Claude Code's validator REJECTS - so the payload is discarded and the call
+falls through to the normal permission flow. `check-provenance.mjs` C5 asserts the
+guard COMPUTES a tier-2 decision for `--set-phase` and deliberately does not
+assert that anyone is prompted.
+
+So the classification is right and its delivery is a known-broken channel. The
+practical consequence: **free `--set-phase` is classified operator-only and is not
+actually gated at runtime.** What holds today is that the router never emits it,
+`skills/ship/` is told to report it as a router defect if it ever appears, and
+`check-route.mjs` A5b asserts the router names the scoped command and never the
+free one. Those are three prompt-and-test controls standing in for one runtime
+control, which is the honest description and not a good one.
+
+**This makes item 7 load-bearing where it previously was not.** When it was filed
+it affected tier-2 confirms in general; it now sits under the phase-authority
+split, which is the control that keeps the orchestrator from deciding what to
+build. Item 7's own condition still stands - do not change the string until the
+decision-control table can be quoted verbatim - and it should be read together
+with this finding rather than as a separate cosmetic issue.
+
+---
+
+# Finding 6 — one counter cannot be both a retry ceiling and a verdict identity
+
+Recorded 2026-09-03, plugin 0.1.23. **Closed in the same release; filed because
+the sequence that found it is the reusable part.**
+
+`--reset-attempts` zeroes `attempts`, so the next try was "attempt 1" again and
+its verdict path was the path of a historical file. The writer overwrote it -
+destroying the record of exactly the failures the operator had just reset past.
+
+**It was invisible until write-once was enforced.** Before that, the collision was
+a successful write. Enforcing write-once turned it into a refusal, and the refusal
+is the only reason it was found at all. That is the same sequence as every finding
+in this repository: the guard that fires is what reveals the defect the silence
+was hiding, and a guard added for one reason keeps paying for itself in reasons
+nobody predicted.
+
+The fix is `attempts_total` - tries ever, never reset - as the verdict identity,
+with `attempts` remaining the retry policy. Two facts, two fields, one writer
+each. The router had to be split the same way and was not: it keyed the verdict
+lookup on `attempts`, which is correct until a reset and then sends the builder
+back over work already verified. **Every pure-function case passed while that was
+broken**, because none had been through a reset; the end-to-end walk caught it.
+`check-route.mjs` R-RESET now asserts it so it does not depend on the walk
+happening to reset.
+
+### The assertion rule this produced, which is the general lesson
+
+The operator, on the attribution assertions:
+
+> a counter test at attempt 1 cannot distinguish correct from off-by-one, so the
+> assertion has to be at attempt 2 or it is decoration.
+
+At attempt 1, `attempts` is 1, `attempts_total` is 1, and a build writing either,
+or a hardcoded 1, or `verdicts.length + 1`, all produce the same file with the
+same field. The assertion passes against four candidate implementations and
+discriminates between none. Two is the smallest value where the answers separate.
+
+Demonstrated: mutations writing `attemptsTotal(control) - 1` and a hardcoded `1`
+are both caught by A2/A3/A3b **only because those now run at attempt 2**. A third
+mutation - the ceiling counter used as identity, which is the pre-fix reader - is
+caught by A7 alone and is green everywhere else.
+
+**Applies to every counter in this system**, and `attempts`/`attempts_total`/
+`max_attempts`/`GATE_MAX_CONTINUES` are four of them. A test at the first value of
+a counter is a test of the constant, not of the counter.

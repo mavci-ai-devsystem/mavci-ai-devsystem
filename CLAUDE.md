@@ -1625,6 +1625,116 @@ again for a reason nobody has met yet. Measured after: **0 of 60 scanned files
 desynchronised.** Assertion B, the honest wording on an unestablished match, is
 NOT shipped and stays open.
 
+#### 8. The phase authority split, and the evidence chain under it
+
+**Operator ruling, mid-release: phase transitions are not a flat grant.** The
+orchestrator shipped holding `--set-phase` - any phase, any time, no
+precondition, no task - which is not a transition but the absence of a phase
+gate. It now holds `--advance-phase <id> --from <x> --to <y>`, which refuses four
+ways: the task is not in `--from`, the step is not in `PHASE_STEPS`, the task has
+no recorded `spec_approved`, or the spec has changed since that approval. Free
+`--set-phase` keeps only the override role and confirms. **This is the only line
+in the risk table that got stricter rather than looser in this release.**
+
+`spec_approved` is what separates *executing* an operator decision from *making*
+one, which makes the field load-bearing and it says so where it is defined.
+`--approve-spec` is operator-only and writes it with the spec's content **hash** -
+without the hash an approval is a permanent unlock and the architect could
+rewrite the spec afterwards. The router gained `awaiting_approval`, so a written
+but unapproved spec stops at a person instead of the router emitting a step it
+knows will be refused - which would have burned the ship loop's ceiling and
+reported "the orchestrator gave up" instead of "nobody approved the spec".
+
+**`skills/ship/` reversed a position it had argued for, and the reversal is
+recorded rather than overwritten.** It had said it does NOT stop for spec review,
+because a wrong spec is recoverable - true, and the wrong test. The question is
+not whether the mistake is cheap; it is whether the orchestrator is entitled to
+decide what to build.
+
+**The operator filed a finding against their own instruction, and it is the
+sharpest thing in this release.** The instruction said the approval is "recorded
+in the task record" and there was no field to record it in - so
+`--advance-phase` would have refused every transition and looked like a working
+gate, while the flat `--set-phase` underneath went on working and hid it. That is
+finding 16's shape arriving in a specification rather than in code. The durable
+consequence is the assertion PAIRING: D1 asserts the refusal, D3b asserts the
+permission, because a gate that always refuses satisfies either one alone.
+`check-route.mjs` A5-GATE/A5 is the same pairing one layer out, and mutation V2 -
+the always-refusing gate - is caught only by the permission half.
+
+#### 9. Write-once verdicts, and one counter that was doing two jobs
+
+`recordVerdict` wrote atomically over whatever was there, so verifying the same
+attempt twice replaced the earlier verdict with no trace - and `verdicts[]`
+dedupes by path, so the control task could not show it either. ARCHITECTURE 4.3
+calls verdicts the audit trail and says they are never deleted; nothing enforced
+it. It now REFUSES and names the move that earns a second verdict: consume an
+attempt. That is what keeps "the attempt counter bounds the loop" true rather
+than aspirational.
+
+**Enforcing it exposed a defect the silence had been hiding.** `--reset-attempts`
+zeroes `attempts`, so the next try was "attempt 1" again and its verdict path was
+a historical file's - the old writer overwrote it, destroying the record of
+exactly the failures the operator had just reset past. Before write-once, that
+collision was a successful write. `attempts_total` is now the verdict identity
+(tries ever, never reset) and `attempts` remains the retry policy. **The router
+had to be split the same way and was not**: it keyed the verdict lookup on
+`attempts`, correct until a reset and then sending the builder back over verified
+work. Every pure-function case passed while that was broken; the end-to-end walk
+caught it, and R-RESET now asserts it directly.
+
+**The assertion rule that came out of it, from the operator:** *a counter test at
+attempt 1 cannot distinguish correct from off-by-one, so the assertion has to be
+at attempt 2 or it is decoration.* At attempt 1 both counters read 1, and a build
+writing either, or a hardcoded 1, or `verdicts.length + 1`, produce identical
+output. Moving A1-A3 to attempt 2 is what makes mutations S1 (off-by-one low) and
+S2 (hardcoded 1) visible at all; S3, the ceiling counter used as identity, is
+caught by the reset section alone.
+
+#### 10. The verifier and the scribe ran on real work
+
+Both had shipped without ever running. On `gate5`:
+
+**`mavci-verifier`, twice, on task 0002.** Attempt 1: it recorded
+`0002-attempt-01.json` - **attributed, not `adhoc-*`, which is the test that the
+provenance work landed** - reported two blockers with file and line, checked all
+six acceptance criteria individually, and reported `tsc` and `npm build` as **NOT
+CHECKED rather than passed** when they could not run. It wrote nothing: it holds
+no `Edit` or `Write`, natively. Attempt 2 passed, and it independently confirmed
+the numbering - `0002-attempt-02.json` with `attempt: 2`, `0002-attempt-01.json`
+untouched. A foreign reader verifying the fix, which is stronger than the fix's
+own test.
+
+**`mavci-scribe`, on a changelog entry and an ADR.** The ADR transcribes the
+operator's phase-authority decision from the five files that carry its reasoning,
+quotes each with a line range, and **every citation resolves**. It also recorded
+the thing it was asked to notice rather than paper over: *"There is no prior
+design document or ADR preceding this implementation. The earliest written form
+of this decision is the code that implements it."* It wrote only the two paths it
+was given.
+
+**What these runs do NOT establish, measured rather than assumed.** `gate-run.json`
+and `hook-run.json` in gate5 are still ABSENT after both dispatches: the hooks
+resolved their root to the session's `cwd` - the system repository - found no
+manifest and stayed silent. So neither run exercised the hook layer. The
+verifier's containment held anyway because it is NATIVE; the scribe's write scope
+is hook-only and was checked after the fact by inspection instead of enforced.
+That is weaker and is said plainly.
+
+#### 11. Two more found by running it
+
+**`--advance-phase` moved the project phase out from under another task.**
+Advancing 0002 succeeded while 0001 was `in_progress`, and the project phase is
+shared - the in-progress task owns it. The invariant was enforced at `--attempt`
+and `--task-status` and not here: a rule with a door.
+
+**And it delegated to `setPhase`, which GUESSES the task** by `in_progress`
+status. That heuristic is right for a global override and wrong for a command
+handed a task id: it moved the project and left a `pending` task behind -
+the exact divergence this release closed, reintroduced by the scoped command
+built to make transitions precise. Caught by D3b, which asserts both halves
+rather than the command's exit status.
+
 #### What is NOT in this release, and is filed rather than guessed at
 
 `pending-system-change-0.1.23.md` findings 2-4: the risk guard reading every flag

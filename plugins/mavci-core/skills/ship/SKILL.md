@@ -59,11 +59,19 @@ omission.
 | `rework` | run the steps, then delegate to `@agent-mavci-builder` with the task id, the spec path, **and the failing verdict's `checks[]` verbatim** — file paths and line numbers. Do not summarise them. |
 | `verify` | run the steps, then delegate to `@agent-mavci-verifier` with the task id. It runs `verify.mjs --record --task <id>`; you do not run it for it. |
 | `document` | run the steps, then delegate to `@agent-mavci-scribe` with the task id, the verdict path and the spec path, asking for a changelog entry and a task summary. Run the closing steps after it returns, not before. |
+| `awaiting_approval` | **stop.** A spec is written and the operator has not approved it, or it changed after approval. Print `why` and the acceptance criteria. **You may not run `--approve-spec` yourself** - it records the operator's decision, and a decision recorded without them is not a record of anything. |
 | `blocked` | **stop.** Print `why` and every step verbatim. Do not retry, do not reset attempts, do not waive. |
 | `release_gate` | **stop.** Print `why` and the steps. The release gate and the deploy behind it are the operator's. |
 | `unverified` | **stop.** Enforcement did not run. Print `why`. Nothing may be built on unchecked code. |
 | `idle` | **stop.** Ask what to build. |
 | `not_connected` | **stop.** Point at `/mavci-core:connect`. |
+
+**One of those six stopping actions is new, and it is the point of the chain**
+**rather than an interruption to it.** `awaiting_approval` is where a written spec
+waits on a person. Everything downstream of it - the build, the verdict, the
+rework loop, the release gate - is the system carrying out a decision that is on
+disk. Without it the orchestrator would be deciding what to build, which is a
+different act with the same shape.
 
 After each agent returns, run the router again. Do not assume the answer.
 
@@ -84,12 +92,19 @@ with no ceiling one level up.
 - **Do not fix a violation yourself** on a `rework`. The builder does that. You
   are the orchestrator; an orchestrator that edits application code is the
   builder with a different name and none of the builder's constraints.
-- **Do not move the phase except through the steps the router names.** The phase
-  gate is what decides whether application code is writable at all.
-- **Do not run `--reset-attempts`, `--waive`, `--reseal`, `--baseline-init` or
-  `retro.mjs --apply`.** Those are the operator's, they are gated by caller, and
-  the router never names them as a step you take — only as a move the operator
-  might make.
+- **Do not move the phase except through the steps the router names**, and never
+  with `--set-phase`. The router names `--advance-phase <id> --from <x> --to <y>`,
+  which is scoped to one task, refuses a step that is not the next one, refuses a
+  task whose spec the operator has not approved, and refuses again if the spec
+  changed after that approval. `--set-phase` is the free override with none of
+  those refusals; it is the operator's and it confirms. If a router step ever
+  reads `--set-phase`, that is a defect in the router - report it, do not run it.
+- **Do not run `--approve-spec`.** It is the one command in the chain whose whole
+  purpose is to record that a person decided something.
+- **Do not run `--reset-attempts`, `--waive`, `--reseal`, `--baseline-init`,
+  `--set-phase` or `retro.mjs --apply`.** Those are the operator's, they are gated
+  by caller, and the router never names them as a step you take — only as a move
+  the operator might make.
 - **Do not continue past a `blocked`, `release_gate`, `unverified` or `idle`.**
 
 ## Why this is model-invocable when the other commands are not
@@ -105,18 +120,30 @@ reachable from an ordinary sentence.
 authorises `state.mjs` by CALLER, not by which command invoked it: the main
 session is the main session whether the operator typed `/mavci-core:ship` or you
 selected it, and every privileged flag stays denied to every subagent either way.
-The three operator gates — `release_gate`, `blocked`, `unverified` — are returned
-by the router with `dispatch: null` and are asserted to be, in
-`check-route.mjs`. Nothing here routes around a control; it removes the operator
+The four operator gates — `awaiting_approval`, `release_gate`, `blocked`,
+`unverified` — are returned by the router with `dispatch: null` and are asserted
+to be, in `check-route.mjs`. Nothing here routes around a control; it removes the operator
 from the handoffs, which were never a control in the first place — only an
 absence of automation that had been described as a design.
 
-## The spec review, which this does NOT stop for
+## The spec review, which this DOES stop for
 
-`/mavci-core:plan` step 4 stops and asks the operator whether the acceptance
-criteria are right before building. This command prints them and continues, and
-that is a deliberate difference rather than an oversight: a wrong spec is
-recoverable — it surfaces as a failing verify and costs an attempt out of three —
-so it is not in the set of things the operator must approve. An operator who
-wants that gate has it: `/mavci-core:plan "<request>"` is unchanged and still
-stops there. The gates this command does not touch are the irreversible ones.
+**This section said the opposite until the operator ruled otherwise, and the
+reversal is worth reading rather than quietly overwriting.** The argument for
+continuing was that a wrong spec is recoverable: it surfaces as a failing verify
+and costs one attempt out of three. That is true and it was the wrong test. The
+question is not whether the mistake is recoverable — it is whether the
+orchestrator is *deciding what to build*. It has no business doing that however
+cheap the mistake would be, and the cost of an error is a separate matter from
+who is entitled to make it.
+
+So `awaiting_approval` is a real stop. The operator reads the acceptance criteria
+and runs `--approve-spec <id>`, which records the decision on the task with the
+spec's content hash. Everything after that point — the build, the verdict, the
+rework loop, the close — is the chain carrying out a decision that is on disk,
+and `--advance-phase` refuses on any task where that decision is absent or where
+the spec has changed since. The hash is what stops an approval becoming a
+permanent unlock.
+
+This is the difference between one prompt that runs the engineering process and
+one prompt that also chooses the work. The first is what this command is for.

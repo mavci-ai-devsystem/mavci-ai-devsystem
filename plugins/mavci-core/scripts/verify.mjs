@@ -43,7 +43,7 @@ import {
 } from './lib/fsx.mjs';
 import { rulesFor, ruleById } from './rules/index.mjs';
 import {
-  loadContext, validateAll, verifyIntegrity, recordVerdict, readControlTask,
+  loadContext, validateAll, verifyIntegrity, recordVerdict, readControlTask, attemptsTotal,
   isBaselined, activeWaiver, pluginVersion, projectRoot,
 } from './state.mjs';
 
@@ -380,7 +380,11 @@ async function main() {
         + 'nothing for a verdict to be about. Run `state.mjs --attempt ' + task_id + '` before building.');
       process.exit(2);
     }
-    attempt = control.attempts;
+    // THE IDENTITY COUNTER, not the ceiling counter. `attempts` is zeroed by
+    // --reset-attempts, so naming a verdict from it makes the next one collide
+    // with a historical file. `attemptsTotal` falls back to `attempts` for a task
+    // that has never been reset, which is every task predating the field.
+    attempt = attemptsTotal(control);
   }
 
   if (!exists(abs(root, PATHS.manifest))) {
@@ -399,7 +403,24 @@ async function main() {
     return;
   }
 
-  if (record) recordVerdict(root, verdict);
+  if (record) {
+    try {
+      recordVerdict(root, verdict);
+    } catch (err) {
+      /* A REFUSAL IS NOT A FAULT, AND MUST NOT BE WORDED AS ONE.
+       *
+       * The write-once guard throws, and `main().catch` prints "verify.mjs
+       * crashed: ..." over the top of it. That is finding 24's shape: the
+       * decision is right and the label sends the reader somewhere else - here,
+       * to filing a checker bug instead of consuming an attempt. It also matters
+       * to `gate.mjs`, whose `interpretRunError` classifies a crash as a checker
+       * fault, blocks, and writes the UNVERIFIED marker. This path is reachable
+       * only with `--task`, which the gate never passes, but a message that is
+       * only safe because of who calls it is one caller away from being wrong. */
+      console.error(err.message);
+      process.exit(2);
+    }
+  }
 
   if (format === 'github') {
     const ann = formatGithub(verdict);
