@@ -395,12 +395,31 @@ actually gated at runtime.** What holds today is that the router never emits it,
 free one. Those are three prompt-and-test controls standing in for one runtime
 control, which is the honest description and not a good one.
 
-**This makes item 7 load-bearing where it previously was not.** When it was filed
-it affected tier-2 confirms in general; it now sits under the phase-authority
-split, which is the control that keeps the orchestrator from deciding what to
-build. Item 7's own condition still stands - do not change the string until the
-decision-control table can be quoted verbatim - and it should be read together
-with this finding rather than as a separate cosmetic issue.
+### PRIORITY CHANGE: carried-forward item 7 moves up, and the reason matters
+
+**Item 7 is now the next thing in this queue after gap 1's remainder.** It was
+filed as a correctness fix on a payload value nothing was reading; it is now the
+missing runtime control that three prompt-and-test controls are standing in for.
+
+**Its severity changed because something started depending on it, not because the
+defect changed.** The operator's wording, and the distinction is the point: the
+`deferToUser` bug is byte-for-byte what it was when it was filed. What changed is
+that the phase-authority split was built on top of a tier-2 confirm, so a value
+the runtime rejects now sits underneath the control that keeps the orchestrator
+from deciding what to build. Nothing about the defect is worse. The consequence of
+leaving it is.
+
+That is a class of priority change worth naming, because a queue ordered only by
+severity-at-filing never re-orders: a defect's cost is a function of what has been
+built over it since, and nothing in this system re-reads the queue when a new
+dependency lands. **Every other item in this file should be re-read the same way
+whenever something is built on it.**
+
+Item 7's own condition is unchanged and still binding: do not change the string
+until the decision-control table loads and the accepted value can be quoted
+verbatim. `ask` versus `defer` is exactly the adjacent-but-wrong distinction that
+produced both this and the Stop gate, and moving an item up the queue is not
+permission to guess at it faster.
 
 ---
 
@@ -449,3 +468,51 @@ caught by A7 alone and is green everywhere else.
 **Applies to every counter in this system**, and `attempts`/`attempts_total`/
 `max_attempts`/`GATE_MAX_CONTINUES` are four of them. A test at the first value of
 a counter is a test of the constant, not of the counter.
+
+### The finding under the finding, which is larger than the counter
+
+The operator, on what this actually was:
+
+> I pointed at verdict identity; the actual hole was one counter doing retry
+> policy and evidence identity at once, and the router keyed on the wrong half -
+> correct until a reset, then sending builder back over verified work. Every
+> pure-function case passing while that was broken is the shape this session keeps
+> producing, and it is worth its own line: **a test suite over pure functions
+> cannot see a caller reading the wrong field.**
+
+That is a general limit and it applies to every `lib/` module in this repository,
+which is the direction the architecture has deliberately been moving:
+`lib/release-gate.mjs`, `lib/route.mjs` and `lib/coverage.mjs` are all pure
+decisions extracted so they can be asserted without running the real thing. The
+extraction is right. What it cannot see is the ONE THING it moved out of view -
+which field the caller passes into it.
+
+`route(input)` was correct for every input `check-route.mjs` handed it, including
+inputs where `attempts` and `attempts_total` differed, because the test built
+those inputs the same way the router wanted them. `route.mjs`'s CLI - the
+gatherer, which is not pure and is not covered by those cases - read `attempts`
+and passed it as identity. **The decision was right and the argument was wrong**,
+and no amount of case coverage over the decision reaches that.
+
+Two consequences, and only the first is cheap:
+
+1. **A pure module needs at least one end-to-end case that goes through its real
+   caller**, over real files, in a state where the fields being conflated actually
+   DIFFER. `check-route.mjs`'s F walk is that case, and it is the only thing that
+   caught this; every one of the 40-odd pure cases was green. A walk that never
+   resets never separates the counters, which is why R-RESET now asserts it
+   directly rather than relying on the walk to wander through it.
+
+2. **Extracting a decision moves the defect to the boundary; it does not remove
+   it.** Every `lib/` extraction in this repository should be read as having
+   traded a hard-to-test decision for an untested argument list. That trade is
+   still worth making - a decision nobody can assert is worse - but the ledger
+   should say what was bought and what was moved. Nothing currently checks that
+   `release-check.mjs` passes the right `isolation`, or that `guardian-record.mjs`
+   passes the right coverage numbers, for exactly the same reason.
+
+**A candidate check, not yet written and deliberately not guessed at:** for each
+pure module, assert that every field its decision reads is one the CLI demonstrably
+writes, over a fixture where those fields hold DIFFERENT values. Whether that is
+expressible without a type system is an open question - the honest note is that
+the property is clear and the mechanism is not.
