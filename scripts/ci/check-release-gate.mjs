@@ -15,7 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
-const { assessReleaseReadiness, selectProjectRecord, REFUSAL, RECORD_SOURCE, UNREADABLE } = await import(
+const { assessReleaseReadiness, isolationOf, selectProjectRecord, REFUSAL, RECORD_SOURCE, UNREADABLE } = await import(
   pathToFileURL(path.join(ROOT, 'plugins/mavci-core/scripts/lib/release-gate.mjs')).href);
 
 const failures = [];
@@ -189,6 +189,66 @@ check([...seen].every((c) => REFUSAL.includes(c)),
 check(seen.size === REFUSAL.length,
   `every declared refusal code is reachable and exercised (${seen.size}/${REFUSAL.length})`);
 
+/* ------------------------------- THE GUARDIAN EXEMPTION, IN BOTH DIRECTIONS
+ *
+ * Found by running the chain on `gate5`, which declares `tenancy.isolation:
+ * "rls"`. The task passed, the checker was clean, and this gate refused with
+ * `guardian_record_absent` - telling the operator to run a command whose own
+ * step 1 refuses to run on an RLS project. A deadlock with two exits, both of
+ * them worse than the deadlock: run guardian against a mechanism it does not
+ * evaluate, or hand-write a record, which is exactly what this gate's closing
+ * line tells the operator never to do.
+ *
+ * THIS IS A RELAXATION, so it is asserted in both directions, and the deny half
+ * carries more assertions than the allow half. 0.1.12 item 5: a test of the
+ * allow half alone goes green on a gate that has stopped denying anything, and
+ * that is precisely the direction where one-sided evidence is worthless.
+ */
+console.log('');
+{
+  const AF = 'application-filters';
+  const exempt = assessReleaseReadiness({ runningVersion: V, guardianRecord: null, isolation: 'rls' });
+  check(exempt.ok,
+    `an RLS project with no guardian record PASSES - got ${JSON.stringify(codes(exempt))}`);
+  check((exempt.notes ?? []).some((n) => /rls/.test(n) && new RegExp(AF).test(n)),
+    'and SAYS the arm was skipped, naming both the project\'s isolation and guardian\'s - '
+    + `a gate that skips silently claims more than it checked. notes: ${JSON.stringify(exempt.notes)}`);
+
+  // ---- the deny half. Five ways the exemption must NOT apply. ----
+  const denied = [
+    ['no manifest at all (isolation null)',
+      { guardianRecord: null, isolation: null }],
+    ['an empty isolation string, which is a malformed manifest and not an exemption',
+      { guardianRecord: null, isolation: '' }],
+    ['a non-string isolation, which is a caller trying to assert one',
+      { guardianRecord: null, isolation: true }],
+    ['an application-filters project, where guardian is exactly the point',
+      { guardianRecord: null, isolation: AF }],
+    ['an RLS project whose record is a CORPUS fixture - absence is exempt, a bad record is not',
+      { guardianRecord: corpusRec(), isolation: 'rls' }],
+    ['an RLS project whose real record FAILED',
+      { guardianRecord: rec({ verdict: 'fail' }), isolation: 'rls' }],
+    ['an RLS project whose record is unreadable',
+      { guardianRecord: UNREADABLE, isolation: 'rls' }],
+    ['an RLS project in an UNVERIFIED session - a different arm entirely',
+      { guardianRecord: null, isolation: 'rls', unverified: { fault: 'crash' } }],
+  ];
+  for (const [label, input] of denied) {
+    const r = assessReleaseReadiness({ runningVersion: V, ...input });
+    check(!r.ok, `still REFUSES: ${label} - got ${r.ok ? 'PASS' : JSON.stringify(codes(r))}`);
+  }
+
+  // The exemption input is derived from the manifest, and `isolationOf` is the
+  // only thing that derives it. Anything that is not a non-empty string is null,
+  // so a malformed manifest refuses rather than exempting.
+  check(isolationOf({ tenancy: { isolation: 'rls' } }) === 'rls',
+    'isolationOf reads a real manifest value');
+  for (const [label, m] of [['null', null], ['{}', {}], ['no tenancy', { stack: {} }],
+    ['empty string', { tenancy: { isolation: '' } }], ['non-string', { tenancy: { isolation: 3 } }]]) {
+    check(isolationOf(m) === null, `isolationOf(${label}) is null, so the gate refuses rather than exempting`);
+  }
+}
+
 console.log('');
 if (failures.length) {
   console.log(`release gate check FAILED (${failures.length}):`);
@@ -196,4 +256,5 @@ if (failures.length) {
   process.exit(1);
 }
 console.log('release gate: allow-lists the verdict AND the record source, recomputes coverage,');
-console.log('             treats unreadable as absent, and selects project evidence in a tested function');
+console.log('             treats unreadable as absent, selects project evidence in a tested function,');
+console.log('             and exempts guardian only where the MANIFEST says its question does not apply');

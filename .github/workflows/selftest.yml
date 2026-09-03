@@ -50,6 +50,25 @@ jobs:
       - name: The plan transition is one write, and each version field has one reader
         run: node scripts/ci/check-state-transition.mjs
 
+      # A verdict names the task attempt that produced it, and the attempt counter
+      # that names it can actually move. Both were modelled and neither had a
+      # writer: every verdict on the first real project is adhoc-<epoch>, every
+      # control task verdicts[] is empty, and incrementAttempt and blockTask were
+      # exported and called from nowhere. The discriminating assertion is A4 - a
+      # run asked to attribute and unable to must REFUSE, because a fallback to
+      # adhoc is indistinguishable downstream from a successful attribution.
+      - name: A verdict names its task attempt, and the retry ceiling is reachable
+        run: node scripts/ci/check-provenance.mjs
+
+      # The chain had no edge from a FAILED verify back to the builder, and could
+      # not have had one: the builder refuses unless the phase is build, and a
+      # failed verify leaves it at verify. The retry ceiling was being tracked for
+      # a loop with no entrance. R-REWORK is that edge; R-CEILING is what ends it;
+      # R-ADHOC is finding 25 one directory over - a per-turn gate verdict must
+      # decide nothing.
+      - name: The router has every edge, including the rework loop
+        run: node scripts/ci/check-route.mjs
+
       # Prediction 2a of the guardian design: guardian has two properties and only
       # one of them needs a model. The worklist, the enumeration and the coverage
       # arithmetic are node scripts with no model in the loop, so they belong HERE -

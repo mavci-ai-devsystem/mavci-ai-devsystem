@@ -47,6 +47,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PHASES } from '../../plugins/mavci-core/scripts/config.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const DEFS = path.join(ROOT, 'agent-defs');
@@ -63,6 +64,40 @@ const SKILL_TOOLS = ['Skill', 'SlashCommand'];
 
 /** A `.mavci/...` path named inside backticks in an instruction. */
 const MAVCI_PATH = /`(\.mavci\/[^`]*)`/g;
+
+/**
+ * The startup phase gate, and the phase value it compares against.
+ *
+ * RULE 3 - A GATE MUST NAME A GATE VALUE THAT EXISTS. Rendered from
+ * `DEFAULT_STARTUP_STEP_2`, which substitutes `def.phase` into "If `phase` is not
+ * `X`". `PHASES` is the closed enum every `state.json` is validated against, so an
+ * agent whose X is outside it compares a real value against a value nothing can
+ * ever write, stops, and reports `wrong_phase:<actual>` on EVERY invocation.
+ *
+ * That is not a hypothetical. `scribe` declares `phase: "any"`, meaning "runs in
+ * any phase"; the contract rendered it as a literal, and scribe has been unable to
+ * start since it shipped. Nobody noticed because no skill invokes scribe - an
+ * unrun component looks identical to a working one, which is the whole reason this
+ * file exists.
+ *
+ * It is finding 20's shape and, more precisely, it is the SAME defect 0.1.21 fixed
+ * one step further down. `NO_STANDARDS_STEP_3` was added because step 3 told an
+ * agent with no packs to "invoke these skills now" over an empty list. Step 2, in
+ * the block directly above it, was telling the same agent to wait for a phase that
+ * does not exist. The fix walked past it.
+ */
+const PHASE_GATE = /If `phase` is not `([^`]+)`/;
+
+/** The affirmative statement an any-phase agent gets instead of a gate. */
+const ANY_PHASE_NOTE = /You are not phase-scoped/;
+
+/**
+ * A dispatcher's phase check, for an agent whose gate legitimately lives in the
+ * skill that dispatches it. Deliberately loose on prose and strict on the two
+ * things that matter: it names the state file, and it names the phase.
+ */
+const DISPATCHER_GATE = (phase) =>
+  new RegExp('state\.json[^]{0,400}`' + phase + '`|`' + phase + '`[^]{0,400}state\.json');
 
 /**
  * Does read_scope permit this path? Deny wins, and an unlisted path under a
@@ -91,6 +126,7 @@ console.log('every instruction is one the agent addressed can obey:');
 
 let toolChecks = 0;
 let pathChecks = 0;
+let gateChecks = 0;
 
 for (const file of defs) {
   const def = JSON.parse(fs.readFileSync(path.join(DEFS, file), 'utf8'));
@@ -120,6 +156,41 @@ for (const file of defs) {
   check(refused.length === 0,
     `${def.slug}: all ${named.length} .mavci/ path(s) named in its instructions are inside its read scope`
     + (refused.length ? ` - REFUSED: ${refused.join(', ')}` : ''));
+
+  /* ---- rule 3: a phase gate must name a reachable phase ------------------ */
+  const gate = PHASE_GATE.exec(text);
+  gateChecks += 1;
+  if (gate) {
+    check(PHASES.includes(gate[1]),
+      `${def.slug}: its startup gate waits for phase \`${gate[1]}\`, which is `
+      + `${PHASES.includes(gate[1]) ? 'in' : 'NOT in'} the phase enum (${PHASES.join('|')})`
+      + (PHASES.includes(gate[1]) ? '' : ' - this agent can never start'));
+  } else if (def.phase === 'any') {
+    // An agent that is genuinely not phase-scoped renders no gate, and the
+    // contract says so affirmatively instead of saying nothing.
+    check(ANY_PHASE_NOTE.test(text),
+      `${def.slug}: declares phase \`any\` and is TOLD it is not phase-scoped`
+      + (ANY_PHASE_NOTE.test(text) ? '' : ' - it renders no gate and no statement, so it is told nothing'));
+  } else if (typeof def.phase_gate === 'string' && def.phase_gate.startsWith('dispatcher:')) {
+    // DECLARED EXEMPTION, AND IT IS ASSERTED, NOT LISTED. The named dispatcher
+    // must still contain a phase check naming this agent's phase - so a dispatcher
+    // that stops checking fails HERE, rather than leaving a stale exemption that
+    // quietly excuses its own replacement. Same construction as check-pretag's
+    // EXCLUDED_STEPS, and for the reason 0.1.14 wrote down: an exemption expressed
+    // by absence is indistinguishable from a block that was lost.
+    const rel = def.phase_gate.slice('dispatcher:'.length);
+    const disp = path.join(ROOT, rel);
+    const found = fs.existsSync(disp) && DISPATCHER_GATE(def.phase).test(fs.readFileSync(disp, 'utf8'));
+    check(found,
+      `${def.slug}: renders no gate and declares the check lives in ${rel}, which `
+      + (found ? `does check for phase \`${def.phase}\`` : 'does NOT check the phase - the exemption is now stale'));
+  } else {
+    // An agent that declares a real phase, renders no gate and declares no
+    // dispatcher is unconstrained by phase and nobody decided that.
+    check(false,
+      `${def.slug}: declares phase \`${def.phase}\`, renders NO startup phase gate, and `
+      + 'declares no `phase_gate` exemption - nothing checks its phase anywhere');
+  }
 }
 
 /* ---- negative controls. A static check over a healthy tree cannot tell
@@ -136,8 +207,20 @@ check(!readable({ allow: ['.mavci/control/guardian/wl-X.json'], deny: ['.mavci/*
 check(readable({ allow: ['.mavci/control/guardian/X'], deny: ['.mavci/**'] },
   '.mavci/control/guardian/X'),
   'negative control: and the one allowed exception still reads as permitted');
-check(toolChecks === defs.length && pathChecks > 0,
-  `negative control: ${toolChecks} definition(s) examined and ${pathChecks} path(s) actually tested`);
+check(PHASE_GATE.exec('Read `.mavci/control/state.json`. If `phase` is not `any`, **stop** and')?.[1] === 'any',
+  'negative control: the exact scribe wording rule 3 was filed against IS matched, and yields `any`');
+check(!PHASES.includes('any'),
+  'negative control: `any` is genuinely outside the phase enum - the rule is not vacuous');
+check(PHASE_GATE.exec('If `phase` is not `build`, **stop**')?.[1] === 'build',
+  'negative control: a healthy gate is matched and yields its phase, so a match failure cannot pass as absence');
+check(DISPATCHER_GATE('verify').test('`.mavci/control/state.json` does not say `verify`, stop'),
+  'negative control: the guardian dispatcher wording IS matched by the dispatcher probe');
+check(!DISPATCHER_GATE('verify').test('This command emits a worklist and dispatches guardian.'),
+  'negative control: a dispatcher that does NOT check the phase is not matched');
+check(!DISPATCHER_GATE('build').test('`.mavci/control/state.json` does not say `verify`, stop'),
+  'negative control: the probe is phase-specific - a check for another phase does not satisfy it');
+check(toolChecks === defs.length && pathChecks > 0 && gateChecks === defs.length,
+  `negative control: ${toolChecks} definition(s) examined, ${pathChecks} path(s) and ${gateChecks} phase gate(s) actually tested`);
 
 console.log('');
 if (failures.length) {
@@ -145,5 +228,5 @@ if (failures.length) {
   for (const f of failures) console.log(`  - ${f}`);
   process.exit(1);
 }
-console.log(`agent contract: ${defs.length} definition(s); no agent is ordered to use a tool it lacks`);
-console.log('                or to read a path its own scope refuses');
+console.log(`agent contract: ${defs.length} definition(s); no agent is ordered to use a tool it lacks,`);
+console.log('                to read a path its own scope refuses, or to wait for a phase that cannot occur');

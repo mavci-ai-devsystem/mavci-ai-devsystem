@@ -144,3 +144,165 @@ Also owed either way, and independent of both: pin `stdio` at
 `check-scribe-refs.mjs:182`. Do not fix it before assertion A is watched failing
 — it is currently the only live instance, and removing it first leaves the
 assertion nothing to catch.
+
+---
+
+# Finding 2 — the risk guard reads every flag as a command; state.mjs dispatches on the first
+
+Target: `plugins/mavci-core/scripts/risk-guard.mjs`, the `state.mjs` classifier
+(~line 781), against `plugins/mavci-core/scripts/state.mjs` `main()` (~line 900).
+
+Recorded 2026-09-03, plugin 0.1.22, from the session that built the chain router.
+**Filed rather than fixed, deliberately: it is a RELAXATION of a guard, and the
+one change this repository will not make opportunistically in the middle of
+something else.**
+
+## The disagreement
+
+`state.mjs` dispatches on the FIRST `--` token:
+
+    const cmd = argv.find((a) => a.startsWith('--'));
+
+`risk-guard` reads EVERY `--` token and treats each as a command:
+
+    const flags = cmd.match(/--[a-z-]+/g) ?? [];
+    ...
+    if (!known.length || flags.some((f) => !AGENT_OK.includes(f))) { deny(...) }
+
+So an agent running the **agent-safe**
+
+    node scripts/state.mjs --new-task "add a health endpoint" --spec .mavci/tasks/0007.md
+
+is denied — on `--spec`, which is not a command at all but the value flag of the
+command that was already classified agent-safe. The same holds for `--path`,
+`--reason` and `--days` on `--waive`, and for the three lifecycle verbs added in
+0.1.23 (`--agent`, `--status`, `--reason`).
+
+It is 0.1.13's `findingHeading()`/`FINDING_RE` lesson unlearned one file over: a
+writer and a reader with two independent notions of the same thing, which agree
+until an argument is added.
+
+## Why it is not urgent, and why it must still be fixed
+
+Not urgent: the orchestrator runs in the MAIN SESSION, where the sub-flag arm is
+never consulted — the main-session path only looks for a privileged flag to
+confirm. Nothing in the chain is blocked today.
+
+Must be fixed: the architect is the agent that writes specs, and the moment
+anything wants an agent to allocate its own task with a spec pointer, this denies
+it with a message about a flag the operator will read as a bug in the command.
+And a guard that denies correct usage is 0.1.12 item 5's finding exactly — **a
+guard that fires wrongly and often trains everyone to turn it off**.
+
+### The assertion, and the broken build it must catch
+
+`check-risk-guard.mjs` has 80 cases. Add both halves, and **watch the deny half
+against the fixed build, not only the allow half**:
+
+**A — the allow half.** `--new-task "x" --spec p` from an agent is ALLOWED.
+*Broken build: today's tree.* It denies, naming `--spec`.
+
+**B — the deny half, which is where a relaxation goes wrong.** Every one of these
+must STILL be denied to an agent after the change, and each is a distinct way the
+looser reading could leak:
+
+- `--set-phase build` — a privileged command in first position.
+- `--new-task "x" --set-phase build` — a privileged flag in a LATER position.
+  The command is agent-safe and the tail is not; the scan for privileged flags
+  must stay over the whole command even after the unknown-flag scan narrows.
+- `--new-task "x" --demolish` — an unrecognised flag that is not a declared value
+  flag of `--new-task`. Fail-closed must survive: a subcommand added later is
+  classified deliberately or not at all.
+- `--waive x --path p --reason r --days 5` — still privileged, still confirmed.
+
+**The shape of the fix that satisfies both.** The command is `flags[0]`, the same
+rule the dispatcher uses. Value flags are declared PER COMMAND, in a table beside
+`AGENT_OK` and `PRIVILEGED`, so an undeclared flag still denies. The scan for
+privileged flags stays over the whole command text — it is the deny direction and
+it is cheap to keep broad.
+
+**Do not narrow the privileged scan while widening the value-flag one.** They
+look like one change and they are opposite in sign.
+
+---
+
+# Finding 3 — a subagent cannot be rooted at another project, and nothing says so
+
+Target: `docs/ARCHITECTURE.md` (section 2 or 3), and the Gate protocol wherever it
+is written down.
+
+Recorded 2026-09-03, plugin 0.1.22. **Documentation, not code — filed so the next
+session does not spend the same hour discovering it.**
+
+## The observation
+
+Established by dispatching `mavci-core:mavci-scribe` from a session rooted in the
+system repository, with a prompt naming an absolute path to a connected project:
+
+- the subagent's working directory is **the session's**, not the target's;
+- `CLAUDE_PROJECT_DIR` is **not set** in the subagent's environment.
+
+Scribe read `.mavci/project.json` relative to its cwd, did not find one, and
+correctly reported `blocked_by: "not_connected"` — its startup step 1, before its
+phase gate.
+
+## Why it matters more than it looks
+
+`projectRoot()` is `process.env.CLAUDE_PROJECT_DIR || process.cwd()`, so an agent
+resolves the project from its cwd. The hooks resolve it separately, from
+`input.cwd` in the hook payload — also the session's. So a run that redirected an
+agent at another project by hand would be a run with **`risk-guard` silent**: no
+phase gate, no edit scope, no control-plane guard, because the hooks would
+conclude they are not in a Mavci project and stay quiet, which is correct
+behaviour (6.23) and exactly wrong for that use.
+
+**A chain proven with the gates off is not the chain.** So:
+
+> A multi-agent end-to-end run must happen in a session whose working directory
+> IS the project. A session elsewhere can drive the deterministic half — router,
+> state machine, attribution, rework, ceiling, release gate — and cannot dispatch
+> the agents.
+
+This is what Gate 3 and Gate 4 did implicitly, by running in `gate4c`. It was
+never written down as a requirement, so it reads as a convenience until someone
+tries the other thing.
+
+### The assertion
+
+None available. This is a property of the harness, not of our code, and there is
+nothing in the plugin that can observe it. Recording it in ARCHITECTURE is the
+whole of the fix, and the honest note is that it will go stale silently if the
+harness changes.
+
+---
+
+# Finding 4 — `active_task` is a second copy of a fact the task records already carry
+
+Target: `plugins/mavci-core/templates/schemas/state.schema.json`,
+`plugins/mavci-core/scripts/state.mjs`.
+
+Recorded 2026-09-03, plugin 0.1.22. **This is carried-forward item 5's
+`active_task` decision, restated because 0.1.23 made the field truthful without
+settling whether it should exist — and a half-fixed field is exactly the thing a
+later reader mistakes for a finished one.**
+
+0.1.22 gave the field a writer (`beginPlan`) and no clearer, so after a task
+closed it went on naming it. 0.1.23 clears it on every terminal status, which
+stops it lying. It does not stop it being a **second writer for one fact**:
+"which task is in progress" is already carried by `status: "in_progress"` on the
+control task and enforced at the transition by `assertSoleInProgress`.
+
+Item 5's decision stands: **delete it.** What blocks that is not the decision but
+the mechanics — `state.schema.json` has `additionalProperties: false`, so removing
+the field is a breaking read against every existing `state.json`, and
+`state.schema_valid` is itself a checker rule, so a stale state file lights up the
+checker rather than failing quietly. It needs a migration step or a one-version
+allowance, and it is a **state-file format change**, which is on the ask-first
+list.
+
+### The assertion
+
+That no reader consults `active_task`. `lib/route.mjs` deliberately does not —
+it selects on `status` — and `mavci-builder.md` line 64 still names "phase, active
+task, retry counters" in its inputs, which must change in the same commit or the
+next builder cites the deleted field.

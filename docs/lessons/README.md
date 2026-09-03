@@ -119,6 +119,20 @@ found early enough to be cheap. That is Finding 4 in the file itself, and it is
 why this promotion was manual for a second time, for a different reason than the
 first.
 
+    0.1.23-the-chain-had-no-middle.md gate5, plugin 0.1.22, 2026-09-03
+                                      The orchestration gap, and the two agents
+                                      that had never run. mavci-verifier was named
+                                      by no skill; mavci-scribe had no skill and
+                                      could not have started if it had. The rework
+                                      loop was not unautomated - it had no
+                                      entrance. Four more defects found by RUNNING
+                                      the chain, including a release gate that
+                                      deadlocked every RLS project. Also records
+                                      what bounds any session: a subagent cannot
+                                      be rooted at another project, so the
+                                      multi-agent half must run in a session
+                                      rooted there.
+
 ## Why this copy was manual
 
 `/mavci-core:retro` — the command whose whole job is to carry a finding out of a

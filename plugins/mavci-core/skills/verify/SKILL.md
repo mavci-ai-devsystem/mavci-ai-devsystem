@@ -1,88 +1,83 @@
 ---
 name: verify
-description: Run the full standards checker, type check and build against the current working tree, record a verdict, and prune baseline entries that now pass. Use before committing, and at the end of a task.
-argument-hint: "[task-id]"
+description: Verify a task against its acceptance criteria and the standards checker. Delegates to the verifier agent, which runs the checker, the type check, the build and the tests, and records an attributed verdict. Use after /mavci-core:build reports done.
+argument-hint: "<task-id>"
 disable-model-invocation: true
-allowed-tools: Read, Grep, Glob, Bash(node *), Bash(npm *), Bash(npx *), Bash(git *)
+allowed-tools: Read, Grep, Glob, Bash(node *), Bash(git *)
 ---
 
 # Verify
 
+Task: `$ARGUMENTS`
+
 Gate: !`node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs" --mark-dirty --session="${CLAUDE_SESSION_ID}" 2>&1`
 
-Preview: !`node "${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs" --format=human 2>&1`
+Next step: !`node "${CLAUDE_PLUGIN_ROOT}/scripts/route.mjs" 2>&1`
 
 Working tree: !`git status --porcelain 2>/dev/null | head -30`
 
-## First: did the preview actually run?
+## First: did those blocks run?
 
-The block above is an **optimisation, not the verdict.** It carries no `--record`
-on purpose. Inline shell substitution has three paths on which Claude Code does
-not run the command at all and substitutes a plain string instead — the
-`disableSkillShellExecution` policy, a Cowork session, and a read-only skill load
-on a coordinator — and a fourth on which the command runs and fails, leaving an
-error where the report should be. None of them are visible to this skill, and
-none of them are under its control (NATIVE-CAPABILITIES 2.11).
+Inline shell substitution has three paths on which Claude Code does not run the
+command at all and substitutes a plain string — the `disableSkillShellExecution`
+policy, a Cowork session, and a read-only skill load on a coordinator — and a
+fourth on which the command runs and fails, leaving an error where the output
+should be. None is visible to this skill and none is under its control
+(NATIVE-CAPABILITIES 2.11). Treat a block as **absent** if it holds
+`[shell command execution disabled by policy]`, `[shell command not executed:`,
+`Shell command failed for pattern`, `Shell substitution failed for pattern`,
+`Shell command permission check failed for pattern`, or a node error.
 
-The same three paths apply to the **Gate** block: if it did not print
-`gate armed`, the Stop-hook backstop was not armed and step 1 is the only
-recorder for this turn. Say so.
+If the **Gate** block did not print `gate armed`, say so: the Stop-hook backstop
+is not armed for this session, and the verifier's own recorded run is then the
+only thing that will record anything.
 
-Treat the preview as **absent** — never as a pass — if it holds any of:
-
-- `[shell command execution disabled by policy]`
-- `[shell command not executed: read-only skill load on the coordinator`
-- `Shell command failed for pattern`
-- `Shell substitution failed for pattern`
-- `Shell command permission check failed for pattern`
-- a node error where a report should be (`Cannot find module`, a stack trace)
-
-**If it is absent, say so in the first line of your reply** — "the inline
-standards preview did not run" — then continue to step 1, which is authoritative
-regardless. Do not infer a verdict from an empty or broken block, and do not
-report a pass on the strength of one. **A probe that did not run is not a pass.**
-If you cannot tell whether the preview is a real report or a failed one, say
-exactly that and rely on step 1.
+**A probe that did not run is not a pass.** Say which block was absent, in your
+first line, and read the file yourself before continuing.
 
 ## Steps
 
-1. **Record the verdict. This run, not the preview, is what counts:**
+1. If no task id was given, take it from the router block above. If there is
+   still none, stop: an unattributed verification is not a verification, and
+   `verify.mjs --task` refuses rather than writing an anonymous verdict.
 
-   `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs" --format=human --record`
+2. **Delegate to `@agent-mavci-verifier`**, giving it the task id and the spec
+   path. It runs the checker with `--record --task <id>`, the type check, the
+   build and the tests, then checks every acceptance criterion against the diff.
 
-   State pass or fail from **this** run. It writes to `.mavci/control/verdicts/`.
-   Recording from the preview instead would mean a preview that silently did not
-   run leaves no verdict, and no trace that none was taken.
+   **You do not run the checker for it.** That is the whole of this change: for
+   three releases this command did the verifier's work inline, so the agent
+   shipped, was installed, was never once invoked, and was indistinguishable from
+   a working one. Doing its job here makes that true again.
 
-   The Stop-hook gate is the enforced backstop: it runs `verify.mjs --record`
-   itself, and the turn cannot end without it. It would normally skip a
-   `/mavci-core:verify` turn, because such a turn writes no files and is not in
-   the build phase — which is exactly why the **Gate** block above arms it for
-   this session. If that block did not print `gate armed`, the backstop is not in
-   place and this step is the only thing that will record anything.
+   The verifier cannot edit anything — `Edit`, `Write` and `NotebookEdit` are
+   absent from its context — which is exactly why it is the component that judges.
 
-2. Read the checker output from step 1. Every failure names a file, a line and a fix.
-3. Run the type check: `npx tsc --noEmit`
-4. If anything under `app/`, `lib/` or `next.config.*` changed, run `npm run build`.
-5. If the project has tests, run them.
-6. If a task id was given, check the diff against that task's acceptance criteria
-   in `.mavci/tasks/<id>.md`, one criterion at a time, naming the file that
-   satisfies each. **A green checker is a floor, not a ceiling** — it verifies
-   standards, not that the code does what was asked.
-7. Retire fixed debt:
+3. When it returns, read the verdict it recorded. Then run the router:
+
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/route.mjs"`
+
+   It reads that verdict and says what happens next. **Do it, or report it.**
+   On a pass it names the scribe and the closing steps; on a failure under the
+   ceiling it names the rework, which is `/mavci-core:build <id>` with the
+   failing checks carried over; at the ceiling it names `--block` and stops.
+
+4. Retire fixed debt on a pass:
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/state.mjs" --baseline-prune`
-8. On a full pass with a task id, advance the phase:
-   `node "${CLAUDE_PLUGIN_ROOT}/scripts/state.mjs" --set-phase release`
 
 ## Reporting
 
-State pass or fail in the first line, sourced from step 1. On failure, list what
-failed with file and line, and stop — do not fix it here. Verification and
-implementation are separate phases precisely so that the thing judging the work
-is not the thing that wrote it.
+State pass or fail in the first line, sourced from the verdict the verifier
+recorded — not from any preview and not from your own reading of the code.
 
-If step 1 itself could not run, report that as a failure to verify. It is not a
-pass, and it is not a small thing: it means nothing checked this working tree.
+On failure, list what failed with file and line, and **do not fix it here**.
+Verification and implementation are separate phases precisely so that the thing
+judging the work is not the thing that wrote it. The rework is a builder
+dispatch, and the router names it.
+
+If the verifier reports `blocked_by: "no_task_id"`, that is this command's fault,
+not the agent's: it was dispatched without the one input it cannot proceed
+without. Supply the id and dispatch again.
 
 If a check looks like a false positive, say so explicitly and name
 `/mavci-core:waive`. Do not work around it silently.

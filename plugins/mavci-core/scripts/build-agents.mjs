@@ -127,6 +127,34 @@ const DEFAULT_STARTUP_STEP_2 = [
 ].join('\n');
 
 /**
+ * A GATE MUST NAME A GATE VALUE THAT EXISTS.
+ *
+ * `PHASES` is a closed enum - plan, build, verify, release - and `scribe` declares
+ * `phase: "any"`, meaning "not phase-scoped". Substituted into the gate above, that
+ * became "If `phase` is not `any`, **stop**", which no real `state.json` can ever
+ * satisfy. Scribe reported `blocked_by: "wrong_phase:<actual>"` on every possible
+ * invocation, from the release it shipped in. Nothing caught it, because no skill
+ * invokes scribe: an unrun component is indistinguishable from a working one.
+ *
+ * THIS IS THE SAME DEFECT 0.1.21 FIXED ONE STEP LOWER, IN THE SAME AGENT.
+ * `NO_STANDARDS_STEP_3` exists because step 3 ordered an agent with no packs to
+ * "invoke these skills now" over an empty list - shared prose addressed to an agent
+ * it does not describe. Step 2, the block directly above it, was telling that same
+ * agent to wait for a phase that cannot occur, and the fix walked straight past it.
+ * Fixing the instance and not the class is what let it walk past.
+ *
+ * The replacement is an affirmative statement rather than an omission. An agent
+ * told nothing about phase cannot tell being trusted from being forgotten, and
+ * `check-agent-contract.mjs` rule 3 asserts that one of the two shapes is present.
+ */
+const ANY_PHASE_STEP_2 = [
+  'You are not phase-scoped. Every other agent stops here unless',
+  '   `.mavci/control/state.json` names its phase; you have no such gate, and there is',
+  '   nothing to read. Your bound is the document you were asked for, not the phase.',
+].join('\n');
+
+
+/**
  * FINDING 20. THE CONTRACT IS SHARED; THE GRANTS ARE NOT.
  *
  * Both of these were fixed text in `_contract.md`, rendered into every agent
@@ -208,7 +236,9 @@ export function render(contract, def) {
     outputs_list: list(def.outputs),
     escalate_list: bullets(def.escalate_when),
     startup_step_1: def.startup_step_1 ?? DEFAULT_STARTUP_STEP_1,
-    startup_step_2: (def.startup_step_2 ?? DEFAULT_STARTUP_STEP_2).split('{{phase}}').join(def.phase),
+    startup_step_2: (def.startup_step_2
+      ?? (def.phase === 'any' ? ANY_PHASE_STEP_2 : DEFAULT_STARTUP_STEP_2))
+      .split('{{phase}}').join(def.phase),
     // Resolved HERE, not via the map: the substitution loop is one pass, and
     // standards_invocations is applied before startup_step_3 would introduce it.
     // Same shape as startup_step_2 and {{phase}}.

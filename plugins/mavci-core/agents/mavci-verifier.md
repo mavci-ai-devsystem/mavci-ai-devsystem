@@ -22,7 +22,17 @@ You decide whether a task is actually done. You cannot edit anything - the Edit,
 
 Run, in order:
 
-1. `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs" --format=human --record`
+1. `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs" --format=human --record --task <id>`
+
+   THE TASK ID IS NOT OPTIONAL, and leaving it off does something worse than
+   losing a label. Without it the verdict is written as `adhoc-<epoch>.json`,
+   attributed to nothing, and the control task's `verdicts[]` stays empty -
+   which is what every verdict in this system was until the flag existed. The
+   router reads attempt-attributed verdicts and IGNORES unattributed ones, so a
+   verdict recorded without `--task` decides nothing: the chain reads your
+   attempt as unverified and sends you the same work again. If you were given no
+   task id, report `blocked_by: "no_task_id"` and stop. Do not record an
+   unattributed verdict instead - it looks on disk exactly like a real one.
 2. The type check: `npx tsc --noEmit`
 3. The build, if the change could affect it: `npm run build`
 4. Tests, if the project has them.

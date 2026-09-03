@@ -15,6 +15,21 @@
  *   node verify.mjs --changed          scope to files git reports as modified
  *   node verify.mjs --advisory         human summary, never exits non-zero
  *   node verify.mjs --ci               full scan, GitHub annotations, exit 2 on blockers
+ *   node verify.mjs --record --task ID attribute the verdict to a task attempt
+ *
+ * ATTRIBUTION. `recordVerdict` has always named a verdict `<id>-attempt-NN.json`
+ * and appended it to the control task's `verdicts[]` - when given a `task_id`.
+ * Nothing ever gave it one: `evaluate` and `buildVerdict` accepted `task_id` and
+ * `attempt`, defaulted both to null, and no caller passed either. So every verdict
+ * ever written by this system is `adhoc-<epoch>.json` and every control task's
+ * `verdicts[]` is empty - 24 of them on the first real project. The audit trail
+ * ARCHITECTURE 4.3 calls write-once and never deleted was being written, correctly,
+ * about nothing in particular.
+ *
+ * `--task` supplies the id. It does NOT supply the attempt number: that is read
+ * from `.mavci/control/tasks/<id>.json`, which is where the ceiling that governs
+ * the loop already lives. A flag would be a second writer for one fact, and the
+ * two would disagree on exactly the run where it mattered.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -28,7 +43,7 @@ import {
 } from './lib/fsx.mjs';
 import { rulesFor, ruleById } from './rules/index.mjs';
 import {
-  loadContext, validateAll, verifyIntegrity, recordVerdict,
+  loadContext, validateAll, verifyIntegrity, recordVerdict, readControlTask,
   isBaselined, activeWaiver, pluginVersion, projectRoot,
 } from './state.mjs';
 
@@ -335,13 +350,46 @@ async function main() {
   const format = (argv.find((a) => a.startsWith('--format=')) ?? '').split('=')[1] ?? (ci ? 'github' : 'json');
   const record = argv.includes('--record');
 
+  /* ---- attribution -------------------------------------------------------
+   * A run asked to attribute and unable to MUST refuse. Falling back to an
+   * adhoc verdict would produce a file that looks exactly like a successful
+   * attribution to every reader downstream, which is the fail-quiet shape this
+   * repository has found eleven times.
+   */
+  const taskIx = argv.indexOf('--task');
+  const task_id = taskIx === -1 ? null : (argv[taskIx + 1] ?? '');
+  let attempt = null;
+  if (taskIx !== -1) {
+    if (!/^[0-9]{4}$/.test(task_id)) {
+      console.error(`--task expects a four-digit task id; got ${JSON.stringify(task_id)}.`);
+      process.exit(2);
+    }
+    let control;
+    try {
+      control = readControlTask(root, task_id);
+    } catch {
+      console.error(`--task ${task_id}: no control record at ${PATHS.controlTasks}/${task_id}.json. `
+        + 'Refusing to write an unattributed verdict under an attribution flag: a verdict that '
+        + 'silently lost its task is indistinguishable from one that never had one.');
+      process.exit(2);
+    }
+    // The attempt this verdict is ABOUT is the one already recorded. A task at
+    // attempts:0 has had no build, so there is no attempt for a verdict to name.
+    if (!control.attempts) {
+      console.error(`--task ${task_id}: attempts is 0, so no attempt has been made and there is `
+        + 'nothing for a verdict to be about. Run `state.mjs --attempt ' + task_id + '` before building.');
+      process.exit(2);
+    }
+    attempt = control.attempts;
+  }
+
   if (!exists(abs(root, PATHS.manifest))) {
     if (advisory) return;                       // not a mavci project: stay silent
     console.error('not a Mavci project: .mavci/project.json not found. Run /mavci-core:connect first.');
     process.exit(ci ? 1 : 0);
   }
 
-  const { verdict } = await evaluate(root, { scope });
+  const { verdict } = await evaluate(root, { scope, task_id, attempt });
 
   if (advisory) {
     // PostToolUse: informational only, must never exit non-zero and never block.

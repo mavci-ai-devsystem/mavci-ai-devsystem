@@ -776,6 +776,9 @@ function main() {
         '--baseline-init': 'record a new baseline, which retires every current violation at once',
         '--migrate-manifest': 'rewrite the project manifest, whose tenancy.isolation value decides which tenant-isolation rules run at all',
         '--record-corpus': "record the guardian acceptance corpus result, which is the only artefact that clears doctor's FAIL on guardian's judgement",
+        '--attempt': 'consume one of the three attempts a task has, which is the counter that decides when a failing task stops being retried',
+        '--task-status': 'change the authoritative status of a task, which is what the orchestrator routes on',
+        '--block': 'declare a task terminally blocked, which stops the rework loop and moves the phase',
       };
 
       const flags = cmd.match(/--[a-z-]+/g) ?? [];
@@ -802,8 +805,26 @@ function main() {
         // /mavci-core:plan and /mavci-core:verify run them on the operator's own
         // instruction, and a confirm on every step of the normal path teaches
         // the operator to dismiss confirms.
-        const PHASE_MOVES = ['--set-phase', '--begin-plan'];
-        const f = privileged.find((x) => !PHASE_MOVES.includes(x));
+        /* WORKFLOW_MOVES, formerly PHASE_MOVES. The three lifecycle verbs join it,
+         * and the reasoning belongs beside the grant rather than in a commit
+         * message. They are the steps of the normal path: the orchestrator runs
+         * `--attempt` before every build, `--task-status` after every verdict, and
+         * `--block` at the ceiling. A confirm on each is a confirm several times
+         * per task, which trains the operator to dismiss confirms - the argument
+         * already written above for `--set-phase`, applied to strictly weaker
+         * commands. Each is bounded by the writer itself: `--attempt` REFUSES past
+         * `max_attempts`, `--task-status` refuses a second in_progress task and a
+         * status outside the closed enum, and `--block` only ever moves the phase
+         * toward `plan`, which is the direction that makes app code UNwritable.
+         *
+         * NOTHING HERE WIDENS WHAT AN AGENT MAY DO. All three are in PRIVILEGED,
+         * so a subagent running any of them is denied, exactly as before. What
+         * changed is whether the main session - where a human is present and is
+         * the one who typed the command that started the run - is asked to confirm
+         * a step it just asked for.
+         */
+        const WORKFLOW_MOVES = ['--set-phase', '--begin-plan', '--attempt', '--task-status', '--block'];
+        const f = privileged.find((x) => !WORKFLOW_MOVES.includes(x));
         if (f) confirm(`this will ${PRIVILEGED[f]}. Confirm you intend it.`);
       }
     }

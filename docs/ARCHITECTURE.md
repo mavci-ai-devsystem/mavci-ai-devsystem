@@ -1199,12 +1199,64 @@ Four phases: `plan`, `build`, `verify`, `release`. Three independent mechanisms.
 **3. Explicit transitions**, written by `state.mjs` — never by an agent, because `state.json` is control plane:
 
 ```
+/mavci-core:ship "<request>"   →  the whole chain, router-driven, stopping at every operator gate
+  or, one step at a time:
 /mavci-core:plan "<request>"   →  architect  →  phase plan   →  writes spec, sets phase build
 /mavci-core:build <task-id>    →  builder    →  phase build  →  implements, sets phase verify
 /mavci-core:verify <task-id>   →  verifier   →  phase verify →  verdict; pass → phase release + baseline-prune
                                                             fail → phase build, attempts++
+/mavci-core:scribe <task-id>   →  scribe     →  any          →  changelog, summary, ADR
 /mavci-core:release            →  main session, operator present, guardian pass required
 ```
+
+**Until 0.1.23 the `fail → phase build, attempts++` edge did not exist, and could
+not have.** `/mavci-core:verify` on a failure said "stop — do not fix it here" and
+set no phase; the builder refuses to start unless the phase is `build`; so the
+loop `max_attempts: 3` exists to bound had no entrance, and only a privileged
+`--set-phase build` nobody was instructed to run could enter it. Underneath,
+`incrementAttempt` and `blockTask` were exported and called from nowhere, so no
+task's status ever left `pending` and `attempts` was always `0`. The table above
+described the design; the plugin implemented three of its four edges and none of
+its counters.
+
+### 8.1 The router, and why it is not an orchestration framework
+
+ROADMAP forbids an orchestration framework, a message bus and an agent registry.
+That prohibition is right and this does not breach it: native delegation already
+dispatches, the main session already is the orchestrator, and `SubagentStop`
+already fires. What was missing is **the decision of what to dispatch next**,
+which was living in prose, recalled by a model, spread across five skills that
+each knew one edge of the graph.
+
+`scripts/lib/route.mjs` is a **pure function of the control plane**. It reads no
+files, spawns nothing and dispatches nothing; it returns one of ten actions, the
+agent that owns it (or `null`), and the exact commands the caller must run.
+`scripts/route.mjs` gathers the inputs and prints. `skills/ship/` is the loop that
+obeys it. Same split as `lib/release-gate.mjs`, for the reason written there: a
+decision whose only exercise is running the real thing is a decision tested once,
+by the operator, at the worst possible moment. Asserted by `check-route.mjs`,
+which includes an end-to-end walk that executes the router's own `steps[]` in the
+router's own order over a real tree and the real checker.
+
+**The gates are unmoved.** Every step the router names is a command the caller
+still runs, and every one still passes through `risk-guard.mjs`. Three actions —
+`release_gate`, `blocked`, `unverified` — return `dispatch: null`, which is a
+statement that no agent may proceed rather than an omission, and it is asserted.
+Routing removes the operator from the **handoffs**, which were never a control:
+they were an absence of automation that had been described as a design.
+
+**Phase transitions move both halves.** `--set-phase` carries the `in_progress`
+task's phase with it, in one call. Two writers for one fact is the failure Gate 4c
+found four times, and it had produced exactly that on the first real project:
+`state.json` saying `verify` over `control/tasks/0001.json` saying `plan`, by
+sanctioned command.
+
+**A subagent cannot be rooted at another project.** Its working directory is the
+session's and `CLAUDE_PROJECT_DIR` is unset in its environment (observed
+2026-09-03); the hooks resolve their root from `input.cwd`, also the session's. So
+a multi-agent run must happen in a session whose working directory IS the project
+— redirecting agents by hand would also silence `risk-guard`, and a chain proven
+with the gates off is not the chain.
 
 The verifier refuses to start while phase is `build`; the builder cannot resume after a pass. The gate is a file readable with `cat`, changeable by the operator through `state.mjs --set-phase`, and **not** editable by the agent it governs — which is the whole point of B1.
 

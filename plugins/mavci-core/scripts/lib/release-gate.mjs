@@ -100,6 +100,41 @@ export const UNREADABLE = Symbol('guardian record present but unreadable');
  */
 export const RECORD_SOURCE = Object.freeze({ REAL: 'real', CORPUS: 'corpus' });
 
+/* ------------------------------- WHEN GUARDIAN'S QUESTION DOES NOT APPLY
+ *
+ * FOUND BY RUNNING THE CHAIN, not by anything failing. `gate5` declares
+ * `tenancy.isolation: "rls"`, completed a task, passed the checker, and reached
+ * this gate - which refused with `guardian_record_absent` and told the operator to
+ * run guardian. But `skills/guardian/SKILL.md` step 1 says, correctly:
+ *
+ *     If `tenancy.isolation` is not `application-filters`, stop. Guardian answers
+ *     a question about application-code filters; on an `rls` project it would be
+ *     asking about a mechanism that is not the one in use.
+ *
+ * So on every RLS project the release gate demanded evidence that the command
+ * producing it refuses to produce. That is a deadlock, and the two ways out of it
+ * are both worse than the deadlock: run guardian against a mechanism it does not
+ * evaluate, or hand-write a record - which is precisely what this gate's own
+ * closing line tells the operator never to do.
+ *
+ * Neither component was wrong alone. Guardian's precondition is right; requiring a
+ * guardian record before a release is right. What was missing is that one of them
+ * is conditional on a manifest field and the other had never been shown the
+ * manifest. It is the shape this repository keeps finding - two correct components
+ * disagreeing about a condition neither of them states - and it was invisible from
+ * inside either, because no release had ever been attempted on an RLS project.
+ *
+ * THE EXEMPTION IS DERIVED, NEVER ASSERTED. `isolation` comes from
+ * `.mavci/project.json`; a caller cannot pass "not applicable". An absent or
+ * unreadable manifest yields `null` and REFUSES exactly as before, because a
+ * missing input must never become an exemption - that is how a fail-closed gate
+ * turns fail-open. And the exemption covers ABSENCE only: a record that exists and
+ * is a corpus fixture, stale, inconsistent or failing still refuses on an RLS
+ * project, because "guardian did not need to run" explains no record at all and
+ * explains nothing whatsoever about a bad one.
+ */
+export const GUARDIAN_ISOLATION = 'application-filters';
+
 /**
  * Pick the record that is evidence about the PROJECT, newest first.
  *
@@ -153,9 +188,20 @@ const ABSENT_OR_UNREADABLE_GUIDANCE =
  *        caller that omits it gets the same verdict with a less specific message.
  * @returns {{ok: boolean, refusals: Array<{code: string, message: string}>}}
  */
-export function assessReleaseReadiness({ runningVersion, unverified = null, guardianRecord = null, recordCounts = null }) {
+export function assessReleaseReadiness({
+  runningVersion, unverified = null, guardianRecord = null, recordCounts = null, isolation = null,
+}) {
   const refusals = [];
+  const notes = [];
   const refuse = (code, message) => refusals.push({ code, message });
+
+  /* A gate that skips an arm and does not say so is telling the operator less
+   * than it knows - the same argument check-pretag's declared exclusions are
+   * printed on every pass for. `guardianExempt` is only ever consulted on the
+   * absent-record path below. */
+  const guardianExempt = typeof isolation === 'string'
+    && isolation.length > 0
+    && isolation !== GUARDIAN_ISOLATION;
 
   // ---- enforcement must have run at all ------------------------------------
   if (unverified) {
@@ -170,7 +216,21 @@ export function assessReleaseReadiness({ runningVersion, unverified = null, guar
     // Present on disk, could not be parsed or is missing the fields read below.
     refuse('guardian_record_unreadable',
       `The guardian record exists but cannot be read. ${ABSENT_OR_UNREADABLE_GUIDANCE}`);
-    return { ok: false, refusals };
+    return { ok: false, refusals, notes };
+  }
+  if (guardianRecord === null && guardianExempt) {
+    // Guardian's question does not apply to this project, so no record is the
+    // correct state rather than a missing one. Stated, not silent.
+    notes.push(`guardian not required: tenancy.isolation is "${isolation}", and guardian answers a `
+      + `question about ${GUARDIAN_ISOLATION}. /mavci-core:guardian refuses to run on this project `
+      + 'for the same reason, so demanding its record would be demanding evidence the command that '
+      + `produces it will not produce. NOTE WHAT THIS DOES NOT SAY: it says nothing about whether `
+      + `this project's "${isolation}" isolation is correctly implemented. That is checked, if at `
+      + 'all, by the checker rules and by review - not here, and not by guardian.');
+    // Return HERE. Every arm below reads a field off the record and there is no
+    // record, so falling through would dereference null. It also must not be
+    // reached by accident: none of those arms is covered by this exemption.
+    return { ok: refusals.length === 0, refusals, notes };
   }
   if (guardianRecord === null) {
     // `recordCounts` distinguishes "the directory is empty" from "ten records and
@@ -187,11 +247,11 @@ export function assessReleaseReadiness({ runningVersion, unverified = null, guar
         + 'declare its source cannot be trusted by default. Records written before 0.1.21 carry no '
         + 'source and will all read this way: run guardian once against this project to produce one '
         + 'that does. Do NOT hand-edit an old record to add the field.');
-      return { ok: false, refusals };
+      return { ok: false, refusals, notes };
     }
     refuse('guardian_record_absent',
       `No guardian record for this project. ${ABSENT_OR_UNREADABLE_GUIDANCE}`);
-    return { ok: false, refusals };
+    return { ok: false, refusals, notes };
   }
 
   // Defense in depth. The selector already skips corpus records; this refuses one
@@ -203,7 +263,7 @@ export function assessReleaseReadiness({ runningVersion, unverified = null, guar
       + 'measures whether guardian answers correctly on a staged case whose answer was known in '
       + 'advance - including cases whose expected verdict is "fail". It is evidence about '
       + 'guardian and says nothing about this project, so it cannot stand in for a run that does.');
-    return { ok: false, refusals };
+    return { ok: false, refusals, notes };
   }
   if (guardianRecord.source !== RECORD_SOURCE.REAL) {
     refuse('guardian_record_undeclared',
@@ -211,7 +271,7 @@ export function assessReleaseReadiness({ runningVersion, unverified = null, guar
       + `"${RECORD_SOURCE.REAL}". A record that does not declare itself a run against this project `
       + 'is not counted as one. Absent and unrecognised are the same fact here, and both fail '
       + 'closed: an enum that grows must not promote its new value to project evidence by default.');
-    return { ok: false, refusals };
+    return { ok: false, refusals, notes };
   }
 
   const { plugin_version: recordedVersion, verdict, coverage } = guardianRecord;
@@ -222,7 +282,7 @@ export function assessReleaseReadiness({ runningVersion, unverified = null, guar
       + `${runningVersion}. Guardian's worklist, the rule that feeds it and its own definition can all `
       + 'differ between versions, so this record has not examined what is about to ship - whether it '
       + 'is older or newer.');
-    return { ok: false, refusals };
+    return { ok: false, refusals, notes };
   }
 
   // ---- recompute, do not trust --------------------------------------------
@@ -234,7 +294,7 @@ export function assessReleaseReadiness({ runningVersion, unverified = null, guar
   if (typeof total !== 'number' || typeof answered !== 'number') {
     refuse('guardian_record_unreadable',
       `The guardian record carries no usable coverage numbers. ${ABSENT_OR_UNREADABLE_GUIDANCE}`);
-    return { ok: false, refusals };
+    return { ok: false, refusals, notes };
   }
   if (verdict === 'pass' && (total === 0 || answered !== total)) {
     refuse('guardian_record_inconsistent',
@@ -242,11 +302,11 @@ export function assessReleaseReadiness({ runningVersion, unverified = null, guar
       + 'A pass over an empty or incomplete worklist is the failure the coverage floor exists to '
       + 'prevent; a record asserting it has either been produced by a broken writer or edited by '
       + 'hand. The arithmetic is the evidence, not the verdict field.');
-    return { ok: false, refusals };
+    return { ok: false, refusals, notes };
   }
 
   // ---- the verdict, as an ALLOW-LIST --------------------------------------
-  if (verdict === 'pass') return { ok: refusals.length === 0, refusals };
+  if (verdict === 'pass') return { ok: refusals.length === 0, refusals, notes };
 
   if (verdict === 'not_checked') {
     refuse('guardian_not_checked',
@@ -266,5 +326,19 @@ export function assessReleaseReadiness({ runningVersion, unverified = null, guar
       + 'rather than interpreting an unknown value, because a gate that falls through on a verdict '
       + 'it has never seen is a gate that stops holding the moment the enum grows.');
   }
-  return { ok: false, refusals };
+  return { ok: false, refusals, notes };
+}
+
+/**
+ * The manifest field the guardian exemption is derived from, read defensively.
+ *
+ * A helper rather than an inline `manifest?.tenancy?.isolation` at the call site,
+ * because this value is an EXEMPTION INPUT: anything that is not a non-empty
+ * string from the manifest must come back as `null`, so an absent, unreadable or
+ * malformed manifest refuses exactly as before. A caller reading it inline is a
+ * caller who can be talked into passing something else.
+ */
+export function isolationOf(manifest) {
+  const v = manifest?.tenancy?.isolation;
+  return typeof v === 'string' && v.length > 0 ? v : null;
 }

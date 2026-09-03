@@ -57,6 +57,8 @@ jobs:
           node scripts/ci/check-fixtures.mjs
           node scripts/ci/check-risk-guard.mjs
           node scripts/ci/check-state-transition.mjs
+          node scripts/ci/check-provenance.mjs
+          node scripts/ci/check-route.mjs
           node scripts/ci/check-gate.mjs
           node scripts/ci/check-plugin.mjs
           node scripts/ci/check-doctor.mjs

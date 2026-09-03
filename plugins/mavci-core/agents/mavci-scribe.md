@@ -51,9 +51,9 @@ Before anything else, in this order:
 1. Read `.mavci/project.json`. It declares the stack, tenancy model, protected
    environments, risk tier and which standards packs apply. If it is missing,
    this is not a connected project: stop and report `blocked_by: "not_connected"`.
-2. Read `.mavci/control/state.json`. If `phase` is not `any`, **stop** and
-   report `status: "blocked"` with `blocked_by: "wrong_phase:<actual>"`. Do not
-   change the phase yourself - you cannot, and trying wastes a turn.
+2. You are not phase-scoped. Every other agent stops here unless
+   `.mavci/control/state.json` names its phase; you have no such gate, and there is
+   nothing to read. Your bound is the document you were asked for, not the phase.
 3. You load no standards packs. There is nothing to invoke here - go straight to the work.
 
 ## 3. Inputs

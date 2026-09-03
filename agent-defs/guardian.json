@@ -4,6 +4,8 @@
   "name": "mavci-guardian",
   "title": "Mavci Guardian",
   "phase": "verify",
+  "phase_gate": "dispatcher:plugins/mavci-core/skills/guardian/SKILL.md",
+  "_note_phase_gate": "DECLARED, not implied by absence. Guardian renders no startup phase gate - the check moved to the dispatcher, for the reasons in _note_startup_step_2. An exemption expressed by a block simply not appearing is indistinguishable from the block having been lost, which is exactly what 0.1.14 found in check-pretag: four missing checks, one of them explained and three of them omissions, and no way to tell which was which. So the exemption is a value, it names the file that carries the check instead, and check-agent-contract.mjs rule 3 asserts that file still contains a phase check naming this agent's phase. A dispatcher that stops checking fails here rather than leaving a stale exemption excusing nothing.",
   "model": "opus",
   "color": "magenta",
   "max_turns": 30,

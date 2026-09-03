@@ -21,7 +21,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   PATHS, CONTROL_DIR, MAVCI_DIR, CONTROL_GLOBS,
-  PHASES, RISK_TIERS, UNSUPPRESSIBLE_SEVERITIES,
+  PHASES, TASK_STATUS, RISK_TIERS, UNSUPPRESSIBLE_SEVERITIES,
   WAIVER_DEFAULT_DAYS, WAIVER_MAX_DAYS, WAIVER_MIN_REASON_CHARS,
 } from './config.mjs';
 import {
@@ -218,9 +218,34 @@ export function ciPin(state) {
   return state?.ci_pinned_plugin_version ?? state?.plugin_version ?? null;
 }
 
+/**
+ * ONE COMMAND MOVES BOTH HALVES, because they are required to agree.
+ *
+ * ARCHITECTURE 4.1 says the project phase in `state.json` and the task phase in
+ * `control/tasks/<id>.json` must agree, that the control copy wins when they do
+ * not, and that `doctor` reports the divergence. What produced the divergence on
+ * the first real project was `--set-phase` itself: it moved the project and left
+ * the task where it was, so `AI-Chatbot-Widget-SaaS` records `state.phase=verify`
+ * over `task 0001 phase=plan` - by sanctioned command, exactly the surface/control
+ * split carried-forward item 5 refused to create by hand.
+ *
+ * Two writers for one fact is the failure Gate 4c found four times. So the phase
+ * of the task in progress moves with the project, in the same call. There is at
+ * most one such task (`assertSoleInProgress`), and when there is none this is the
+ * old behaviour unchanged - a project-level move with nothing to carry.
+ *
+ * It returns the task it moved so the CLI can say so. A control-plane write the
+ * operator was not told about is the kind that gets discovered by `git diff`.
+ */
 export function setPhase(root, phase) {
   if (!PHASES.includes(phase)) throw new Error(`unknown phase "${phase}". One of: ${PHASES.join(', ')}`);
-  return setState(root, { phase });
+  let moved = null;
+  for (const id of listControlTaskIds(root)) {
+    if (readControlTask(root, id).status === 'in_progress') { moved = id; break; }
+  }
+  if (moved) updateControlTask(root, moved, { phase });
+  setState(root, { phase });
+  return { phase, task: moved };
 }
 
 /* ---------------------------------------------------------------- tasks */
@@ -304,6 +329,43 @@ export function beginPlan(root, { title, spec }) {
   return id;
 }
 
+/**
+ * Every task id with a control record. The invariant "at most one task
+ * in_progress" is enforced at the transition, and a transition cannot enforce
+ * what it cannot enumerate.
+ */
+export function listControlTaskIds(root) {
+  const dir = abs(root, PATHS.controlTasks);
+  if (!exists(dir)) return [];
+  return fs.readdirSync(dir).filter((f) => /^[0-9]{4}\.json$/.test(f)).map((f) => f.slice(0, 4)).sort();
+}
+
+
+/**
+ * AT MOST ONE TASK IN PROGRESS, enforced at the transition rather than held as a
+ * second copy of the fact.
+ *
+ * Carried-forward item 5 asked for exactly this. `state.json.active_task` is a
+ * pointer to the same fact `status: "in_progress"` already carries, and a second
+ * writer for one fact is the failure Gate 4c found four times; the invariant that
+ * replaces the pointer has to be checked where it can be violated, which is here.
+ *
+ * BOTH writers call it, and that is the point. The first version guarded only
+ * `--task-status`, and `--attempt` walked straight past it - `incrementAttempt`
+ * sets `in_progress` too, and it is the one the orchestrator runs on every build.
+ * A rule enforced at one of two doors is a rule with a door.
+ */
+export function assertSoleInProgress(root, id) {
+  for (const other of listControlTaskIds(root)) {
+    if (other === id) continue;
+    if (readControlTask(root, other).status === 'in_progress') {
+      throw new Error(`task ${other} is already in_progress. Two tasks in progress means two `
+        + 'answers to "what is being built", and the phase gate has only one. Close '
+        + `${other} first: --task-status ${other} --status <done|failed|blocked>.`);
+    }
+  }
+}
+
 export function updateControlTask(root, id, patch) {
   const cur = readControlTask(root, id);
   return writeControl(root, controlTaskPath(id), { ...cur, ...patch, updated: nowIso() }, 'control-task');
@@ -317,14 +379,42 @@ export function incrementAttempt(root, id) {
       + 'It cannot be retried. Use /mavci-core:retro, /mavci-core:waive if the check is wrong, '
       + 'or state.mjs --reset-attempts after changing something.');
   }
+  assertSoleInProgress(root, id);
   const attempts = t.attempts + 1;
   updateControlTask(root, id, { attempts, status: 'in_progress' });
   return attempts;
 }
 
+/**
+ * A CLOSED TASK IS NOT THE ACTIVE ONE.
+ *
+ * `state.json.active_task` gained a writer in 0.1.22 (`beginPlan`) and never
+ * gained a clearer, so after a task reached `done` the field went on naming it -
+ * observed on gate5, where a completed, verified, documented task was still the
+ * project's `active_task`. A pointer that is only ever set reads as current
+ * forever, and the next reader has no way to tell a stale one from a live one.
+ *
+ * This keeps the field TRUTHFUL; it does not settle whether the field should
+ * exist. Carried-forward item 5 decided it should be deleted, because "which task
+ * is in progress" is already carried by `status: "in_progress"` and enforced by
+ * `assertSoleInProgress` - a second copy of one fact. Deleting it is a state-file
+ * format change and stays queued as one. Until then, stale is strictly worse than
+ * absent, and this is the cheap half that is safe to do now.
+ */
+function clearActiveTask(root, id) {
+  const s = readState(root);
+  if (s.active_task === id) setState(root, { active_task: null });
+}
+
+export function closeTask(root, id, status) {
+  updateControlTask(root, id, { status });
+  clearActiveTask(root, id);
+}
+
 export function blockTask(root, id, blocked_by) {
   updateControlTask(root, id, { status: 'blocked', phase: 'plan', blocked_by });
   setPhase(root, 'plan');
+  clearActiveTask(root, id);
 }
 
 /* -------------------------------------------------------------- verdicts */
@@ -928,8 +1018,67 @@ async function main() {
       case '--set-phase': {
         const phase = arg('--set-phase');
         if (phase === true || !phase) die(`usage: --set-phase <${PHASES.join('|')}>`);
-        setPhase(root, phase);
-        console.log(`phase = ${phase}`);
+        const moved = setPhase(root, phase);
+        console.log(`phase = ${phase}` + (moved.task ? ` (task ${moved.task} moved with it)` : ''));
+        return;
+      }
+      /* ---- the task lifecycle verbs --------------------------------------
+       *
+       * ATTEMPTS AND STATUS WERE MODELLED AND NEVER MOVED. `incrementAttempt`
+       * and `blockTask` were exported and called from nowhere in the plugin, so
+       * `status` never left `pending`, `owner_agent` was always null, and
+       * `attempts` was always 0 - on a live project with 24 verdicts on disk.
+       * A retry ceiling that no code can reach is not a ceiling; it is a comment
+       * with a number in it, and it is the same shape as a probe that cannot
+       * fail. The verbs below are the only writers, so the counter that governs
+       * the loop is moved by the thing that runs the loop.
+       *
+       * All three are PRIVILEGED by caller in risk-guard.mjs: the control plane
+       * is not writable by the agent it governs, and that does not change because
+       * the writes are now routine.
+       */
+      case '--attempt': {
+        const id = arg('--attempt');
+        const agent = arg('--agent');
+        if (id === true || !id) die('usage: --attempt <task-id> [--agent <agent-name>]');
+        // Throws at the ceiling, with the three moves named. That refusal IS the
+        // loop guard: it is the only thing standing between a failing task and an
+        // unbounded rework cycle, so it must come from the writer rather than
+        // from a caller remembering to look.
+        const n = incrementAttempt(root, id);
+        if (typeof agent === 'string') updateControlTask(root, id, { owner_agent: agent });
+        console.log(`task ${id}: attempt ${n} of ${readControlTask(root, id).max_attempts}`
+          + (typeof agent === 'string' ? `, owner ${agent}` : ''));
+        return;
+      }
+      case '--task-status': {
+        const id = arg('--task-status');
+        const status = arg('--status');
+        if (id === true || !id || typeof status !== 'string') {
+          die(`usage: --task-status <task-id> --status <${TASK_STATUS.join('|')}>`);
+        }
+        if (!TASK_STATUS.includes(status)) {
+          die(`unknown status "${status}". The enum is closed: ${TASK_STATUS.join(', ')}.`);
+        }
+        // The invariant lives in assertSoleInProgress, shared with incrementAttempt.
+        if (status === 'in_progress') assertSoleInProgress(root, id);
+        // A terminal status also releases the active-task pointer. `pending` and
+        // `in_progress` are not terminal, so they leave it alone.
+        if (status === 'done' || status === 'failed' || status === 'blocked') closeTask(root, id, status);
+        else updateControlTask(root, id, { status });
+        console.log(`task ${id}: status = ${status}`);
+        return;
+      }
+      case '--block': {
+        const id = arg('--block');
+        const reason = arg('--reason');
+        if (id === true || !id || typeof reason !== 'string' || !reason.trim()) {
+          die('usage: --block <task-id> --reason "<blocked_by>"\n'
+            + 'A terminal state with no reason is a future mystery: the next reader has the '
+            + 'status and no way to know what to change.');
+        }
+        blockTask(root, id, reason);
+        console.log(`task ${id}: blocked (${reason}); phase = plan`);
         return;
       }
       case '--reset-attempts': {

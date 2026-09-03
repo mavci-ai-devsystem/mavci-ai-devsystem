@@ -118,6 +118,16 @@ unverified (6.16).
 
 ## Current state
 
+**Counts refreshed 2026-09-03, at 0.1.23; the prose below it is from the
+0.1.17 rewrite and still governs.** Two of the five agents in that roster had
+never run when 0.1.23 was cut - `mavci-verifier` was named by no skill and
+`mavci-scribe` had none at all and could not have started if it had. THAT IS THE
+EXACT FAILURE THIS SUMMARY WAS REWRITTEN TO PREVENT, one level down: the counts
+were right and a count is not a claim that the thing runs. A roster line means
+five agent files exist. It does not mean five agents are reachable, and after
+0.1.23 the thing that means that is `check-route.mjs`'s assertion that every
+agent except guardian is named by the router.
+
 **Rewritten 2026-09-02, at 0.1.17.** It had said guardian, scribe and
 `/release` were unbuilt for two releases after they shipped, and named a script
 list that was six of thirteen. A summary that is wrong about what exists is
@@ -130,26 +140,38 @@ from the tree, and the check is named beside it.
 
     5 agents      architect, builder, verifier, guardian, scribe   agents/*.md
     15 rules      RULES in scripts/rules/index.mjs                 rules/index.mjs
-    13 skills     3 of them the standards packs                    skills/
-    15 scripts    state, redact, verify, gate, risk-guard,         scripts/*.mjs
+    15 skills     3 of them the standards packs                    skills/
+                  FIFTEEN as of 0.1.23, not the 13 at 0.1.22:
+                  `ship` is the chain, and `scribe` is the skill
+                  that agent shipped without. Both counts are
+                  `ls plugins/mavci-core/skills/`.
+    16 scripts    state, redact, verify, gate, risk-guard,         scripts/*.mjs
                   doctor, retro, release-check, guardian-record,
-                  worklist, render, build-agents, config, and
-                  0.1.18's corpus-stage and corpus-score
+                  worklist, render, build-agents, config,
+                  0.1.18's corpus-stage and corpus-score, and
+                  0.1.23's route. `lib/route.mjs` holds the
+                  decision and is not counted here - lib/ never is.
     9 hooks       every one silent outside a Mavci project         hooks.json
                   (6.23). NINE, not the eight this file and
                   check-hooks-quiet's header both still said:
                   0.1.15 added guardian-record on SubagentStop.
                   Entries below that name eight are dated
                   observations and correct as history.
-    33 checks     the release suite, DERIVED from release.yml      check-pretag.mjs
-                  THIRTY-THREE as of 0.1.22, not the 28 this file
+    ?? checks     the release suite, DERIVED from release.yml      check-pretag.mjs
+                  The number is PRINTED BY THE GATE on every pass
+                  and is deliberately not written here: 0.1.23
+                  added two checks and the only honest way to know
+                  the total is to read a run. Every previous value
+                  in this line was maintained by hand and every
+                  one of them went stale. It was 33 at 0.1.22, and
+                  THIRTY-THREE was not the 28 this file
                   said at 0.1.21. The count is printed by the gate
                   on every pass, so it is read from a run, never
                   maintained here by hand. It was 24 at 0.1.17 and
                   the entry below explains the jump to 28: 0.1.18
                   added four, to selftest.yml only, where no
                   release gate ever ran them. See the 0.1.18 entry.
-    32 scripts    every check script in scripts/ci/                check-ci-gates.mjs
+    34 scripts    every check script in scripts/ci/                check-ci-gates.mjs
                   Larger than the suite above: the suite is what
                   release.yml runs, and check-pretag declares four
                   excluded steps with reasons on every pass.
@@ -1391,6 +1413,189 @@ It is not owed. There is no work queued behind this paragraph.
 `v<state.json.plugin_version>`, so a project whose control plane records 0.1.21
 fails loudly at checkout. **That is correct behaviour and stays.** The fix for
 such a project is `/mavci-core:doctor --sync`, not a tag here.
+
+### 0.1.23 — the chain had no middle, and two of its five agents had never run
+
+**Cut 2026-09-03.** The brief was one top-level prompt driving five agents end to
+end. What the inventory found is that the chain was **three of its four edges and
+none of its counters**, and that two agents had shipped, installed, and never run.
+
+#### 1. Two agents were unreachable, and being unreachable is what hid it
+
+`mavci-verifier` was named by **no skill in the plugin**. `/mavci-core:verify` did
+the verifier's work inline — checker, type check, build, tests, criteria, phase
+move — in the main session. The agent appeared in `/context` on every machine and
+had never once been invoked.
+
+`mavci-scribe` had **no skill at all**, and could not have started if it had. Its
+def declares `phase: "any"`, meaning *not phase-scoped*; the shared contract
+rendered that into "If `phase` is not `any`, **stop**" against a closed enum of
+`plan|build|verify|release`. It would have reported `wrong_phase` on every
+possible invocation since it shipped.
+
+**Neither was observable.** An agent nothing dispatches cannot be seen failing,
+and an unrun component is indistinguishable from a working one — this file has
+said so for four releases, and here are the two components it was true of.
+
+**It is also the defect 0.1.21 fixed one step lower, in the same agent.**
+`NO_STANDARDS_STEP_3` exists because step 3 ordered an agent with no packs to
+invoke an empty list. Step 2, directly above it, was telling that same agent to
+wait for a phase that cannot occur. Fixing the instance and not the class is what
+let the fix walk past it. `check-agent-contract.mjs` gained rule 3 — a phase gate
+must name a value in `PHASES` — and it found a second case nobody predicted:
+guardian renders **no** gate at all. That one is deliberate (the check moved to
+its dispatcher) and is now a **declared** `phase_gate` asserted against the skill
+that carries it, rather than an exemption expressed by absence, which 0.1.14
+established is indistinguishable from a block that was lost.
+
+#### 2. The rework loop was not unautomated. It had no entrance.
+
+`/mavci-core:verify` on a failure said "stop — do not fix it here" and set no
+phase. The builder refuses unless the phase is `build`. A failed verify leaves it
+at `verify`. So the loop `max_attempts: 3` bounds could only be entered by a
+privileged `--set-phase build` that nothing instructed anyone to run.
+
+Underneath it, the machinery was modelled and inert. `incrementAttempt` and
+`blockTask` were exported from `state.mjs` and called from **nowhere**: no task's
+`status` ever left `pending`, `owner_agent` was never set, `attempts` was always
+0. And `recordVerdict` has always named a verdict `<id>-attempt-NN.json` and
+appended it to `verdicts[]` **when given a `task_id`** — which nothing ever gave
+it. `evaluate` and `buildVerdict` accepted `task_id` and `attempt`, defaulted both
+to null, and `verify.mjs` had no flag to pass. The branch existed, was correct,
+and had never once been taken.
+
+`AI-Chatbot-Widget-SaaS`: **24 verdicts, every one `adhoc-<epoch>.json`, and
+`control/tasks/0001.verdicts[]` empty.** An audit trail written correctly,
+schema-validated and sealed, recording nothing about anything.
+
+**The two concealed each other.** No attempt counter moving means no attempt
+number for a verdict to name; no attribution means nobody reads `verdicts[]` and
+notices that it is always empty.
+
+#### 3. The router — the decision, not a framework
+
+ROADMAP forbids an orchestration framework, a message bus and an agent registry.
+Nothing here breaches that: native delegation already dispatches, the main session
+already is the orchestrator, `SubagentStop` already fires. What was missing was
+**the decision of what to dispatch next**, and it was living in prose, recalled by
+a model, across five skills that each knew one edge.
+
+`scripts/lib/route.mjs` is a pure function of the control plane — reads no files,
+spawns nothing, dispatches nothing. `route.mjs` gathers and prints; `skills/ship/`
+obeys. Exit status is part of the answer, because the caller is a model reading a
+transcript: 0 an agent may proceed, 1 the operator owns it, 2 unreadable.
+
+**The gates are unmoved.** Every step is a command the caller still runs, still
+through `risk-guard`. `release_gate`, `blocked` and `unverified` return
+`dispatch: null` — a statement, not an omission, and asserted. `/mavci-core:ship`
+is model-invocable while every other command is not, because otherwise "one
+prompt" is impossible; it loosens nothing, since `risk-guard` authorises by
+**caller** and the main session is the main session whichever way the command was
+selected.
+
+`--set-phase` now moves the project **and** the in-progress task in one call. Two
+writers for one fact had already produced the divergence on the first real
+project: `state.json` at `verify` over `control/tasks/0001.json` at `plan`, by
+sanctioned command.
+
+#### 4. Four defects found by RUNNING the chain, not by anything failing
+
+**a. The release gate deadlocked every RLS project.** `gate5` declares
+`tenancy.isolation: "rls"`, completed a task, passed the checker, and was refused
+with `guardian_record_absent` — told to run guardian, whose own step 1 says *"If
+`tenancy.isolation` is not `application-filters`, stop."* The gate demanded
+evidence the command producing it refuses to produce, and both exits were worse
+than the deadlock: run guardian against a mechanism it does not evaluate, or
+hand-write a record, which the gate's own closing line forbids. Neither component
+was wrong alone; one was conditional on a manifest field and the other had never
+been shown the manifest. The exemption is **derived** by `isolationOf(manifest)`
+and never assertable by a caller — null, empty and non-string all refuse as
+before — and it covers **absence only**: a corpus, failed, stale or unreadable
+record still refuses, as does an unverified session. The skipped arm is printed on
+every run.
+
+**b. The router named the shared `pending.md` stub as the architect's
+destination**, which would have every task in a project overwrite one file.
+
+**c. `active_task` gained a writer in 0.1.22 and never a clearer**, so a task that
+was built, verified, documented and closed was still the project's active one.
+Terminal statuses release it now. That makes the field truthful; it does not
+settle whether it should exist — item 5's decision to delete it is a state-file
+format change and stays queued as finding 4.
+
+**d. The close path reproduced the divergence the phase fix had just closed.**
+Closing the task before the phase move left it at `verify` while the project went
+to `release`. Phase first, close second.
+
+#### 5. What bounds any session, established by observation
+
+A subagent's working directory is **the session's**, and `CLAUDE_PROJECT_DIR` is
+**not set** in its environment. Dispatched at `gate5` from a session rooted here,
+`mavci-scribe` correctly stopped at `not_connected` — startup step 1, before its
+phase gate, so **the phase defect in section 1 was not observed live** and nothing
+more is claimed for it than `check-agent-contract` rule 3 establishes.
+
+The consequence is structural. The hooks resolve their root from `input.cwd`, also
+the session's, so redirecting agents at another project by hand would run the
+chain with `risk-guard` **silent** — no phase gate, no edit scope, no
+control-plane guard. **A chain proven with the gates off is not the chain.** So a
+multi-agent run must happen in a session rooted at the project. Gate 3 and Gate 4
+did this implicitly by running inside `gate4c`; it was never written down as a
+requirement, which is how it reads as a convenience until someone tries the other
+thing. Now in ARCHITECTURE 8.1, and filed as finding 3.
+
+#### 6. Verified on gate5, and the method earned it four more times
+
+The chain ran `idle -> plan -> build -> verify(FAIL, 3 blockers) -> rework ->
+build -> verify(PASS) -> document -> release_gate`, driven by **obeying the
+router's own `steps[]`** rather than by knowing the order, over a real Next.js
+tree and the real checker. Attempt 1's three violations were unrigged. End state:
+`attempts: 2`, `status: done`, `phase: release` on both halves, `active_task:
+null`, both attributed verdicts linked, seal intact, release gate passing.
+
+| Mutation | Restores | What goes red |
+|---|---|---|
+| M1 | pre-fix `verify.mjs` | 5, incl. `adhoc-*` and `verdicts[] = []` — the live defect reproduced |
+| M2 | `--task` falling back to adhoc | A4/A4b only — attribution vs. the appearance of it |
+| M5 | the verbs unclassified in risk-guard | **nothing at first** — see below |
+| N1-N5 | each router property in turn | N5 (`--set-phase` moving one half) breaks **five** end-to-end assertions |
+| P1-P4 | each half of the guardian exemption | P2 (the loose exemption) lets a project with **no manifest** pass |
+| Q1-Q2 | the stale pointer, the close order | Q2 reproduces gate5's exact bad state |
+
+**Four occasions the house rule returned something reading alone would not:**
+
+1. **M5 went fully green.** Deleting all three lifecycle verbs from `PRIVILEGED`
+   left the whole privilege section passing, because the guard also fails closed
+   on unrecognised flags — so an unclassified verb is denied by the wrong arm,
+   with the wrong message, and with no confirm on the main-session side. Decision
+   and reason are two facts and only one discriminates. Eighth instance.
+2. **An unreachable enum member.** Requiring every action in `ACTIONS` to be
+   reached by some case found `release_gate` unreachable: `selectTask` correctly
+   excludes closed tasks, so the branch sat behind a selection that could never
+   return one.
+3. **An adjacent assertion inside the end-to-end walk.** Reordering the router's
+   `document` steps failed the ordering assertion while the walk's own "both
+   halves agree" assertion stayed green — it was running a hardcoded order,
+   asserting that *my* order works, which was never in question. The walk now
+   executes `steps[]` verbatim, and the mutation reproduces gate5's exact bad
+   state.
+4. **How much one defect cost.** Reverting `--set-phase` to move one half broke
+   five end-to-end assertions, not the one about the phase.
+
+34 CI check scripts, two of them new — `check-provenance.mjs` and
+`check-route.mjs` — plus rule 3 in `check-agent-contract.mjs`. All wired into
+`release.yml` and `selftest.yml`, and `check-pretag` derives the suite from
+`release.yml` as before.
+
+#### What is NOT in this release, and is filed rather than guessed at
+
+`pending-system-change-0.1.23.md` findings 2-4: the risk guard reading every flag
+as a command (a **relaxation**, and not one to make opportunistically in the
+middle of something else); the subagent-rooting fact, which has no assertion
+available because it is a property of the harness; and `active_task`'s deletion,
+which is a state-file format change. Guardian's answers remain unmeasured and
+`doctor` still FAILs every project until a corpus result exists — nothing here
+changes that.
 
 ### Carried forward — still not built
 

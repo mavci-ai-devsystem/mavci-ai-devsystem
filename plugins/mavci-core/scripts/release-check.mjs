@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PATHS } from './config.mjs';
 import { abs, exists, readJsonOrNull } from './lib/fsx.mjs';
-import { assessReleaseReadiness, selectProjectRecord, UNREADABLE } from './lib/release-gate.mjs';
+import { assessReleaseReadiness, isolationOf, selectProjectRecord, UNREADABLE } from './lib/release-gate.mjs';
 import { pluginVersion, projectRoot } from './state.mjs';
 
 /**
@@ -56,6 +56,10 @@ function main() {
     unverified: readJsonOrNull(abs(root, PATHS.unverified)),
     guardianRecord: record,
     recordCounts: counts,
+    // Derived from the manifest, never asserted. `isolationOf` returns null for
+    // anything that is not a non-empty string, so an unreadable manifest refuses
+    // as before rather than becoming an exemption.
+    isolation: isolationOf(readJsonOrNull(abs(root, PATHS.manifest))),
   });
 
   // Say what was skipped even on the happy path. A gate that silently discards
@@ -65,6 +69,15 @@ function main() {
     console.log('(' + counts.total + ' guardian record(s) on disk: ' + counts.corpus
       + ' corpus fixture(s), ' + counts.undeclared
       + ' declaring no source, both skipped as project evidence.)');
+    console.log('');
+  }
+
+  // An arm that was SKIPPED is printed before the verdict, on a pass and on a
+  // failure alike. A gate that quietly does not check something and then says
+  // "all hold" is asserting more than it verified - the same argument the
+  // declared exclusions above are printed for.
+  for (const n of result.notes ?? []) {
+    console.log(`(${n})`);
     console.log('');
   }
 
