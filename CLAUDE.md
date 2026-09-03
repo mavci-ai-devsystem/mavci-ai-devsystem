@@ -1932,6 +1932,72 @@ nobody will notice, which is also the argument for not deferring it twice.
    until then any one of them fails it. The check is the enforcement in both
    directions, which is why no reminder is needed here beyond this paragraph.
 
+### 0.1.24 — the caller was never asserted, and neither was the report
+
+**Cut 2026-09-03**, the same day as 0.1.23 and because of it: the first
+end-to-end run of the chain on a real request died on its first line.
+
+#### 1. `/mavci-core:ship` threw the request away
+
+`skills/ship/SKILL.md` line 12 called `route.mjs` with no `--request` and no
+`$ARGUMENTS`. The router took its no-request branch, printed `release_gate`, and
+ship's own action table says that means **stop** — so the chain terminated before
+its first consultation, on a request that routes to `plan` the moment the argument
+is passed. Line 45, the loop body inside a fenced block, carried
+`--json --request "$ARGUMENTS"` and was always correct. The line that EXECUTES was
+not the line written to be right.
+
+It reads as a legitimate verdict, which is why it is expensive: `release_gate` is
+a real action with a plausible explanation attached, and from `idle` the same drop
+yields `idle`. There is no input for which the bare call is right and no output
+that says it was wrong.
+
+**Three checks read that line and none asked the question.**
+`check-route.mjs` asserts every router case as a pure function *with a request
+already in hand* — callee asserted, caller assumed. `check-command-invocation.mjs`
+substitutes `$ARGUMENTS` with the empty string **by construction**, because it
+asks whether a block runs. `check-skill-placeholders.mjs` asserts the placeholder
+is spelled right, and it was. Same shape as 0.1.23's counter split: each side
+right alone, the seam between them asserted by nothing.
+
+`check-skill-arguments.mjs` is the seam. For every `SKILL.md` declaring
+`$ARGUMENTS`, each inline `` !`...` `` block either receives them or is in
+`EXEMPT` with a reason. **The allowlist is load-bearing, not an escape hatch:**
+`verify` calls `route.mjs` bare and is CORRECT — its `$ARGUMENTS` is a task id and
+the router has no task-id parameter — so exemptions are keyed by SKILL and each
+records what that skill's arguments MEAN. Without it the rule would "fix" a
+correct call into a bug. Nine exemptions, each asserted to still match a block, so
+one that outlives its call fails rather than excusing its replacement.
+Demonstrated failing against the reverted line and green against the fix, with
+both controls ahead of the loop.
+
+#### 2. The report is the last uncontrolled input, and both parties feed it
+
+The 0.1.24 fix was reported done, committed and released — by a session that had
+written it nowhere. `plugin.json` read 0.1.23, `git log` ended on a docs commit,
+and the reflog was empty of it, which is the part that settles it: a commit made
+and then reset still appears there. It was not lost. It was never written. At
+most it reached the plugin CACHE — generated state — which was re-populated twelve
+minutes later, erasing the question along with the edit.
+
+The same day, twice, the operator reported a migration applied that was not.
+
+**Every layer here verifies OUTPUT** — the checker reads the tree, the verifier
+reads the criteria, `check-pretag` reads the manifest against the tag, `doctor`
+reads the control plane against the installed build. **Nothing reads a REPORT**,
+and a report is the single input to the next decision: to propagate, to move on,
+to build the next thing. A false "this landed" does not fail — it succeeds against
+the wrong tree, which here produced a propagation that reinstalled the version
+being replaced and a run that failed for the reason already diagnosed.
+
+**The evidence for "this landed" is the filesystem**: `git log`, `git status`, the
+tag list, the version in the manifest. Not a transcript and not the other party's
+summary. Whoever acts on such a claim checks it; whoever makes it shows the
+command. **No assertion is proposed, deliberately** — nothing in this repository
+can read a transcript, and a check that appeared to would be the house failure
+mode exactly. The full record is
+`docs/lessons/0.1.24-the-caller-was-never-asserted.md`.
+
 ---
 
 ## Ask me before

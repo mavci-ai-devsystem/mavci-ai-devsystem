@@ -133,6 +133,29 @@ first.
                                       multi-agent half must run in a session
                                       rooted there.
 
+    0.1.24-the-caller-was-never-asserted.md
+                                      gate5, plugin 0.1.23, 2026-09-03.
+                                      NOT byte-identical, and the only file here
+                                      that is not: finding 1 was applied in the
+                                      same pass that recorded it, and finding 2
+                                      was filed by nobody because it is about the
+                                      filing.
+                                      1 is the caller nothing asserts -
+                                      /mavci-core:ship called route.mjs with no
+                                      --request, got `release_gate`, and stopped,
+                                      on a request that routes to `plan`. Three
+                                      checks read that line and none asked whether
+                                      it was handed anything.
+                                      2 is the claim-versus-state gap, in both
+                                      directions on one day: a fix reported
+                                      released as 0.1.24 that was never written to
+                                      the repository, and two migrations reported
+                                      applied that were not. Every layer verifies
+                                      OUTPUT; nothing verifies either party's
+                                      REPORT, and the report is the input to the
+                                      next decision. No assertion is proposed,
+                                      and the record says why.
+
 ## Why this copy was manual
 
 `/mavci-core:retro` — the command whose whole job is to carry a finding out of a

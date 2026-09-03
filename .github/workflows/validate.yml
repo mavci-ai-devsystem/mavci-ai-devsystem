@@ -194,6 +194,19 @@ jobs:
       - name: Every command dynamic context substitutes and runs
         run: node scripts/ci/check-command-invocation.mjs
 
+      # And the third question about the same line, which the two above cannot
+      # ask: not is it spelled right, not does it run, but is it handed what the
+      # operator typed. `/mavci-core:ship "<request>"` called route.mjs with no
+      # --request from 0.1.23. route.mjs took the no-request branch, printed
+      # `release_gate`, and ship's own action table says that means STOP - so the
+      # chain died before its first router consultation and the failure read as a
+      # legitimate verdict. check-route.mjs asserts every router case as a pure
+      # function with a request already in hand; check-command-invocation.mjs
+      # substitutes $ARGUMENTS with the empty string by construction. Both were
+      # green on the broken build.
+      - name: Every skill that takes arguments hands them to what routes on them
+        run: node scripts/ci/check-skill-arguments.mjs
+
       # Everything above runs from the repo, where <plugin>/../../templates
       # happens to resolve. An INSTALLED plugin is only the plugins/mavci-core
       # subtree, so 0.1.3-0.1.5 exited 2 on every real install while CI stayed

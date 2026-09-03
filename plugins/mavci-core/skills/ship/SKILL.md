@@ -9,7 +9,7 @@ allowed-tools: Read, Grep, Glob, Bash(node *)
 
 Request: `$ARGUMENTS`
 
-Next step: !`node "${CLAUDE_PLUGIN_ROOT}/scripts/route.mjs" 2>&1`
+Next step: !`node "${CLAUDE_PLUGIN_ROOT}/scripts/route.mjs" --request "$ARGUMENTS" 2>&1`
 
 ## If the block above did not run
 
@@ -46,6 +46,11 @@ consultations in one invocation — whichever comes first.
 
 Pass `--request` only while no task is open; once one is, drop it — a request
 given to a router that already has a task is noise, and the router ignores it.
+The preflight above passes it unconditionally, which is the same statement from
+the other side: every request-sensitive branch sits in the no-task-open arm, so
+the router discards `--request` exactly when this paragraph says to. Bare
+`/mavci-core:ship` expands to `--request ""`, which is falsy and routes as no
+request at all.
 
 The answer has `action`, `dispatch`, `task_id`, `why` and `steps[]`. Run every
 command in `steps[]`, in order, then dispatch the agent in `dispatch` if there is
