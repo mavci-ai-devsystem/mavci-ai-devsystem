@@ -262,6 +262,47 @@ try {
   }
 }
 
+/* --- 7. --apply must not carry a finding into generated state ----------
+ * gate5, 2026-09-03. The operator ran --apply and it reported success. The
+ * lesson landed in ~/.claude/plugins/marketplaces/mavci/docs/lessons/ - the
+ * marketplace clone, which propagation resets. Nothing was lost only because
+ * --clear had not run yet, and the documented workflow is apply THEN clear.
+ *
+ * The clone was an accepted fallback BY DESIGN - systemRepo() listed it as a
+ * candidate - and docs/lessons/0.1.18-the-clone-is-generated-state.md was
+ * sitting in the very directory being written into. A recorded lesson, a
+ * refusal already written at the !repo branch, and a shipped defect, all in
+ * one file.
+ *
+ * THE ASSERTION IS A ROUND TRIP, NOT AN EXIT CODE. --apply exited 0 on the
+ * broken build and the file existed - just in a directory that gets reset.
+ * Asserting either passes on the bug. The property is WHERE it landed.
+ */
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mavci-clone-"));
+  cleanup.push(tmp);
+
+  // Only the clone carries the marker; the running checkout does not. That is
+  // the shape of an agent invoking the plugin from ~/.claude/plugins/cache/,
+  // where resolve(HERE, "..", "..", "..") lands in the cache root.
+  const fakeClone = path.join(tmp, "marketplaces", "mavci");
+  fs.mkdirSync(path.join(fakeClone, ".claude-plugin"), { recursive: true });
+  fs.writeFileSync(path.join(fakeClone, ".claude-plugin", "marketplace.json"), "{}");
+  const fakeHere = path.join(tmp, "cache", "mavci", "mavci-core", "0.1.24", "scripts");
+  fs.mkdirSync(fakeHere, { recursive: true });
+
+  const target = retro.systemRepo({ here: fakeHere, clone: fakeClone });
+
+  if (target === null) {
+    ok("--apply refuses when the only candidate is the marketplace clone");
+  } else {
+    bad("--apply resolved a write target inside generated state (" + target + "). A finding "
+      + "carried there is discarded by the next propagation, and --clear then destroys the "
+      + "only durable copy. Refusing is correct: writing to a clone that will be reset looks "
+      + "like success and the loss is invisible until someone goes looking.");
+  }
+}
+
 } finally {
   for (const d of cleanup) fs.rmSync(d, { recursive: true, force: true });
 }

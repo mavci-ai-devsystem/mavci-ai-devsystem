@@ -290,8 +290,18 @@ function clonePath() {
  * Both candidates are confirmed by a marker file rather than by path shape,
  * because a wrong guess writes a lesson into some unrelated repository.
  */
-function systemRepo() {
-  const candidates = [path.resolve(HERE, '..', '..', '..'), clonePath()];
+export function systemRepo({ here = HERE, clone = clonePath() } = {}) {
+  // The clone is NOT a candidate, and its absence here is the whole fix.
+  // gate5 2026-09-03: with it in this list, an agent running from
+  // ~/.claude/plugins/cache/ missed on the first candidate and applied a
+  // finding into ~/.claude/plugins/marketplaces/mavci, which the next
+  // propagation resets. --apply reported success. The documented workflow is
+  // apply THEN clear, so an operator following it destroys the only durable
+  // copy. Refusing is correct when no source checkout is found: writing to a
+  // tree that will be reset looks like it worked, and the loss is invisible
+  // until someone goes looking for a finding that is gone. `clone` is still
+  // a parameter so the refusal can NAME the path it declined to write to.
+  const candidates = [path.resolve(here, '..', '..', '..')];
   for (const c of candidates) {
     if (exists(path.join(c, '.claude-plugin', 'marketplace.json'))) return c;
   }
@@ -334,8 +344,9 @@ function apply(root) {
     // carry". Failing here with the manual step spelled out is strictly better
     // than writing the file somewhere plausible.
     die('could not locate the system repository. Looked for .claude-plugin/marketplace.json in:\n'
-      + `  ${clonePath()}\n`
       + `  ${path.resolve(HERE, '..', '..', '..')}\n`
+      + `It is NOT written to the marketplace clone, which propagation resets:\n`
+      + `  ${clonePath()}\n`
       + `Copy ${PENDING} into the system repo's docs/lessons/ by hand instead - that is all this `
       + 'command does, and doing it by hand loses nothing but the provenance header.', 1);
   }
