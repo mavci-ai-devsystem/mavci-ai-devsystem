@@ -33,8 +33,15 @@
  *     `corpus-score.mjs` refuses when the expectation's `sites_total` disagrees with
  *     the worklist's, which is a fact about the run rather than a note left behind.
  *
- * ONE CASE AT A TIME, because `worklist.mjs --emit` has no path scope and emits one
- * worklist for the whole tree. With every case staged there is one worklist, one
+ * ONE CASE AT A TIME. The RULE is unchanged and the REASON has moved: `--emit` is
+ * now scoped to this staging directory whenever a case is staged (gate6 finding 10),
+ * so the host project no longer contributes sites - but the stage is still one tree,
+ * and two cases staged into it are enumerated as one worklist exactly as before. The
+ * sentence this replaced said `--emit` "has no path scope and emits one worklist for
+ * the whole tree", which was true and is now false; it is rewritten rather than
+ * deleted because it was also the proof of finding 10, and a header that keeps
+ * asserting fixed behaviour is how the v0.1.2 `hooks.json` example survived in
+ * ARCHITECTURE 6.4. With every case staged there is one worklist, one
  * record and one verdict; and since `assessCoverage` reports `undetermined` ahead of
  * `findings`, a merged run can never surface the external case's expected `findings`
  * and can never surface the degenerate-pass control's expected `pass` at all. The

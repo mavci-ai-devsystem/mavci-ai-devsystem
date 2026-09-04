@@ -2662,6 +2662,155 @@ the correct form and asserting the substring alone passes on the defect.
 46 assertions in `check-pretag --selftest`, up from 45. The finding has no number:
 27 and 28 are taken in `docs/lessons/`, so the comments name it by shape until a
 retro is filed — a number assigned now would be wrong by the time anyone read it.
+
+### 0.1.32 — the corpus can run where guardian is worth running, and a chain stops at the next chain
+
+**Cut 2026-09-04.** Two gate6 findings, 10 and 20, bumped once because 20's fix
+must reach a project before that project can drop the workaround it is carrying —
+see the propagation note at the end of this entry.
+
+#### 1. Finding 10 — the enumeration had no scope, and the argument was already settled
+
+`worklist.mjs --emit` enumerated the whole project, so a host project's own
+tenant-filtered service-role sites were counted into every corpus case and
+`corpus-score.mjs` refused the run. Its refusal was correct and its message blamed
+the staged case, which was fine. **The bind is what made it urgent:** `doctor` FAILs
+per project until a corpus result exists, so the corpus was demanded of exactly the
+projects that had become unable to host it — a project acquires its first such site
+at the moment guardian becomes worth running there at all. gate6 crossed that line
+and could not clear its own FAIL.
+
+**The mechanism was decided by the architecture, not chosen here.** `stageIsActive`
+already carries the note that this fact is *"derived rather than declared. An
+argument the dispatcher has to remember to pass is an argument the dispatcher will
+one day forget"*, and `openTicket` derives `source` from it with one writer. A
+`--scope` flag would have been a SECOND answer to *is this a corpus run*, and the two
+disagree in both directions: a scope passed with an empty stage emits an empty
+worklist recorded `source: real`, and a scope omitted with a case staged is finding
+10 unchanged.
+
+**And the unstaged project is where the flag would have been worst**, which is the
+test the operator posed. A scope passed on a project with no stage narrows a REAL
+guardian run — fewer sites, full coverage, a clean verdict, `source: real`, and
+`release-check.mjs` accepts it. A green record about a question nobody asked, through
+the sanctioned path.
+
+One filter on `ctx.files` in `ctxFor`, derived from `stageIsActive`. It scopes
+enumeration AND `discoverAdminFactories`, which is required rather than convenient:
+leaving discovery project-wide would let the host's own factory decide whether a
+staged fixture's client is service-role — finding 6 contaminating the corpus through
+the other half of the scan, and harder to see because the site count would look
+right. Filtered, never re-rooted: paths stay project-relative POSIX so the
+expectations still join. `--emit` now names the tree it enumerated on every run and
+splits the `sites_total is 0` message, which had one explanation for two causes.
+
+Full reasoning, written before implementation: `docs/corpus-scope-design.md`.
+
+#### 2. Finding 20 — a chain borrowed the next chain's predicate
+
+`scanFile` cut a query chain at the first `;` or blank line. **This repository's
+house style has no semicolons and neither does the scaffold this plugin writes**, so
+the only delimiter left was a blank line, and a blank line is formatting. A read with
+no predicate followed by a read that has one borrowed the second read's `.eq` — with
+no blank line between them, and again inside a `Promise.all([...])`.
+
+**Both enforcement layers then cleared it, and that is why it ranks above its size.**
+`supabase.service_role_query_scoped` opens with `if (site.has_tenant_filter)
+continue`, so the one check whose entire purpose is to catch an unfiltered
+service-role read of a tenant table skipped it. And `worklistFrom` kept the site and
+asked guardian whether `orgId` came from a verified caller — for a query in which
+`orgId` does not appear. Guardian would trace it, find it session-derived, and answer
+`verified_session`: correct about the identifier and meaningless about the site. Two
+independent controls, both reporting clean, on a read with no tenant boundary at all.
+
+The span now also ends at the START OF THE NEXT CHAIN. The three cheap fixes are
+named in the code so they are not reached for again: requiring blank lines or
+forbidding `Promise.all` in project code makes enforcement depend on formatting any
+formatter may remove — that was the field workaround, not the fix; shortening the
+600-character window changes which shapes leak without addressing why; and `residue`
+is wrong in the opposite direction, because the scanner was not failing to recognise
+the shape, it was confidently reporting the wrong answer about it.
+
+**The new fixtures are semicolon-free on purpose.** Every pre-existing fixture
+terminates statements with semicolons, which is exactly why this survived: all of
+them are correct under the old span and stay correct under the new one.
+
+#### 3. Two assertions went green first, and both are findings about the assertion
+
+**S1b called discovery itself.** The assertion written to catch the
+factory-discovery contamination asked `discoverAdminFactories` what it does with a
+ctx THE CHECK BUILT, and never asserted that `scanProject` hands it a scoped one — so
+the mutation giving discovery its own project-wide list left both halves green. That
+is 0.1.24's unasserted caller and 0.1.30's obliging fake, **reproduced inside the
+assertion written to prevent the contamination it was missing** — the fifth scale on
+the list that already runs comment, fixture, lesson, assertion, placement.
+
+The fix is the one that generalises and it is why this is recorded as method:
+`scanProject` now RETURNS `adminFactories`, so the assertion reads what the real scan
+discovered. **An assertion that constructs its own input is testing a function, not a
+system.**
+
+**And dropping the statement delimiter broke nothing.** `chainEnd` takes the minimum
+of two stops, and shapes A–C exercise only one of them — in every one, the next
+`.from(` arrives first. A build with `;` and the blank line removed entirely passed
+all of group 1 and both controls. Shapes D and E exist because that mutation went
+green: one admin read, no predicate, followed by an unrelated `.eq` with no `.from(`
+between, so the delimiter is the only thing that can stop the span. 0.1.11's rule —
+two carriers means two assertions — at the level of a `Math.min`.
+
+**The one place a check reconstructing its own input is correct** is finding 20's
+groups 2 and 3: the invariant is *the predicate occurs before the next `.from(` in
+the SOURCE*, which is a property of the source rather than of the span. A check that
+asked the scanner where the chain ended and then verified against that answer would
+pass on any self-consistent wrong span. Stated at the assertions, because it is the
+exact inverse of the S1b lesson three sections up and a reader will otherwise
+"correct" one of them into the other.
+
+#### Verification
+
+Every fix demonstrated failing first, each mutation reddening a named set alone.
+Finding 10: the unfiltered scan reproduces gate6 live — `sites_total 3` against an
+expectation of 2 and the scorer refusing — five red with S3 green; scoping
+unconditionally reddens **S3 alone**, which is 0.1.26's E6 pairing shown rather than
+argued; re-rooting reddens four including S1b's first half while its second stays
+green; discovery given its own list reddens S1b's second half alone. Finding 20:
+no termination at all reddens five including shape A, which was correct before the
+fix; the delimiter dropped reddens D and E alone; the off-by-one that lets a chain's
+own `.from(` terminate it reddens eight across the pre-existing sections.
+
+All 37 checks `release.yml` runs pass.
+
+#### What this does NOT close, said where it will be read
+
+Finding 18's second half — the receipt recording the host tree's own state — is
+**not** built, and this release makes it more necessary rather than less: with the
+host no longer enumerated, every corpus run on a project with real sites now produces
+a receipt byte-indistinguishable from one produced on an empty scaffold. The park was
+one route to that; this makes it the ordinary path. Finding 19's second half, the
+printed procedure being a true account including the `verify`-phase precondition it
+does not enforce, is untouched. Both are named in `templates/corpus/README.md` where
+an operator running the corpus will hit them. Guardian's answers remain unmeasured
+and `doctor` still FAILs every project until a corpus result exists.
+
+#### PROPAGATION — finding 20's fix and a project's workaround are one change in two repositories
+
+**A project carrying the formatting workaround must not drop it until the machine it
+builds on is running 0.1.32.** gate6's task 0003 spec carries an acceptance criterion
+requiring a blank line between two service-role reads and forbidding `Promise.all`,
+plus a comment in `app/api/activity/route.ts` naming the defect. Those are a
+formatting rule standing in for a scanner fix, recorded as a workaround rather than a
+design, and **their removal is the signal that the fix landed** — so removing them
+early destroys the signal and re-opens the false negative in the same act.
+
+Order, and the middle step is the one that is easy to skip: cut and push the tag;
+propagate to the machine (`git fetch` + `checkout -B main origin/main` in the
+marketplace clone, `claude plugin uninstall` then `install --scope user`, restart);
+**confirm in the project that the running plugin is 0.1.32** with `doctor`, not by
+assuming the restart took; then remove criteria 10 and 10a and the route comment in
+one commit whose message says which plugin version made them unnecessary. Between the
+tag and that commit the project truthfully carries a comment naming a defect that is
+fixed everywhere except on the machine that has not propagated yet, and that is the
+correct state to be in rather than a race to shorten.
 ---
 
 ## Ask me before

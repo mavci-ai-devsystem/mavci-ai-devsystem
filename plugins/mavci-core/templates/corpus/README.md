@@ -207,6 +207,25 @@ opaque id cannot carry an ordering, and a filename should not be carrying anythi
     plugins/mavci-core/scripts/corpus-score.mjs                scores ONE record
     <project>/corpus-run/                                      the only tree the scanner sees
 
+**That last line was aspirational until the scope fix, and it is worth saying so
+rather than letting it quietly become correct.** `worklist.mjs --emit` had no path
+scope: it enumerated the whole project, so a host project with service-role query
+sites of its own contributed them to every case and `corpus-score.mjs` refused the
+run — with a message blaming the staged case, which was fine. That is gate6 finding
+10, and it meant the corpus could only be run on a project with no sites of its own,
+which is every project *except* the ones where guardian is worth running. `--emit`
+now scopes the enumeration to this directory whenever a case is staged, derived from
+the stage itself rather than from a flag, so the line above is now true.
+
+**Two residuals, because the fix is narrower than it reads.** During a corpus run the
+scan's residue check no longer covers the host's code — correct, since the host is
+not what is being graded, but it means a corpus run is not also a residue check on
+the project. And nothing in the receipt records the host tree's own state, so a
+result produced on a project with sites is still byte-indistinguishable from one
+produced on an empty scaffold; that is gate6 finding 18's second half and it is not
+built. A green corpus grades guardian on the staged fixtures. It says nothing about
+the host project's own sites, and it never did.
+
 **The library and the expectations live in the plugin, never in the project**, and
 this is the one part of the layout that is load-bearing. Guardian holds `Read`,
 `Grep` and `Glob` over the project with no path scope, so anything inside the project

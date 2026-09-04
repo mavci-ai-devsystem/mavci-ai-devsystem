@@ -237,6 +237,55 @@ function definitionSpan(blanked, from) {
   return blanked.length;
 }
 
+/**
+ * Where the query chain that starts at offset 0 of `tail` ends.
+ *
+ * THREE TERMINATORS, AND THE THIRD IS WHY THIS IS A FUNCTION. Until 0.1.32 the span
+ * ended at `;` or a blank line only, and gate6 finding 20 is what that costs in a
+ * codebase with no semicolons - which is this repository's house style AND the style
+ * of the scaffold this plugin itself writes. The only delimiter left was a blank
+ * line, and a blank line is formatting: any formatter may remove it.
+ *
+ * MEASURED, on three handler shapes with a `members` read carrying NO predicate
+ * followed by an `activity_events` read carrying `.eq('org_id', orgId)`. With a
+ * blank line between them the `members` site was correctly `has_tenant_filter:
+ * false`. Without one, and again with both inside a `Promise.all([...])`, the first
+ * chain's slice ran past the end of its own statement and picked up the SECOND
+ * chain's predicate: `has_tenant_filter: true, filter_value: "orgId"` on a query
+ * containing no `.eq` whatsoever.
+ *
+ * BOTH ENFORCEMENT LAYERS THEN CLEARED IT, which is why this was a blocker rather
+ * than a miss. `supabase.service_role_query_scoped` opens its loop with `if
+ * (site.has_tenant_filter) continue` - so the one check whose entire purpose is to
+ * catch an unfiltered service-role read of a tenant table skipped it. And
+ * `worklistFrom` kept the site and asked guardian whether `orgId` came from a
+ * verified caller - for a query in which `orgId` does not appear. Guardian would
+ * trace it, find it legitimately session-derived, and answer `verified_session`:
+ * correct about the identifier and meaningless about the site. Two independent
+ * controls, both reporting clean, on a read with no tenant boundary at all.
+ *
+ * THE CHEAP FIXES, NAMED SO THEY ARE NOT REACHED FOR AGAIN. Requiring blank lines or
+ * forbidding `Promise.all` in project code makes correct enforcement depend on
+ * formatting - that was the field workaround and it is not the fix. Shortening the
+ * 600-character window changes which shapes leak without addressing why any of them
+ * do. And `residue` is wrong in the opposite direction: the scanner was not failing
+ * to recognise the shape, it was confidently reporting the wrong answer about it,
+ * which is the one thing residue exists NOT to cover.
+ *
+ * A `.from(` nested inside another statement's arguments ends the outer span early,
+ * so a predicate after it is not seen and the site reads unfiltered. That is a false
+ * POSITIVE in a blocker, which is the safe direction, and it is stated rather than
+ * left to be discovered.
+ */
+function chainEnd(tail) {
+  const delim = tail.search(/;|\n\s*\n/);
+  // From index 1: `tail` opens with this chain's own `.from(`.
+  const rel = tail.slice(1).search(/\.from\s*\(/);
+  const next = rel === -1 ? -1 : rel + 1;
+  const stops = [delim, next].filter((i) => i !== -1);
+  return stops.length ? Math.min(...stops) : tail.length;
+}
+
 /** `const x = ...` / `let x = ...` capturing the identifier. */
 const ASSIGN = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*$/;
 
@@ -312,8 +361,7 @@ export function scanFile(rel, text, { tenantColumn = null, adminFactories = null
     // The chain runs to the end of the statement. Blanked source keeps offsets, so
     // slice the ORIGINAL for evidence and the BLANKED for structure.
     const tailBlank = blanked.slice(m.index, m.index + 600);
-    const stop = tailBlank.search(/;|\n\s*\n/);
-    const chainBlank = stop === -1 ? tailBlank : tailBlank.slice(0, stop);
+    const chainBlank = tailBlank.slice(0, chainEnd(tailBlank));
     const chainReal = text.slice(m.index, m.index + chainBlank.length);
 
     // `.storage.from()` and `.rpc()` are not table queries.
@@ -359,15 +407,27 @@ export function scanFile(rel, text, { tenantColumn = null, adminFactories = null
  * so a coarse hit that falls through the branches above would be a code path that
  * returns neither - which is what the assertion in check-service-role-sites.mjs
  * pins. The count is carried so the invariant is checkable from outside.
+ *
+ * `adminFactories` is returned for the same reason the count is: so that WHAT THIS
+ * FUNCTION ACTUALLY DISCOVERED is checkable from outside instead of being inferred
+ * by a caller running discovery again for itself. A check that calls
+ * `discoverAdminFactories` directly asserts what discovery does with the ctx THE
+ * CHECK built, never what this function hands it - which is 0.1.24's unasserted
+ * caller and 0.1.30's obliging fake, and it was demonstrated: a mutation giving
+ * discovery its own project-wide list here left every such assertion green.
  */
 export function scanProject(ctx, { tenantColumn = null } = {}) {
   const sites = [];
   const excluded = [];
   let coarse = 0;
 
-  // Derived BEFORE any file is scanned, and from the whole tree, because the
-  // module that builds the client is almost never the module that queries with
-  // it. Scanning file-by-file with no project-wide pass is what made the
+  // Derived BEFORE any file is scanned, and from EVERY FILE IN `ctx.files` -
+  // which is the whole project on an ordinary run and the staging directory alone
+  // when a corpus case is staged (see `ctxFor` in worklist.mjs). It is one list on
+  // purpose: a discovery pass wider than the enumeration would let a host project
+  // decide whether a staged fixture's client is service-role. The reason it is
+  // project-wide at all is that the module building the client is almost never the
+  // module that queries with it. Scanning file-by-file with no wider pass is what made the
   // scaffold's own factory invisible: `lib/supabase/server.ts` contains no
   // `.from(` at all, so it was never even opened.
   const adminFactories = discoverAdminFactories(ctx);
@@ -383,7 +443,7 @@ export function scanProject(ctx, { tenantColumn = null } = {}) {
   }
 
   const residue = coarse - sites.length - excluded.length;
-  return { sites, excluded, coarse, residue };
+  return { sites, excluded, coarse, residue, adminFactories };
 }
 
 /**

@@ -67,7 +67,10 @@ export function authorityNote(who) {
 }
 
 const isCode = (p) => /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(p);
-const under = (p, dir) => p === dir || p.startsWith(dir + '/');
+/** Exported so `worklist.mjs` scopes the corpus enumeration with THIS definition
+ *  rather than a second copy of it - it already imports CORPUS_STAGE_DIR from here,
+ *  and "under that directory" is the same question in both places. */
+export const under = (p, dir) => p === dir || p.startsWith(dir + '/');
 const inAny = (p, dirs) => dirs.some((d) => under(p, d));
 
 /* ------------------------------------------------------- fixture class

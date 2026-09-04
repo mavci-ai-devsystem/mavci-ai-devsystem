@@ -266,6 +266,206 @@ check(positive.result.checks.length === 4,
     'N10 CANNOT_SCORE is not reachable as a pass - it is its own state and its own exit code');
 }
 
+/* ==========================================================================
+ * S1-S3: the corpus staged into a HOST PROJECT THAT HAS SITES OF ITS OWN.
+ *
+ * gate6 finding 10. `worklist.mjs --emit` had no path scope, so a host project's
+ * own tenant-filtered service-role sites were enumerated into every case and the
+ * run could not be scored. The bind is that `doctor` FAILs per project until a
+ * corpus result exists, so the corpus was demanded of exactly the projects that
+ * had become unable to host it - a project acquires its first such site at the
+ * moment guardian becomes worth running there at all.
+ *
+ * THE FIXTURE IS THE HOST, NOT A MIS-STAGED CASE, and that is the whole point.
+ * N9 above already covers the `sites_total` guard, and on gate6 that guard fired
+ * CORRECTLY - it is not the defect and it did not miss anything. A correct
+ * refusal is indistinguishable from a correct refusal for the wrong reason, so
+ * the only fixture that can tell them apart is one where the extra site comes
+ * from the host. N9 passes against the broken build; S1 does not.
+ *
+ * S3 IS NOT OPTIONAL AND IS NOT IMPLIED BY S1 OR S2. A scope that narrows
+ * unconditionally satisfies both of them and silently narrows every REAL
+ * guardian run - fewer sites, full coverage, a clean verdict, `source: real`,
+ * and `release-check.mjs` accepts it as project evidence. That is 0.1.26's E6
+ * pairing: a gate that always refuses satisfies the refusal case alone, and only
+ * the permission half separates them. S3 is the permission half, and it doubles
+ * as the positive control for the fixture - without it, every "the host is not
+ * enumerated" assertion below is satisfied by a host that never had a site.
+ *
+ * Design and the full argument: `docs/corpus-scope-design.md`.
+ * ========================================================================== */
+
+const fs = await import('node:fs');
+const os = await import('node:os');
+
+const { emitWorklist, ctxFor } = await import(
+  pathToFileURL(path.join(ROOT, 'plugins/mavci-core/scripts/worklist.mjs')).href);
+const { scanProject } = await import(
+  pathToFileURL(path.join(ROOT, 'plugins/mavci-core/scripts/lib/sitescan.mjs')).href);
+const { stageCase } = await import(
+  pathToFileURL(path.join(ROOT, 'plugins/mavci-core/scripts/corpus-stage.mjs')).href);
+
+/** The host's own service-role factory. A NAME NO CASE USES, so S1b can tell
+ *  whose factory the scan discovered rather than counting how many it found. */
+const HOST_FACTORY = 'getActivityServiceClient';
+const HOST_SITE = 'app/api/activity/route.ts';
+
+/**
+ * A project with a manifest and, optionally, one tenant-filtered service-role
+ * site of its own - modelled on gate6's `app/api/activity/route.ts:46`, table
+ * `activity_events`, filter value `orgId`, which is the real site that produced
+ * the finding.
+ */
+function makeHostProject({ withHostSite = true } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-scope-'));
+  const write = (rel, text) => {
+    fs.mkdirSync(path.join(root, path.dirname(rel)), { recursive: true });
+    fs.writeFileSync(path.join(root, rel), text, 'utf8');
+  };
+  write('.mavci/project.json', JSON.stringify({
+    schema_version: 1,
+    project_id: 'scope-fixture',
+    tenancy: { isolation: 'application-filters', tenant_column: 'org_id' },
+  }, null, 2));
+  if (withHostSite) {
+    write('lib/db.ts',
+      'import { createClient } from "@supabase/supabase-js";\n'
+      + `export function ${HOST_FACTORY}() {\n`
+      + '  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, '
+      + 'process.env.SUPABASE_SERVICE_ROLE_KEY!);\n}\n');
+    write(HOST_SITE,
+      `import { ${HOST_FACTORY} } from "../../../lib/db";\n`
+      + 'export const dynamic = "force-dynamic";\n'
+      + 'export async function GET(req: Request) {\n'
+      + '  const orgId = req.headers.get("x-org") ?? "";\n'
+      + `  const supabase = ${HOST_FACTORY}();\n`
+      + '  const { data } = await supabase.from("activity_events").select("id")'
+      + '.eq("org_id", orgId);\n'
+      + '  return Response.json({ data });\n}\n');
+  }
+  return root;
+}
+
+const readManifest = (root) =>
+  JSON.parse(fs.readFileSync(path.join(root, '.mavci/project.json'), 'utf8'));
+
+/** Read back what `--emit` just wrote, by the path it reports. */
+const emitted = (root) => {
+  const r = emitWorklist(root);
+  return { r, doc: JSON.parse(fs.readFileSync(path.join(root, r.path), 'utf8')) };
+};
+
+/** A record that answers a worklist exactly as its expectation says it should -
+ *  the stand-in for a guardian that got every site right. What is under test is
+ *  the ENUMERATION, so the answers must not be the thing that fails. */
+function recordFor(doc, exp) {
+  return {
+    schema_version: 1,
+    worklist_id: doc.worklist_id,
+    verdict: exp.expected_verdict,
+    fail_reason: exp.expected_fail_reason,
+    coverage: {
+      sites_total: doc.sites_total, sites_answered: doc.questions.length,
+      unanswered: [], duplicates: [], unrecognised: [],
+    },
+    answers: doc.questions.map((q) => {
+      const a = exp.expected_answers.find((x) => x.path === q.path
+        && typeof q.value_identifier === 'string' && x.match.includes(q.value_identifier));
+      return { site_id: q.site_id, origin: a?.origin ?? 'unknown', evidence: 'x', reason_if_unknown: null };
+    }),
+  };
+}
+
+const Q3V7K = JSON.parse(fs.readFileSync(
+  path.join(ROOT, 'plugins/mavci-core/templates/corpus/expected/q3v7k.json'), 'utf8'));
+
+console.log('');
+console.log('corpus scope - a case staged into a host project that has its own sites:');
+
+/* ---- S3 FIRST: it is the positive control as well as the unstaged assertion -- */
+{
+  const root = makeHostProject();
+  const { r, doc } = emitted(root);
+  check(r.scope === '.' && doc.sites_total === 1
+    && doc.questions[0]?.path === HOST_SITE,
+    'S3 POSITIVE/UNSTAGED: with no case staged, the whole project is enumerated and the '
+    + `host's own site is in the worklist (scope: ${r.scope}, sites_total: ${doc.sites_total}). `
+    + 'A scope that narrows unconditionally satisfies S1 and S2 and fails here');
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
+/* ---- S1: the case scores, with the host's site present and untouched -------- */
+{
+  const root = makeHostProject();
+  const before = fs.readFileSync(path.join(root, HOST_SITE));
+  stageCase(root, 'q3v7k');
+  const { r, doc } = emitted(root);
+
+  check(doc.sites_total === Q3V7K.sites_total,
+    `S1 the enumeration equals the staged case's expectation (${Q3V7K.sites_total}), not the `
+    + `case plus the host (got: ${doc.sites_total}). BROKEN BUILD: gate6 on 0.1.28 - host site `
+    + 'present, q3v7k staged, emit returning 3 against an expectation of 2');
+  // `.every()` over an empty list is true, and the re-rooting mutation produces
+  // exactly that - so the non-empty requirement is part of the assertion, not
+  // decoration. An assertion that cannot fail is the shape this file exists to avoid.
+  check(doc.questions.length > 0 && doc.questions.every((q) => q.path.startsWith('corpus-run/')),
+    'S1 every enumerated site is under the stage, and there is at least one: '
+    + `${doc.questions.map((q) => q.path).join(', ') || '(none)'}`);
+  check(r.scope === 'corpus-run',
+    `S1 --emit reports the tree it enumerated, on every run (got: ${r.scope})`);
+
+  const o = outcome({ expected: Q3V7K, worklist: doc, record: recordFor(doc, Q3V7K) });
+  check(o.state === 'pass',
+    `S1 and the case SCORES on a host project with sites of its own (got: ${o.state}`
+    + `${o.message ? ` - ${o.message}` : ''})`);
+
+  // gate6 finding 18's first half, stated as the property that actually matters:
+  // the workaround was to rename the host file to an extension `walk()` skips, and
+  // an assertion satisfied by parking the file is not an assertion about the scope.
+  check(fs.readFileSync(path.join(root, HOST_SITE)).equals(before),
+    'S1 the host source is byte-identical before and after the run - no rename, no move, '
+    + 'no deletion. A fix that required parking the file would fail here');
+
+  /* ---- S1b: the SAME filter scopes admin-factory discovery ------------------
+   * THE SUBJECT IS `scanProject`, NOT `discoverAdminFactories`. The first version
+   * of this assertion called discovery itself and asked what it does with a ctx
+   * THE CHECK built - and a mutation giving discovery its own project-wide list
+   * inside `scanProject` left both halves GREEN. That is 0.1.24's unasserted
+   * caller and 0.1.30's fake answering the question the caller wished it had
+   * asked, reproduced inside the assertion written to prevent the contamination.
+   * `scanProject` now returns what it actually discovered, and this reads that. */
+  const scan = scanProject(ctxFor(root, readManifest(root), true),
+    { tenantColumn: readManifest(root).tenancy.tenant_column });
+  const factories = scan.adminFactories;
+  check(factories.has('getSupabaseAdminClient'),
+    "S1b discovery still finds the staged case's own factory - an empty set would satisfy "
+    + `the next assertion on its own (found: ${[...factories].join(', ') || 'none'})`);
+  check(!factories.has(HOST_FACTORY),
+    `S1b and it does NOT find the host's factory ${HOST_FACTORY}. gate6 finding 6 attributes `
+    + 'admin identity per MODULE, so a discovery pass left project-wide would let the host '
+    + "decide whether a staged fixture's client is service-role - the same contamination "
+    + 'through the other half of the scan, and harder to see because the count looks right');
+
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
+/* ---- S2: a genuine mis-stage still refuses, with the message it always had --- */
+{
+  const root = makeHostProject();
+  stageCase(root, 'q3v7k');
+  const { doc } = emitted(root);
+  const wrong = { ...Q3V7K, case_id: 'm8f2r', sites_total: 3 };
+  const o = outcome({ expected: wrong, worklist: doc, record: recordFor(doc, Q3V7K) });
+  check(o.state === 'cannot_score',
+    `S2 a genuine mis-stage is still refused (got: ${o.state}). Otherwise the scope fix `
+    + 'silences the guard rather than fixing what feeds it');
+  check(o.state === 'cannot_score' && o.message.includes('The staged case is not the case this '
+    + 'expectation grades'),
+    'S2 and it refuses with the message it always had, naming the disagreement rather than '
+    + `the scope: ${o.message ?? '(none)'}`);
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
 console.log('');
 if (failures.length) {
   console.log(`corpus scorer check FAILED (${failures.length}):`);

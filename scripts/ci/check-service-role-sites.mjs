@@ -374,6 +374,218 @@ check(/CHECKS PRESENCE, NOT PROVENANCE/.test(rule.description),
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+/* ==========================================================================
+ * N5 - THE CHAIN SPAN. gate6 finding 20.
+ *
+ * The span ended at `;` or a blank line. This repository's house style has no
+ * semicolons and neither does the scaffold this plugin writes, so the only
+ * delimiter left was a blank line - and a blank line is formatting. A read with no
+ * predicate, followed by a read that has one, borrowed the second read's `.eq`.
+ *
+ * IT IS A BLOCKER-LEVEL FALSE NEGATIVE AND BOTH LAYERS CLEARED IT. The rule skips
+ * any site already reported filtered, and `worklistFrom` then asked guardian to
+ * verify an identifier that does not occur in the query - which guardian would
+ * answer correctly about the identifier and meaninglessly about the site.
+ *
+ * THE FIXTURES ARE SEMICOLON-FREE ON PURPOSE. Every existing fixture in this file
+ * terminates statements with semicolons, which is exactly why this survived: all of
+ * them are correct under the old span and stay correct under the new one.
+ *
+ * THE THREE GROUPS ANSWER THREE DIFFERENT QUESTIONS, and the last two are
+ * deliberately NOT computed from the scanner's own span. A check that asked the
+ * scanner where the chain ended and then verified the predicate against that answer
+ * would pass on any self-consistent wrong span - the obliging fake this repository
+ * recorded at 0.1.30 and again in check-corpus-score's first S1b. So groups 2 and 3
+ * locate the next `.from(` in the SOURCE themselves. That is the one place in this
+ * work where the check reconstructing its own input is correct rather than a defect:
+ * the invariant is a property of the source, not of the span.
+ * ========================================================================== */
+
+/** A service-role factory plus one of three two-read handler shapes. NO SEMICOLONS. */
+function shapeCtx(shape) {
+  const reads = {
+    A: '  const { data: members } = await db.from("members").select("id")\n\n'
+     + '  const { data: events } = await db.from("activity_events").select("id")'
+     + '.eq("org_id", orgId)\n',
+    B: '  const { data: members } = await db.from("members").select("id")\n'
+     + '  const { data: events } = await db.from("activity_events").select("id")'
+     + '.eq("org_id", orgId)\n',
+    C: '  const [members, events] = await Promise.all([\n'
+     + '    db.from("members").select("id"),\n'
+     + '    db.from("activity_events").select("id").eq("org_id", orgId),\n'
+     + '  ])\n',
+  }[shape];
+  const route = 'import { getServiceRoleClient } from "../../../lib/db"\n\n'
+    + 'export const dynamic = "force-dynamic"\n\n'
+    + 'export async function GET(req: Request) {\n'
+    + '  const orgId = req.headers.get("x-org") ?? ""\n'
+    + '  const db = getServiceRoleClient()\n\n'
+    + reads
+    + '\n  return Response.json({ members, events })\n}\n';
+  const db = 'import { createClient } from "@supabase/supabase-js"\n'
+    + 'export function getServiceRoleClient() {\n'
+    + '  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, '
+    + 'process.env.SUPABASE_SERVICE_ROLE_KEY!)\n}\n';
+  const files = { 'app/api/activity/route.ts': route, 'lib/db.ts': db };
+  return {
+    text: route,
+    ctx: {
+      manifest: { tenancy: { isolation: 'application-filters', tenant_column: 'org_id' } },
+      files: Object.keys(files),
+      readOrNull: (p) => files[p] ?? null,
+    },
+  };
+}
+
+/**
+ * The source region belonging to the chain whose `.from(` is on `line`: from that
+ * `.from(` up to the next one, or end of file. Computed HERE, from the source, and
+ * never from anything the scanner reported.
+ */
+function chainRegion(text, line) {
+  const idx = [];
+  for (const m of text.matchAll(/\.from\s*\(/g)) idx.push(m.index);
+  const lineOfIdx = (i) => text.slice(0, i).split('\n').length;
+  const own = idx.find((i) => lineOfIdx(i) === line);
+  if (own === undefined) return null;
+  const next = idx.find((i) => i > own);
+  return text.slice(own, next === undefined ? text.length : next);
+}
+
+const scanShape = (mod, shape) => {
+  const { text, ctx } = shapeCtx(shape);
+  return { text, scan: mod.scanProject(ctx, { tenantColumn: 'org_id' }) };
+};
+const siteFor = (scan, table) => scan.sites.find((s) => s.table === table);
+
+console.log('');
+console.log('N5 chain span - two reads, no semicolons (gate6 finding 20):');
+
+/* ---- group 1: the span itself, and it must DISCRIMINATE ------------------- */
+for (const shape of ['A', 'B', 'C']) {
+  const { scan } = scanShape({ scanProject }, shape);
+  const members = siteFor(scan, 'members');
+  const events = siteFor(scan, 'activity_events');
+  check(members && members.has_tenant_filter === false && members.filter_value === null,
+    `N5-${shape} [span] the members read has NO predicate of its own and is reported unfiltered `
+    + `(got: has_tenant_filter=${members?.has_tenant_filter}, filter_value=${JSON.stringify(members?.filter_value)})`);
+  // The guard: a span fix that swallowed everything would satisfy the line above for
+  // all three shapes. Shape A was ALREADY correct before the fix, so it is the
+  // discrimination half - the fix must not change it.
+  check(events && events.has_tenant_filter === true && events.filter_value === 'orgId',
+    `N5-${shape} [guard] the read that DOES carry .eq("org_id", orgId) is still reported filtered `
+    + `(got: has_tenant_filter=${events?.has_tenant_filter}, filter_value=${JSON.stringify(events?.filter_value)})`);
+  check(scan.residue === 0, `N5-${shape} residue = 0 (got ${scan.residue})`);
+}
+
+/* ---- group 1b: BOTH TERMINATORS ARE LOAD-BEARING -------------------------
+ * `chainEnd` takes the MINIMUM of two stops, and shapes A-C exercise only one of
+ * them: in every one of those, the next `.from(` arrives first, so a build that
+ * dropped `;` and the blank line entirely passed all of group 1 and both controls.
+ * That mutation went green on its first run and this block is what it produced.
+ *
+ * These two shapes have ONE admin read, no predicate, followed by an unrelated
+ * `.eq("org_id", orgId)` with NO `.from(` between them - so the only thing that can
+ * stop the span is the statement delimiter. Shape D uses a semicolon deliberately,
+ * against the house style, because the semicolon is the half being asserted. */
+{
+  const tail = 'export const dynamic = "force-dynamic"\n\n'
+    + 'export async function GET(req: Request) {\n'
+    + '  const orgId = req.headers.get("x-org") ?? ""\n'
+    + '  const db = getServiceRoleClient()\n\n';
+  const db = 'import { createClient } from "@supabase/supabase-js"\n'
+    + 'export function getServiceRoleClient() {\n'
+    + '  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, '
+    + 'process.env.SUPABASE_SERVICE_ROLE_KEY!)\n}\n';
+  const shapes = {
+    D: `${tail}  const { data } = await db.from("members").select("id");\n`
+     + '  const scoped = rows.eq("org_id", orgId);\n'
+     + '  return Response.json({ data, scoped })\n}\n',
+    E: `${tail}  const { data } = await db.from("members").select("id")\n\n`
+     + '  const scoped = rows.eq("org_id", orgId)\n'
+     + '  return Response.json({ data, scoped })\n}\n',
+  };
+  for (const [name, route] of Object.entries(shapes)) {
+    const files = { 'app/api/activity/route.ts': route, 'lib/db.ts': db };
+    const scan = scanProject({
+      manifest: { tenancy: { isolation: 'application-filters', tenant_column: 'org_id' } },
+      files: Object.keys(files),
+      readOrNull: (p) => files[p] ?? null,
+    }, { tenantColumn: 'org_id' });
+    const members = siteFor(scan, 'members');
+    check(members && members.has_tenant_filter === false,
+      `N5-${name} [delimiter] a chain ended by ${name === 'D' ? 'a semicolon' : 'a blank line'} does `
+      + 'not reach an `.eq` in the NEXT statement when no `.from(` intervenes '
+      + `(got: has_tenant_filter=${members?.has_tenant_filter}, filter_value=${JSON.stringify(members?.filter_value)})`);
+  }
+}
+
+/* ---- group 2: the INVARIANT, independent of how the span is computed ------ */
+{
+  let violations = [];
+  for (const shape of ['A', 'B', 'C']) {
+    const { text, scan } = scanShape({ scanProject }, shape);
+    for (const s of scan.sites.filter((x) => x.has_tenant_filter)) {
+      const region = chainRegion(text, s.line);
+      if (region === null || !region.includes(s.filter_value)) {
+        violations.push(`${shape}:${s.table}:${s.filter_value}`);
+      }
+    }
+  }
+  check(violations.length === 0,
+    'N5 [invariant] every site reported filtered names a predicate occurring BEFORE the next '
+    + `.from( in the source - the property the span is a means to (violations: ${violations.join(', ') || 'none'})`);
+}
+
+/* ---- group 3: what the scanner FEEDS. Its own case, different subject ----- */
+{
+  let violations = [];
+  let questions = 0;
+  for (const shape of ['A', 'B', 'C']) {
+    const { text, scan } = scanShape({ scanProject }, shape);
+    for (const q of worklistFrom(scan).questions) {
+      questions += 1;
+      const region = chainRegion(text, q.line);
+      if (region === null || !region.includes(q.value_identifier)) {
+        violations.push(`${shape}:${q.site_id}:${q.value_identifier}`);
+      }
+    }
+  }
+  check(questions > 0 && violations.length === 0,
+    `N5 [worklist] every guardian question's value_identifier occurs in the chain the question `
+    + `is about, across ${questions} question(s) (violations: ${violations.join(', ') || 'none'}). `
+    + 'Group 2 is about the site; this is about the question built from it, and a worklist that '
+    + 'asked about an identifier absent from the query is what guardian would answer correctly '
+    + 'and meaninglessly');
+}
+
+/* ---- the negative control: the pre-0.1.32 span, demonstrated failing ------ */
+{
+  const old = await loadScan((src) => src.replace(
+    '    const chainBlank = tailBlank.slice(0, chainEnd(tailBlank));',
+    '    const stop = tailBlank.search(/;|\\n\\s*\\n/);\n'
+    + '    const chainBlank = stop === -1 ? tailBlank : tailBlank.slice(0, stop);'));
+
+  const borrowed = [];
+  const correctA = [];
+  for (const shape of ['A', 'B', 'C']) {
+    const { text, scan } = scanShape(old, shape);
+    const members = siteFor(scan, 'members');
+    if (members?.has_tenant_filter) borrowed.push(`${shape} (filter_value=${members.filter_value})`);
+    const region = chainRegion(text, members?.line ?? -1);
+    if (members?.has_tenant_filter && region && !region.includes(members.filter_value)) {
+      correctA.push(shape);
+    }
+  }
+  check(borrowed.length === 2 && !borrowed.some((b) => b.startsWith('A')),
+    'N5 CONTROL: against the pre-0.1.32 span exactly shapes B and C borrow the next read\'s '
+    + `predicate, and shape A does not - so the fix discriminates rather than merely changing `
+    + `the answer (borrowed: ${borrowed.join('; ') || 'none'})`);
+  check(correctA.length === 2,
+    'N5 CONTROL: and the group-2 invariant catches both of them independently of the span - '
+    + `it is not a restatement of the span assertion (caught: ${correctA.join(', ') || 'none'})`);
+}
+
 /* ---------------------------------------------------------------- verdict */
 
 console.log('');

@@ -16,7 +16,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { PATHS } from './config.mjs';
-import { CORPUS_STAGE_DIR } from './rules/index.mjs';
+import { CORPUS_STAGE_DIR, under } from './rules/index.mjs';
 import { abs, exists, readJson, writeJsonAtomic, nowIso, walk, readTextOrNull } from './lib/fsx.mjs';
 import { scanProject, worklistFrom } from './lib/sitescan.mjs';
 import { projectRoot } from './state.mjs';
@@ -24,8 +24,40 @@ import { projectRoot } from './state.mjs';
 const DIR = '.mavci/control/guardian';
 const TICKET = `${DIR}/ticket.json`;
 
-function ctxFor(root, manifest) {
-  const files = [...walk(root)];
+/**
+ * The scan's file list, and THE ONE PLACE THE ENUMERATION IS SCOPED.
+ *
+ * `scopeToStage` is not a parameter a caller decides. It is `stageIsActive(root)`,
+ * derived once in `emitWorklist` from the same fact `openTicket` derives `source`
+ * from - see the long note above `stageIsActive` for why that fact is derived and
+ * never declared. A `--scope` flag would be a SECOND answer to "is this a corpus
+ * run", held by the dispatcher, and the two can disagree in both directions: a
+ * scope passed with an empty stage emits an empty worklist and records it
+ * `source: real`, and a scope omitted with a case staged is gate6 finding 10
+ * unchanged. Full reasoning: `docs/corpus-scope-design.md` sections 1-3.
+ *
+ * FILTERED, NEVER RE-ROOTED. `emitWorklist(abs(root, CORPUS_STAGE_DIR))` would
+ * emit `app/api/workspaces/route.ts` where the expectations declare
+ * `corpus-run/app/api/workspaces/route.ts`, and would move `readOrNull`'s base.
+ * Paths stay project-relative POSIX; only membership changes.
+ *
+ * EXPORTED so the scoping can be asserted on the list itself rather than inferred
+ * from a worklist's contents. 0.1.29 extracted `cutTag` out of a CLI for the same
+ * reason: a seam that only exists inside a function nothing can call is a seam
+ * nothing can test, and rebuilding the list inside the check to look at it would
+ * be the check asking a question of its own construction (0.1.30).
+ *
+ * ONE FILTER SCOPES BOTH HALVES OF THE SCAN, and that is required rather than
+ * convenient. `scanProject` and `discoverAdminFactories` both iterate `ctx.files`.
+ * Leaving factory discovery project-wide would let the host's own factory - the
+ * scaffold's `createAdminClient`, say - decide whether a staged fixture's client
+ * is service-role, which is gate6 finding 6 contaminating the corpus through the
+ * other half of the scan, and harder to see because the site count would look
+ * right. The cases need nothing from the host: each ships its own `lib/supabase.ts`.
+ */
+export function ctxFor(root, manifest, scopeToStage = false) {
+  const all = [...walk(root)];
+  const files = scopeToStage ? all.filter((rel) => under(rel, CORPUS_STAGE_DIR)) : all;
   const cache = new Map();
   return {
     root, manifest, files,
@@ -45,7 +77,10 @@ export function emitWorklist(root = projectRoot()) {
       + '"application-filters". Guardian answers a question about application-code filters; on '
       + 'any other isolation it would be asking about a mechanism this project does not use.');
   }
-  const scan = scanProject(ctxFor(root, manifest), { tenantColumn: manifest.tenancy?.tenant_column ?? null });
+  // Derived here, once, from the tree's actual state. See ctxFor.
+  const scopedToStage = stageIsActive(root);
+  const scan = scanProject(ctxFor(root, manifest, scopedToStage),
+    { tenantColumn: manifest.tenancy?.tenant_column ?? null });
 
   // A residue means the scan found a candidate it could neither enumerate nor name.
   // The worklist would then understate what exists, and a worklist answered
@@ -71,7 +106,16 @@ export function emitWorklist(root = projectRoot()) {
   fs.mkdirSync(abs(root, DIR), { recursive: true });
   const rel = `${DIR}/${id}.json`;
   writeJsonAtomic(abs(root, rel), doc);
-  return { path: rel, id, sites_total: wl.sites_total, excluded: scan.excluded.length };
+  // `scope` is a fact about the RUN and is returned for the caller to print. It is
+  // deliberately NOT a field on `doc`: recording the host tree's state in the
+  // artefact is gate6 finding 18's second half, which wants the host's own
+  // sites_total per case rather than a scope label, and `additionalProperties:
+  // false` makes every new field a propagation-window cost. One field, once, when
+  // that finding is built - not a partial version of it now.
+  return {
+    path: rel, id, sites_total: wl.sites_total, excluded: scan.excluded.length,
+    scope: scopedToStage ? CORPUS_STAGE_DIR : '.',
+  };
 }
 
 /**
@@ -146,11 +190,26 @@ function main() {
   try {
     if (argv.includes('--emit')) {
       const r = emitWorklist(root);
+      const staged = r.scope !== '.';
       console.log(`worklist ${r.id}: ${r.sites_total} site(s), ${r.excluded} excluded`);
       console.log(`  ${r.path}`);
+      // NAMED ON EVERY RUN, pass or fail. An emit that does not say which tree it
+      // enumerated asserts more than it verified (0.1.14), and the two trees give
+      // different meanings to the same numbers below.
+      console.log(staged
+        ? `  scope: ${r.scope}/ ONLY - a corpus case is staged, so this project's own`
+          + ' sources were not enumerated.'
+        : "  scope: the whole project - no corpus case is staged.");
       if (r.sites_total === 0) {
-        console.log('  sites_total is 0. That is NOT a pass - it is not_checked, and it is more');
-        console.log('  likely to mean the scan is not seeing sites than that the project has none.');
+        // Two causes, two messages. One explanation for both is the `--reseal` trap
+        // (0.1.21 finding 24): a remedy that cannot apply costs an action and
+        // teaches the reader that the message is unreliable.
+        console.log('  sites_total is 0. That is NOT a pass - it is not_checked.');
+        console.log(staged
+          ? `  A case is staged, so this means ${r.scope}/ is empty or the case did not copy.`
+            + ' Re-stage it with corpus-stage.mjs --case <id> and emit again.'
+          : '  It is more likely to mean the scan is not seeing sites than that the project'
+            + ' has none.');
       }
       return;
     }
