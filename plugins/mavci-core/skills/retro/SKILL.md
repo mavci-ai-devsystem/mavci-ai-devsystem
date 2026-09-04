@@ -90,14 +90,45 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/retro.mjs" --record "<title>" \
   --assertion "<what must be asserted, and against which broken build>"
 ```
 
-5. **Then stop, if you were sent here by a block.** Filing is the whole of your
+5. **If you need to correct or extend a finding that is already queued, amend
+   it — do not edit the file.**
+
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/retro.mjs" --amend <n> \
+  --title "<short heading for the addendum>" \
+  --text <path to a file holding the prose, or - for stdin> \
+  --was <path to a file holding the words it supersedes, if any> \
+  --agent <your own agent name>
+```
+
+   Three things about it, each of which is the reason it exists:
+
+   - **It appends; it never rewrites the finding.** The body stays as filed,
+     and the addendum sits at the end of that finding's block. `--apply` copies
+     the queue into the system repo as the permanent record, and a queue entry
+     that reads as though it was filed at the right width is worse than one
+     that shows where it was wrong.
+   - **`--text` and `--was` take a PATH or `-`, never prose.** An argument goes
+     through the shell. On 2026-09-04 a finding reached a queue having lost
+     four backticked words that way, one of them the exact word the finding was
+     about, and two of the gaps left grammatical sentences that read as typos.
+   - **It will not edit provenance, and it says so if you ask.** A `Filed by:`
+     line records who observed the finding; setting it afterwards is an
+     assertion about authorship, not a correction. Your amendment carries its
+     own stamp — who ran it, when, on which plugin version.
+
+   If you supply `--was`, the quoted words are checked against the finding's
+   body and the command refuses if they are not there. A citation that does not
+   resolve is stored exactly like one that does.
+
+6. **Then stop, if you were sent here by a block.** Filing is the whole of your
    authority. Do not go on to fix the system: `CLAUDE.md` in the system repo says
    an agent does not edit what governs it, and Gate 4 recorded an agent staying
    trapped for three turns rather than making a four-character fix it could see.
    That rule cost three turns and held anyway, and it is the reason this channel
    exists at all.
 
-6. Tell the operator it is queued and unapplied. `doctor` will keep saying so on
+7. Tell the operator it is queued and unapplied. `doctor` will keep saying so on
    every run until they act, which is intended: an escalation nobody is reminded
    about is an escalation that decays into a file.
 

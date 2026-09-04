@@ -1765,6 +1765,155 @@ which is a state-file format change. Guardian's answers remain unmeasured and
 `doctor` still FAILs every project until a corpus result exists — nothing here
 changes that.
 
+### 0.1.31 — a correction that cannot be attributed is worth less than the error it fixes
+
+**Cut 2026-09-04**, against gate6 finding 12. `retro.mjs` stamps every finding it
+writes; nothing added to a finding already queued; so every addendum was a hand
+edit, **typographically identical to writer-stamped text**. Eleven of them sat in
+one queue file, and the blocks most likely to need amending are the ones carrying
+a correction. Design: `docs/retro-amend-design.md`.
+
+**Two questions decided the writer, and both were answered from the architecture
+rather than from the convention.**
+
+**1. It APPENDS, and no path in it edits a filed byte.** This file already held
+the rule one scale down — dashes are normalised on read and never on write,
+because *"rewriting their punctuation to suit a parser edits evidence nobody
+asked to be edited"* — and a replaced sentence is that act with a larger diff.
+`--apply` copies the queue verbatim into `docs/lessons/` as the permanent record,
+so a replacement erases the fact that anybody looked twice. The queue's own
+finding 18 addendum puts it best: *a queue entry that reads as though it was
+filed at the right width is worse than one that shows where it was wrong.*
+
+The cost is real — a reader who stops at the body acts on the uncorrected claim —
+and it is paid on the READER side: `--list` reports each finding's addendum count
+and how many are unstamped. Nothing writes into a body to announce a correction.
+
+**And it is inserted at the end of its TARGET'S block, not the file's.** Four of
+the eleven hand blocks were tail-appended and later findings were filed after
+them, so the addenda to findings 17, 20 and 22 now sit buried inside other
+findings' blocks, hundreds of lines from what they amend. That is what
+append-at-end decays into. Byte-identity and placement are asserted separately,
+because a tail-appender passes the first.
+
+**2. It carries its OWN provenance, never the finding's.** The queue settles it:
+one addendum was written *"by the writer of the finding"*, three *"at the
+operator's direction"*, and every body is stamped `**main** (agent)`. Inheritance
+would report every operator correction as agent-authored — a false attribution on
+the one field an applier uses to decide scrutiny. Its own timestamp and plugin
+version too: finding 18 was filed on 0.1.28 and corrected against evidence from
+the 0.1.27 run, and one stamp cannot carry two versions.
+
+**The trap next door was declined.** Eight of the eleven hand blocks open with
+"at the operator's direction" — a claim about who DIRECTED, written by the party
+being directed. The guard can only enforce who RAN the command, so that is all
+the stamp says, and it says so in words. A `--directed-by` flag would be a
+self-declared field wearing a stamp's clothes.
+
+**It refuses a provenance edit by name.** `--filed-by`, `--attribute`,
+`--provenance`, `--stamp`, `--as`, `--author`, `--directed-by`. Correcting text
+and asserting authorship are different acts, and a retroactive `Filed by:` is a
+claim about who wrote the original made by someone who was not necessarily
+there — on the field this finding exists to protect. gate6's finding 23 stays
+unattributed. The refusal is explicit rather than absent, because an absent
+capability reads as a gap and gets built by the next person.
+
+**And prose does not come in through an argument.** `--text` and `--was` take a
+PATH or `-`. Finding 16 reached that queue through `--record` having lost four
+backticked words to shell command substitution — `blocked` twice, `done` and
+`failed` once each, one of them the exact word the finding was about, and two of
+the gaps left grammatical sentences that read as typos. **`--record` is knowingly
+left with that problem**, written down in the design as a decision: it is the
+trapped-agent path, seven messages point at it, and making the reporting channel
+harder to reach is the worst outcome available — so the inline form has to keep
+working beside the file form, which is a different design and deserves its own
+pass.
+
+`--was`, when given, must RESOLVE — verified against the finding's BODY, on a
+whitespace-collapsed, dash-normalised copy, and refused if it does not occur.
+Finding 17's shape: a citation that does not resolve is stored exactly like one
+that does.
+
+#### The finding to keep: the absence of a feature satisfied the test for it
+
+**Three of the eleven new assertions passed against a build with no `--amend` in
+it at all.** *"Every filed block survives byte for byte"* is true of a file
+nothing wrote to. The `--text` and `--was` refusals matched on the words `file`,
+`path` and `stdin` — every one of which is in the **usage banner** an unknown
+flag prints.
+
+That is 0.1.23's M5 for the sixth time — *decision and reason are two facts and
+only the reason discriminates* — and it is the first instance where the absence
+of the feature satisfied the test for it. The earlier five were controls testing
+the half that worked; here there was no half. An assertion in that state does not
+merely fail to catch the defect: **run before the fix, it reports the fix as
+unnecessary.**
+
+**Three more came out of the mutation pass, by the same instrument.** Stripping
+the time and version from the stamp and leaving the name left A2 green —
+attribution alone is not the answer to question 2, and a build inheriting the
+finding's `Filed:` line looks right on every same-day amendment, which is every
+amendment except the ones that matter (**A2b**). `--list` matched the word
+*unstamped* against a line reading `0 unstamped` (**now matched on the count**).
+Widening `--was` to the whole block left every assertion green, because the
+design's claim that a quote of an earlier amendment does not count was written
+down and asserted by nothing (**A5c**) — it matters because an amendment quotes
+what it supersedes, so a block-wide search has each amendment vouching for the
+next while the block still says the words come from the body above.
+
+And one mutation went green for a reason about the mutation: the inheritance
+mutation replaced the first `clean(String(agent))` in the file, which is
+`record()`'s. **A mutation that lands somewhere other than where you aimed
+reports the same green as a fix that was unnecessary.**
+
+#### Verification
+
+| Mutation | Restores | What goes red |
+|---|---|---|
+| tail-append | an addendum at the end of the file | placement only — byte-identity stays green, which is why both exist |
+| inherit the stamp | the finding's attribution | A2 only |
+| no time, no version | a name-only stamp | A2b, and the reader's stamp detection |
+| no quote resolution | an unverified citation | A5a only |
+| whole-block quote search | a citation vouched for by an amendment | A5c only |
+| flags unrefused | silence on a provenance edit | A6 only |
+| prose accepted | a shell-expanded argument | A7 only |
+| explicit-form-only reader | a parser blind to hand blocks | A8 and the `--list` count |
+| truncate at the block | an amendment that eats the rest of the file | A3 and A4 |
+
+`check-retro.mjs` is 29 assertions, up from 15. `risk-guard`'s provenance arm now
+covers `--amend` — three cases, because the third is the one the channel depends
+on: misdeclaring is denied, declaring itself is allowed, and **omitting is
+allowed**, since a correction is still reporting and reporting is never blocked.
+All 33 CI checks pass and `check-pretag --selftest` is 46.
+
+#### What its first use produced, including a finding against itself
+
+Three corrections were waiting on it. Finding 18's `tree_state` — the field
+exists, is declared in the guardian schema with a closed enum, is copied at
+`guardian-record.mjs:155`, and **has no caller**: `openTicket`'s only production
+call site passes no options, so it is `null` in every record ever written. The
+fix is a flag and a derivation beside the `stageIsActive` line, not a schema
+change, which matters because `additionalProperties: false` makes a new field a
+propagation-window cost. Then findings 10 and 18 on the park, narrowed to the
+**stale-worklist** mechanism the artefact supports rather than the degraded
+determination the natural reading gives.
+
+**And the sharpest thing it produced was a finding against the stamp it had just
+written.** Filing those amendments from the main session showed that
+`risk-guard`'s provenance arm opens `if (agent && …)`, and `agent_type` is absent
+for the main session — so the whole arm is skipped there. A main session may pass
+`--agent` with any value and nothing compares it to anything, while the queue
+renders *"Provenance enforced at the risk guard, not self-declared"* above it.
+Eighteen of gate6's twenty-four bodies carry that sentence naming `main`.
+
+It is finding 12 one layer down and worse than what finding 12 described: the
+hand addenda were honestly unstamped; these are **stamped without the enforcement
+the stamp implies**. Enforced, self-declared and not recorded are three different
+pieces of evidence and the artefact renders the first two identically. Filed as
+gate6 finding 25 — with the cheap fix named and refused, because deleting the
+enforcement sentence trades a false claim for no claim and takes it away from the
+agent path, which is the path it was written for and the one that works.
+
 ### Carried forward — still not built
 
 **Items 1–4 and 5–6 below remain unbuilt; item 7 is held deliberately, for the

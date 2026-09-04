@@ -180,6 +180,19 @@ const CASES = [
   ['deny', { ...bash('node scripts/retro.mjs --record "x" --finding "y" --agent mavci-builder'), agent_type: 'mavci-scribe' }, 'scribe files a finding AS the builder'],
   ['allow', { ...bash('node scripts/retro.mjs --record "x" --finding "y" --agent mavci-scribe'), agent_type: 'mavci-scribe' }, 'scribe files a finding as ITSELF'],
   ['allow', { ...bash('node scripts/retro.mjs --record "x" --finding "y"'), agent_type: 'mavci-guardian' }, 'guardian files unattributed - never blocked from reporting'],
+  /* --amend carries the same provenance arm as --record, and it must, or the
+   * stamp is only ever the operator's. gate6 finding 12's own guard against the
+   * cheap fix is that an --amend with no attribution leaves the queue exactly as
+   * unreadable - and an arm keyed on --record alone satisfies it for every call
+   * an operator makes and none an agent makes. Three cases, because the third is
+   * the one the channel depends on: misdeclaring is refused, declaring itself is
+   * allowed, and omitting is ALLOWED - reporting is never blocked. */
+  ['deny', { ...bash('node scripts/retro.mjs --amend 3 --title "t" --text a.md --agent mavci-builder'), agent_type: 'mavci-scribe' },
+    'scribe amends a finding AS the builder'],
+  ['allow', { ...bash('node scripts/retro.mjs --amend 3 --title "t" --text a.md --agent mavci-scribe'), agent_type: 'mavci-scribe' },
+    'scribe amends as ITSELF - a guard that denied every --amend satisfies the case above alone'],
+  ['allow', { ...bash('node scripts/retro.mjs --amend 3 --title "t" --text a.md'), agent_type: 'mavci-guardian' },
+    'guardian amends unattributed - correcting a report is still reporting, and never blocked'],
   ['deny', { ...bash('timeout 5 node scripts/state.mjs --reset-attempts 0001'), agent_type: 'mavci-builder' }, 'wrapper does not launder it'],
   ['deny', { ...bash('echo hi && node scripts/state.mjs --set-phase build'), agent_type: 'mavci-builder' }, 'compound does not launder it'],
   ['deny', { ...bash('node scripts/state.mjs --some-future-flag'), agent_type: 'mavci-builder' }, 'unrecognised subcommand fails closed'],

@@ -973,7 +973,14 @@ function main() {
        * ITSELF - the flag is compared against the caller. An agent cannot file
        * anonymously and cannot file as the operator or as another agent.
        */
-      if (agent && flags.includes('--record')) {
+      /* --amend is here for the same reason --record is, and it is not a second
+       * rule: gate6 finding 12 is that an addendum written by hand carries no
+       * stamp and is typographically identical to text the writer stamped. An
+       * --amend that wrote an unattributed block would reproduce the defect
+       * through the sanctioned path. It is NOT privileged - a correction writes
+       * to agent-writable surface, exactly as a report does, and an agent that
+       * has to correct its own finding must be able to. */
+      if (agent && (flags.includes('--record') || flags.includes('--amend'))) {
         const m = cmd.match(/--agent[= ]+([A-Za-z0-9:_-]+)/);
         const declared = m ? m[1] : null;
         const bare = declared && declared.includes(':') ? declared.slice(declared.indexOf(':') + 1) : declared;
@@ -988,13 +995,14 @@ function main() {
         // call proceeds; only an active misdeclaration is refused, because an agent
         // naming a different caller is not a trapped agent, it is a wrong record.
         if (!declared) {
-          notice(`mavci: file findings with \`--agent ${agent}\` so the queue records who wrote `
-            + 'them. This one is being filed unattributed, which is allowed - reporting is never '
+          notice(`mavci: file and amend findings with \`--agent ${agent}\` so the queue records who wrote `
+            + 'them. This block is going in unattributed, which is allowed - reporting is never '
             + 'blocked - but an operator applying it will not know an agent authored it.');
         }
         if (declared && bare !== agent) {
           deny(`${agent} declared \`--agent ${declared}\`, which is not itself. Provenance on a `
-            + 'finding is evidence about who produced it; declaring another caller would make it '
+            + 'queued block is evidence about who produced it, and an amendment carries its own; '
+            + 'declaring another caller would make it '
             + 'evidence about nobody.');
         }
       }

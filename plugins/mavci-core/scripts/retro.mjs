@@ -50,6 +50,10 @@
  * CLI
  *   --record "<title>" --finding "<text>" [--target <p>] [--check <id>]
  *                                         [--assertion "<text>"] [--broken-build "<text>"]
+ *   --amend <n> --title "<t>" --text <path|-> [--was <path|->] [--file <name>]
+ *                      append a dated addendum to a queued finding, carrying its own
+ *                      provenance. It never edits the finding's own text, and it
+ *                      refuses to edit provenance at all - see "amending" below.
  *   --list             one line per queued file, then one per finding in it
  *   --show             every queued file, each under its own path
  *   --apply            copy them all into the system repo clone, print next steps
@@ -146,15 +150,126 @@ export function findingHeading(n, title) {
   return `${FINDING_PREFIX} ${n}${FINDING_SEP}${title}`;
 }
 
-/** @returns {{n: number, title: string}[]} - titles verbatim from the source. */
-export function parseFindings(text) {
+/**
+ * Every finding in a queue file, with the bounds of the block it owns.
+ *
+ * ONE scanner. `parseFindings` is a projection of this rather than a second
+ * matcher, for the reason `findingHeading` and `FINDING_RE` share their pieces:
+ * two readers of one format is what produced 0.1.13.
+ *
+ * A block runs from its own heading to the next heading, or to end of file for
+ * the last one. That boundary is what `--amend` inserts before, and it is the
+ * whole reason offsets are exported at all.
+ *
+ * @returns {{n: number, title: string, start: number, end: number}[]}
+ */
+export function findingBlocks(text) {
   const norm = text.replace(DASHES, '-');
   const found = [];
   for (const m of norm.matchAll(FINDING_RE)) {
-    const start = m.index + m[0].length - m[2].length;
-    found.push({ n: Number(m[1]), title: text.slice(start, start + m[2].length) });
+    const titleAt = m.index + m[0].length - m[2].length;
+    found.push({
+      n: Number(m[1]),
+      title: text.slice(titleAt, titleAt + m[2].length),
+      start: m.index,
+      end: text.length,
+    });
+  }
+  for (let i = 0; i < found.length - 1; i += 1) found[i].end = found[i + 1].start;
+  return found;
+}
+
+/** @returns {{n: number, title: string}[]} - titles verbatim from the source. */
+export function parseFindings(text) {
+  return findingBlocks(text).map(({ n, title }) => ({ n, title }));
+}
+
+/* -------------------------------------------------- the amendment heading
+ * gate6 finding 12. Same construction as the finding heading and for the same
+ * reason: one definition, used to write and to read.
+ *
+ * THE WORD IS "Addendum" BECAUSE THE QUEUE'S WORD IS "Addendum" - twelve hand-
+ * written blocks in one file, before this command existed. Choosing a synonym
+ * for the machine form would recreate the 0.1.13 defect deliberately: a writer
+ * and a reader that agree with each other and not with what a human types.
+ *
+ * Both hand forms are recognised. `### Addendum to finding N - t` names its
+ * target; the older `### Addendum - t` is POSITIONAL and belongs to the finding
+ * whose block it sits in. The explicit target wins when both are available,
+ * because the queue's later hand blocks were appended at the end of the file
+ * and now sit inside other findings' blocks - position would attribute them to
+ * whatever they landed under.
+ */
+const AMEND_PREFIX = '### Addendum';
+const AMEND_TARGET = ' to finding ';
+const AMEND_RE = new RegExp(
+  `^${rx(AMEND_PREFIX)}(?:${rx(AMEND_TARGET)}(\\d+))?${rx(FINDING_SEP)}(.+)$`, 'gm');
+
+/** The attestation an amendment carries, and the needle that finds one. */
+const AMEND_STAMP = 'Amended by:';
+const AMEND_STAMP_RE = new RegExp(`^Amended .*${rx(AMEND_STAMP)}`, 'm');
+
+export function amendmentHeading(n, title) {
+  return `${AMEND_PREFIX}${AMEND_TARGET}${n}${FINDING_SEP}${title}`;
+}
+
+/**
+ * Every amendment in a queue file, hand-written and tool-written alike.
+ *
+ * This is the reader finding 12 asks for by name: *"the check must compare
+ * blocks WITHIN a queue file for stamp presence, not verify the writer stamps
+ * what it writes."* An assertion that `--amend` stamps its own output passes
+ * against a queue full of unstamped hand edits, because the defect is text that
+ * never went through this command at all.
+ *
+ * WHAT `stamped` MEANS, STATED NARROWLY. It is the SHAPE of a stamp, nothing
+ * more. What makes a stamp evidence is that this writer is the only thing that
+ * emits one and `risk-guard.mjs` constrains what this writer may be told to put
+ * in it. A human who types the line by hand produces something this reader
+ * cannot distinguish, and no reader of a text file could. Saying so here is
+ * cheaper than someone later reading `stamped: true` as a guarantee.
+ *
+ * @returns {{finding: number|null, title: string, stamped: boolean,
+ *            positional: boolean, start: number, end: number}[]}
+ */
+export function parseAmendments(text) {
+  const blocks = findingBlocks(text);
+  const norm = text.replace(DASHES, '-');
+  const found = [];
+  for (const m of norm.matchAll(AMEND_RE)) {
+    const titleAt = m.index + m[0].length - m[2].length;
+    const declared = m[1] === undefined ? null : Number(m[1]);
+    const owner = blocks.find((b) => m.index >= b.start && m.index < b.end) ?? null;
+    found.push({
+      finding: declared ?? owner?.n ?? null,
+      title: text.slice(titleAt, titleAt + m[2].length),
+      positional: declared === null,
+      start: m.index,
+      end: text.length,
+      _owner: owner,
+    });
+  }
+  for (let i = 0; i < found.length; i += 1) {
+    const nextAmend = found[i + 1]?.start ?? Infinity;
+    const blockEnd = found[i]._owner?.end ?? text.length;
+    found[i].end = Math.min(nextAmend, blockEnd);
+    found[i].stamped = AMEND_STAMP_RE.test(text.slice(found[i].start, found[i].end));
+    delete found[i]._owner;
   }
   return found;
+}
+
+/**
+ * A finding's BODY: its block, up to the first amendment in it.
+ *
+ * `--was` resolves against this and not against the whole block, so a quote
+ * cannot come back green by matching an EARLIER amendment's quotation of it.
+ * The superseded words are said to come from the body above, and that is the
+ * text they are checked against.
+ */
+export function findingBody(text, block) {
+  const inside = parseAmendments(text).filter((a) => a.start >= block.start && a.start < block.end);
+  return text.slice(block.start, inside.length ? inside[0].start : block.end);
 }
 
 function die(msg, code = 1) {
@@ -259,6 +374,218 @@ export function record(root, { title, finding, target, check, assertion, brokenB
 
   writeTextAtomic(p, body.replace(/\n+$/, '\n') + parts.join('\n'));
   return { path: PENDING, number: n };
+}
+
+/* --------------------------------------------------------------- amending
+ * gate6 finding 12. Design: docs/retro-amend-design.md in the system repo.
+ *
+ * TWO ANSWERS DECIDE WHAT THIS IS, and both are load-bearing.
+ *
+ * 1. IT APPENDS. No path here edits a filed byte. This file already holds that
+ *    rule one scale down - dashes are normalised on READ and never on write,
+ *    because "rewriting their punctuation to suit a parser edits evidence
+ *    nobody asked to be edited" - and a replaced sentence is that act with a
+ *    larger diff. `--apply` copies the queue verbatim into the system repo's
+ *    docs/lessons/, so a replacement erases the fact that anybody looked twice.
+ *    The queue's own finding 18 addendum puts it best: a queue entry that reads
+ *    as though it was filed at the right width is worse than one that shows
+ *    where it was wrong.
+ *
+ *    The cost is real: a reader who reads the body and stops acts on the
+ *    uncorrected claim. It is paid on the READER side - `--list` reports how
+ *    many amendments a finding carries and how many are unstamped. Nothing
+ *    writes into a body to announce a correction.
+ *
+ *    And it is inserted at the END OF ITS TARGET'S BLOCK, not the end of the
+ *    file. Four of the twelve hand-written blocks were tail-appended and later
+ *    findings were filed after them, so the addenda to findings 17, 20 and 22
+ *    now sit buried inside other findings' blocks, hundreds of lines from what
+ *    they amend. That is what append-at-end decays into; it is what a hand edit
+ *    does because it is cheap, and this has no such excuse.
+ *
+ * 2. IT CARRIES ITS OWN PROVENANCE, never the finding's. The queue settles it:
+ *    finding 18's addendum was written "by the writer of the finding", the
+ *    addenda to 17, 20 and 22 "at the operator's direction", and every body is
+ *    stamped `**main** (agent)`. Inheritance would report every one of those
+ *    operator corrections as agent-authored - a false attribution on the one
+ *    field an operator uses to decide how much scrutiny a finding needs. Its
+ *    own timestamp and plugin version too: finding 18 was filed on 0.1.28 and
+ *    corrected against evidence from the 0.1.27 run, and one stamp cannot carry
+ *    two versions.
+ *
+ *    THE TRAP NEXT DOOR: eight of the twelve hand blocks open with "at the
+ *    operator's direction". That is a claim about who DIRECTED, written by the
+ *    party being directed - self-declaration, which is the exact thing a stamp
+ *    exists to replace. The guard can only enforce who RAN the command, so that
+ *    is all the stamp says, and it says so in words. A `--directed-by` flag
+ *    would be a self-declared field wearing a stamp's clothes, and worse than
+ *    the prose because it would look enforced.
+ *
+ * WHAT IT REFUSES, AND WHY THE REFUSAL IS THE POINT. It does not edit
+ * provenance. Correcting text and asserting authorship are different acts, and
+ * a retroactive `Filed by:` is a claim about who wrote the original made by
+ * someone who was not necessarily there - on the field this whole finding
+ * exists to protect. Finding 23 of the gate6 queue is the live case: it is the
+ * one body reading `Filed by: not recorded`, and it stays that way. The refusal
+ * is explicit rather than a gap, because a gap reads as an oversight and gets
+ * built by the next person.
+ */
+
+/** Flags that would set or change attribution. Refused by name. */
+const ATTRIBUTION_FLAGS = [
+  '--filed-by', '--attribute', '--attribution', '--provenance',
+  '--stamp', '--as', '--author', '--directed-by',
+];
+
+/**
+ * Amendment prose comes from a FILE or from stdin. Never from an argument.
+ *
+ * On 2026-09-04 finding 16 reached the gate6 queue through `--record` having
+ * lost four backticked words to shell command substitution - `blocked` twice,
+ * `done` and `failed` once each. The prose was passed inside a double-quoted
+ * argument and bash evaluated the backticks before `retro.mjs` ever saw them.
+ * One of the four was the exact word the finding is about, and two of the gaps
+ * left grammatical sentences, so a reader would take them for typos.
+ *
+ * A door prose can come through is a door every caller uses, and the loss is
+ * silent. So an inline value is REFUSED rather than accepted as a convenience.
+ *
+ * `--record` is knowingly left as it is - see the design note. It is the
+ * trapped-agent path, seven messages point at it, and making the reporting
+ * channel harder to reach is the worst outcome available here.
+ */
+function readProse(value, flag) {
+  if (value === undefined || value === true) {
+    die(`${flag} needs a path, or - for stdin. It does not take prose: an argument goes through `
+      + 'the shell, and on 2026-09-04 that ate four backticked words out of a finding on the way in.');
+  }
+  if (value === '-') {
+    try {
+      return fs.readFileSync(0, 'utf8');
+    } catch (err) {
+      die(`${flag} - was given but stdin could not be read (${err?.code ?? err?.message}). Write the `
+        + 'text to a file and pass its path instead.');
+    }
+  }
+  const text = readTextOrNull(path.resolve(value));
+  if (text === null) {
+    die(`${flag} takes a PATH or -, never prose, and there is no file at ${JSON.stringify(value)}.\n`
+      + '  Write the text to a file and pass the path, or pipe it and pass -.\n'
+      + '  The reason is measured: prose passed as an argument goes through the shell, and on '
+      + '2026-09-04 a finding reached the queue having lost four backticked words that way - one of '
+      + 'them the exact word the finding was about.');
+  }
+  return text;
+}
+
+/** Whitespace-collapsed, dash-normalised copy. For comparing quotes only. */
+const forCompare = (s) => s.replace(DASHES, '-').replace(/\s+/g, ' ').trim();
+
+/**
+ * Append one amendment to a finding already in the queue.
+ *
+ * @param {string} root
+ * @param {{file?: string, number: number, title: string, text: string,
+ *          was?: string|null, agent?: string|null}} opts
+ */
+export function amend(root, { file, number, title, text, was = null, agent = null }) {
+  if (!Number.isInteger(number) || number < 1) {
+    die('--amend needs the number of the finding to amend, e.g. `--amend 18`.');
+  }
+  if (!title || title === true) {
+    die('--amend needs --title "<short heading>". An addendum with no heading is invisible in --list.');
+  }
+
+  const files = queuedLessons(root);
+  if (!files.length) {
+    die(`nothing queued (no ${PENDING_STEM}*.md in ${PATHS.lessons}), so there is no finding `
+      + `${number} to amend.`, 1);
+  }
+
+  // WHICH FILE. The --clear precedent, one verb along: the queue is a directory,
+  // two queued files can each hold a finding 18, and amending the wrong one is
+  // silent - the correction lands on a different finding and both files still
+  // look right.
+  const holders = files.filter((f) => {
+    const t = readTextOrNull(abs(root, f));
+    return t !== null && findingBlocks(t).some((b) => b.n === number);
+  });
+  let target;
+  if (file && file !== true) {
+    target = files.find((f) => path.basename(f) === path.basename(String(file)));
+    if (!target) die(`${file} is not queued. Queued now:\n${files.map((f) => `  ${f}`).join('\n')}`, 1);
+  } else if (holders.length > 1) {
+    die(`${holders.length} queued files hold a finding ${number}, so --amend needs to be told which:\n`
+      + holders.map((f) => `  ${COMMAND_PREFIX}retro --amend ${number} --file ${path.basename(f)} ...`).join('\n')
+      + '\nNothing was written. Choosing silently would put the correction on a different finding, '
+      + 'and both files would still look right.', 1);
+  } else {
+    target = holders[0];
+  }
+  if (!target) {
+    die(`no queued file holds a finding ${number}. Queued now:\n`
+      + files.map((f) => `  ${f}`).join('\n'), 1);
+  }
+
+  const p = abs(root, target);
+  const body = readTextOrNull(p);
+  if (body === null) die(`${target} could not be read, so nothing can be appended to it.`, 1);
+
+  const block = findingBlocks(body).find((b) => b.n === number);
+  if (!block) die(`${target} holds no finding ${number}.`, 1);
+
+  const r = buildRedactor(root, readJsonOrNull(abs(root, PATHS.manifest)));
+  const clean = (s) => (typeof s === 'string' ? r.redact(s) : s);
+
+  // THE QUOTE MUST RESOLVE. Finding 17's shape - a citation that does not
+  // resolve is stored exactly like one that does - and it is cheap to close
+  // here because both strings are in hand. Compared on a normalised COPY,
+  // never on disk: a quote re-wrapped by whoever copied it is the same quote,
+  // and one whose em dash was retyped as a hyphen is 0.1.13 in other clothes.
+  let quote = null;
+  if (was !== null && was !== undefined) {
+    quote = clean(was).trim();
+    if (!quote) die('--was was given and is empty. Omit it rather than quoting nothing: the '
+      + 'amendment then says outright that it ADDS rather than corrects.');
+    if (!forCompare(findingBody(body, block)).includes(forCompare(quote))) {
+      die(`the --was quote does not appear in finding ${number}'s body in ${target}, so nothing was `
+        + 'written. A superseded quote is a citation, and a citation that does not resolve is stored '
+        + 'exactly like one that does - no reader downstream can tell them apart.\n'
+        + `  looked for: ${JSON.stringify(forCompare(quote).slice(0, 120))}\n`
+        + '  Compared with whitespace collapsed and dashes normalised, so re-wrapping is not the '
+        + 'cause. Check it is the body you meant: a quote of an earlier AMENDMENT does not count, '
+        + 'deliberately.', 1);
+    }
+  }
+
+  const parts = [
+    ``,
+    amendmentHeading(number, clean(title)),
+    ``,
+    // ITS OWN stamp: its own time, its own plugin version, its own caller.
+    `Amended ${nowIso()}, plugin ${pluginVersion()}. `
+      + (agent && agent !== true
+        ? `${AMEND_STAMP} **${clean(String(agent))}** (agent). Provenance enforced at the risk guard, `
+          + 'not self-declared. It attests to who RAN this command, and to nothing about who directed it.'
+        // Not "the operator". The guard lets an agent amend without declaring
+        // itself - the channel must never close - so an absent value is UNKNOWN.
+        : `${AMEND_STAMP} not recorded. Either the main session, or an agent that did not declare `
+          + 'itself - the queue cannot tell. Treat it as unattributed.'),
+    ``,
+    clean(text).trim(),
+    ``,
+    quote
+      ? `**Superseded, quoted verbatim from the body above:** ${quote}`
+      : 'No superseded text quoted: this amendment ADDS to the finding rather than correcting it.',
+    ``,
+  ];
+
+  // INSERTED, NOT APPENDED. Everything before `block.end` and everything after
+  // it is carried through untouched: this relocates bytes and rewrites none.
+  const head = body.slice(0, block.end).replace(/\n+$/, '\n');
+  const tail = body.slice(block.end);
+  writeTextAtomic(p, head + parts.join('\n') + (tail.startsWith('\n') ? '' : '\n') + tail);
+  return { path: target, finding: number };
 }
 
 /* ---------------------------------------------------------------- apply */
@@ -412,6 +739,41 @@ function main() {
     return;
   }
 
+  if (argv.includes('--amend')) {
+    if (!exists(abs(root, PATHS.manifest))) {
+      die('not a Mavci project: .mavci/project.json not found. An amendment is filed against a '
+        + 'finding in this project\'s queue, so run this from the project.', 1);
+    }
+    // REFUSED BY NAME, not absent. Correcting text and asserting authorship are
+    // different acts, and only the first is this verb's. A retroactive stamp is
+    // a claim about who wrote the original, made by someone who was not
+    // necessarily there, on the one field this command exists to protect.
+    const asked = argv.find((a) => ATTRIBUTION_FLAGS.includes(a.split('=')[0]));
+    if (asked) {
+      die(`${asked} would edit provenance, and --amend corrects TEXT only.\n`
+        + '  A `Filed by:` line records who observed and wrote the finding. Setting it afterwards is '
+        + 'an assertion about authorship, not a correction, and whoever runs this may not have been '
+        + 'there - which is the whole reason the field is enforced at the risk guard rather than '
+        + 'self-declared.\n'
+        + '  An amendment carries its OWN stamp instead: who ran THIS command, when, on which plugin '
+        + 'version. That is written for you and cannot be set by a flag.\n'
+        + '  A finding filed without attribution stays unattributed. Record why in the amendment '
+        + 'text, where it is visibly somebody\'s account rather than a stamp.', 1);
+    }
+    const { path: rel, finding } = amend(root, {
+      file: arg('--file'),
+      number: Number(arg('--amend')),
+      title: arg('--title'),
+      text: readProse(arg('--text'), '--text'),
+      was: argv.includes('--was') ? readProse(arg('--was'), '--was') : null,
+      agent: arg('--agent'),
+    });
+    console.log(`amended finding ${finding} in ${rel}`);
+    console.log('The finding\'s own text is untouched: an amendment is appended inside its block, '
+      + 'never written over it.');
+    return;
+  }
+
   if (argv.includes('--list')) {
     const files = queuedLessons(root);
     if (!files.length) { console.log(`nothing queued (no ${PENDING_STEM}*.md in ${PATHS.lessons})`); return; }
@@ -419,8 +781,35 @@ function main() {
       const text = readTextOrNull(abs(root, f));
       if (text === null) { console.log(`${f}: UNREADABLE - it is queued and its contents are unknown`); continue; }
       const found = parseFindings(text);
-      console.log(`${f}: ${found.length} finding(s)`);
-      for (const x of found) console.log(`  ${x.n}. ${x.title}`);
+      // THE STAMP ACCOUNTING IS THE OTHER HALF OF "APPEND, NEVER REPLACE".
+      // Appending means the body still reads as filed, so a reader who stops at
+      // the body acts on an uncorrected claim. Nothing may write into a body to
+      // announce that - so the INDEX says it, at the moment a reader is choosing
+      // what to read. And it counts hand-written blocks: twelve of them reached
+      // one queue before this command existed, and a reader that saw only what
+      // this writer writes would report none of them.
+      const amendments = parseAmendments(text);
+      const unstamped = amendments.filter((a) => !a.stamped).length;
+      console.log(`${f}: ${found.length} finding(s)`
+        + (amendments.length ? `, ${amendments.length} addendum(a)` : '')
+        + (unstamped ? `, ${unstamped} UNSTAMPED` : ''));
+      for (const x of found) {
+        console.log(`  ${x.n}. ${x.title}`);
+        const mine = amendments.filter((a) => a.finding === x.n);
+        if (mine.length) {
+          const u = mine.filter((a) => !a.stamped).length;
+          console.log(`     ${mine.length} addendum(a), ${u} unstamped`);
+        }
+      }
+      const orphans = amendments.filter((a) => a.finding === null
+        || !found.some((x) => x.n === a.finding));
+      for (const a of orphans) {
+        console.log(`  (addendum naming finding ${a.finding ?? '?'}, which is not in this file: ${a.title})`);
+      }
+      if (unstamped) {
+        console.log('     UNSTAMPED means the block carries no attestation of who wrote it - a hand '
+          + 'edit, typographically identical to text this writer stamped. Weigh it accordingly.');
+      }
     }
     return;
   }
@@ -475,6 +864,10 @@ function main() {
     '  --record "<title>" --finding "<text>" [--target <path>] [--check <id>]',
     '                     [--assertion "<text>"] [--broken-build "<text>"]',
     '                                 file a finding against the system (agents may do this)',
+    '  --amend <n> --title "<t>" --text <path|->  [--was <path|->] [--file <name>]',
+    '                                 append a dated addendum to a queued finding. It carries its',
+    '                                 own stamp; it never edits the finding. --text and --was take',
+    '                                 a PATH or -, never prose - an argument goes through the shell',
     '  --list                         every queued file, and the findings in it',
     '  --show                         print every queued file',
     '  --apply                        carry them into the system repo  (operator only)',
