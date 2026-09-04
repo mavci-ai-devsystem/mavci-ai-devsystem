@@ -217,14 +217,24 @@ which is every project *except* the ones where guardian is worth running. `--emi
 now scopes the enumeration to this directory whenever a case is staged, derived from
 the stage itself rather than from a flag, so the line above is now true.
 
-**Two residuals, because the fix is narrower than it reads.** During a corpus run the
-scan's residue check no longer covers the host's code — correct, since the host is
-not what is being graded, but it means a corpus run is not also a residue check on
-the project. And nothing in the receipt records the host tree's own state, so a
-result produced on a project with sites is still byte-indistinguishable from one
-produced on an empty scaffold; that is gate6 finding 18's second half and it is not
-built. A green corpus grades guardian on the staged fixtures. It says nothing about
-the host project's own sites, and it never did.
+**THE SCOPE FIX IMPROVED THE RUN AND DEGRADED THE RECORD, AND BOTH ARE TRUE.** With
+the host no longer enumerated, a corpus receipt produced on a project full of real
+service-role sites is now byte-indistinguishable from one produced on an empty
+scaffold — the two agree in every field that exists, because nothing in the receipt
+records the host tree's state. Before the fix, the host's sites at least reached the
+worklist and the run refused loudly; now the run succeeds and says nothing about what
+it was standing on. That is gate6 finding 18's second half, it is **not built**, and
+it got more necessary rather than less on the day the corpus became runnable. Until
+it is built, `doctor`'s FAIL is cleared by an artefact that cannot distinguish the
+project it was produced on. Do not read a green corpus as a statement about the host.
+
+**A second residual, smaller and in the same direction.** During a corpus run the
+scan's residue check no longer covers the host's code. That is correct — the host is
+not what is being graded — but it means a corpus run is not also a residue check on
+the project, and anyone who was treating it as one should stop.
+
+A green corpus grades guardian on the staged fixtures. It says nothing about the host
+project's own sites, and it never did.
 
 **The library and the expectations live in the plugin, never in the project**, and
 this is the one part of the layout that is load-bearing. Guardian holds `Read`,
