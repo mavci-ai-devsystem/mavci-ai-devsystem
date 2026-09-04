@@ -26,6 +26,12 @@
  * rather than its verdict: a correct total computed over a shrunken set is
  * indistinguishable from a correct total.
  *
+ * N3 is not a negative control but a third section, added at 0.1.27: it scans the
+ * SHIPPED SCAFFOLD rather than a fixture written to pass. Of its three assertions
+ * exactly one is the control and two are diagnostics; which is which is stated in
+ * full above the assertions themselves, and one of the two passes on the broken
+ * build. Read that block before trusting the set.
+ *
  * Mutations are applied to a COPY of the module in a temp directory and imported
  * from there. Production code carries no test seam: an `exclusions` override
  * parameter would be a hole shaped exactly like the thing being guarded.
@@ -196,29 +202,59 @@ check(/CHECKS PRESENCE, NOT PROVENANCE/.test(rule.description),
   const m = await import(pathToFileURL(path.join(ROOT, 'plugins', 'mavci-core', 'scripts', 'lib', 'sitescan.mjs')).href);
   const r = m.scanProject(ctx, { tenantColumn: 'org_id' });
 
-  // A UNIT CHECK ON THE DERIVATION, and it is NOT the discriminating one - stated
-  // because that is the distinction this whole file exists to make. Measured against
-  // the 0.1.26 build (factory discovery disabled AND the name removed from the
-  // fallback list), this assertion still PASSES, because it calls the derivation
-  // directly and never asks whether `scanProject` uses it. The two assertions below
-  // are the ones that fail there, and they fail because they go through the wiring.
-  // Keeping this one is worth it - it localises a failure to the derivation rather
-  // than the plumbing - but a reader must not mistake it for the control.
+  /* WHICH ONE OF THESE THREE IS THE CONTROL, AND WHICH TWO ARE DIAGNOSTICS.
+   *
+   * Read this before trusting the set. Measured against the 0.1.26 build - the
+   * derived names not passed into `scanProject`, AND `createAdminClient` removed
+   * from the fallback list - exactly one of the three fails for the reason this
+   * release exists:
+   *
+   *   [1] the factory is discovered      PASSES on the broken build   DIAGNOSTIC
+   *   [2] the query is ENUMERATED        fails                        THE CONTROL
+   *   [3] not excluded no_admin_client   fails                        DIAGNOSTIC
+   *
+   * [1] IS A UNIT CHECK, NOT THE CONTROL. It calls the derivation directly and
+   * never asks whether `scanProject` uses it, so a build that derives the name
+   * perfectly and then ignores it satisfies [1] in full - which is precisely the
+   * build that shipped for eleven releases. Keeping it is worth it: when [2] goes
+   * red, [1] is what says whether the derivation or the plumbing broke. On its own
+   * it is coverage of nothing.
+   *
+   * [3] IS A UNIT CHECK ON THE REASON, NOT THE CONTROL EITHER. Its failure set is
+   * a strict subset of [2]'s - any exclusion that swallows this query fails [2],
+   * while [3] fails only when that exclusion is spelled `no_admin_client`. A later
+   * defect losing the same site as `storage_or_rpc` or `dynamic_table` leaves [3]
+   * green. It earns its place by naming WHICH exclusion ate the site.
+   *
+   * [2] IS THE CONTROL. The site reaching guardian's worklist is the entire claim,
+   * and no build that loses it can satisfy this line whatever the reason given.
+   *
+   * The residue assertion below is a fourth line and is NOT a control here either:
+   * it PASSES on the broken build. That is 0.1.27's finding restated - the
+   * scaffold's query never fell through to residue, it was confidently classified
+   * as `no_admin_client`, and residue counts only what the scan could not classify
+   * at all.
+   */
+
+  // [1] DIAGNOSTIC - unit check on the derivation, not the control.
   const factories = m.discoverAdminFactories(ctx);
   check(factories.has('createAdminClient'),
-    `N3 the scaffold's own service-role factory is discovered from the code (got: ${[...factories].join(', ') || 'none'})`);
+    `N3 [1 diagnostic] the scaffold's own service-role factory is discovered from the code (got: ${[...factories].join(', ') || 'none'})`);
 
   const webhook = 'app/api/stripe/webhook/route.ts';
   const enumerated = r.sites.filter((s) => s.path === webhook);
   const excludedHere = r.excluded.filter((e) => e.path === webhook);
 
+  // [2] THE CONTROL - the one assertion here that no broken build can satisfy.
   check(enumerated.length === 1,
-    `N3 the scaffold's service-role query is ENUMERATED as a site (got ${enumerated.length} site(s))`);
+    `N3 [2 THE CONTROL] the scaffold's service-role query is ENUMERATED as a site (got ${enumerated.length} site(s))`);
+  // [3] DIAGNOSTIC - unit check on the exclusion REASON, not the control.
   check(!excludedHere.some((e) => e.reason === 'no_admin_client'),
-    'N3 the scaffold\'s service-role query is NOT excluded as `no_admin_client` - that reason asserts '
+    "N3 [3 diagnostic] the scaffold's service-role query is NOT excluded as `no_admin_client` - that reason asserts "
     + 'the file constructs no service-role client, which is false about this file');
+  // Not a control here - see the block above: this PASSES on the broken build.
   check(r.residue === 0,
-    `N3 scanning the shipped scaffold leaves no residue (got ${r.residue})`);
+    `N3 [not a control] scanning the shipped scaffold leaves no residue (got ${r.residue})`);
 }
 
 /* ---------------------------------------------------------------- verdict */
