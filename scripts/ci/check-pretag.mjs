@@ -498,6 +498,35 @@ export function postPushReport(tag) {
 }
 
 /**
+ * The two refs a tag question is actually about, and the reason they are built
+ * here rather than written out at the call site.
+ *
+ * THE LS-REMOTE PATTERN DEFECT, 2026-09-04, and it cost a false refusal on a
+ * tag that was already released. It is named here by what it is rather than by
+ * a finding number, because the number is assigned when the retro is filed and
+ * a number written down before it is issued is this repository's oldest defect
+ * shape - a value recorded once, wrongly, and then copied everywhere. `git ls-remote
+ * --tags origin refs/tags/<tag>` does NOT return `refs/tags/<tag>^{}`: a
+ * pattern is matched against the tail of a ref NAME, and the peeled ref's name
+ * ends in `^{}`, so it is filtered out. Asking that way and then looking for
+ * the peeled line is a query that can never answer yes - so EVERY annotated tag
+ * reads as lightweight, which is what v0.1.29 was told about itself while
+ * sitting correctly annotated on origin, minutes before its release run agreed
+ * it was fine.
+ *
+ * The assertion was right about what to check and wrong about how to ask. That
+ * is v0.1.17's shape - a login compared by name where the remote could have
+ * been probed - and it is not fixed by widening the reader, because the reader
+ * never saw the line. Both patterns come from here so that a tag question
+ * cannot be posed a second way, and the self-test hands THIS function to real
+ * git rather than re-typing what it believes git does.
+ *
+ * @param {string} tag
+ * @returns {string[]} the unpeeled ref and the peeled one, in that order
+ */
+export const tagRefspecs = (tag) => [`refs/tags/${tag}`, `refs/tags/${tag}^{}`];
+
+/**
  * Push the tag this gate just created, and then prove it arrived by reading it
  * back off the remote.
  *
@@ -536,7 +565,10 @@ export function pushAndVerify({ tag, head, git }) {
         + '    not what a release is pushed with; check which identity git is using before re-running.' };
   }
 
-  const probe = git(['ls-remote', '--tags', 'origin', `refs/tags/${tag}`]);
+  // BOTH refspecs, for the reason tagRefspecs carries: the peeled ref is a
+  // separate ref NAME, and a pattern naming only the unpeeled one filters it
+  // out - which made the `unpeeled` arm below unreachable-except-wrongly.
+  const probe = git(['ls-remote', '--tags', 'origin', ...tagRefspecs(tag)]);
   if (!probe.ok) {
     // Invariant 5 at the last step. The push exited 0 and the remote could not
     // be read, and this gate will not choose between the two explanations - the
@@ -556,7 +588,7 @@ export function pushAndVerify({ tag, head, git }) {
             + '    third state. This gate has NOT established which, and does not guess.\n'
           : `    The local tag could not be deleted either; remove it by hand: git tag -d ${tag}\n`)
         + '    Settle it before re-running - if origin has it, the release happened:\n'
-        + `      git ls-remote --tags origin refs/tags/${tag}` };
+        + `      git ls-remote --tags origin ${tagRefspecs(tag).map((r) => `'${r}'`).join(' ')}` };
   }
 
   const lines = probe.out.split('\n').map((l) => l.trim()).filter(Boolean);
@@ -589,7 +621,7 @@ export function pushAndVerify({ tag, head, git }) {
         + '    against the commit this gate tagged. check-tags.mjs has required annotated tags since\n'
         + '    v0.1.7, and a lightweight one silently breaks every ^{commit} comparison downstream.\n'
         + '    Nothing was deleted. Read the remote before doing anything else:\n'
-        + `      git ls-remote --tags origin refs/tags/${tag}` };
+        + `      git ls-remote --tags origin ${tagRefspecs(tag).map((r) => `'${r}'`).join(' ')}` };
   }
 
   const commit = peeled.split(/\s+/)[0];
@@ -1204,18 +1236,84 @@ function selftest() {
   const HEAD = '1234567890abcdef1234567890abcdef12345678';
   const TAGOBJ = 'fedcba0987654321fedcba0987654321fedcba09';
   const TAG = 'v9.9.9';
-  const landed = `${TAGOBJ}\trefs/tags/${TAG}\n${HEAD}\trefs/tags/${TAG}^{}\n`;
+
+  // THE FAKE FILTERS THE WAY GIT DOES, and that is most of the fix. Through
+  // v0.1.29 this returned the peeled line to ANY ls-remote, so it answered the
+  // question the caller WISHED it had asked and could not tell a right query
+  // from a wrong one. Real git filters `refs/tags/<tag>^{}` out of a query
+  // patterned `refs/tags/<tag>`, so a correctly annotated tag read as
+  // lightweight. That is the callee asserted and the INSTRUMENT assumed - one
+  // layer down from 0.1.24's caller-never-asserted - and it is why 20b below
+  // puts the same question to real git rather than to this model of it.
+  const refMatch = (pattern, ref) => new RegExp('(^|/)'
+    + pattern.split('*').map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*')
+    + '$').test(ref);
+  const lsRemote = (refs) => (args) => {
+    if (args[0] !== 'ls-remote') return { ok: true, out: '', err: '' };
+    const patterns = args.slice(1).filter((a) => a[0] !== '-' && a !== 'origin');
+    const hit = refs.filter(([name]) => !patterns.length || patterns.some((p) => refMatch(p, name)));
+    return { ok: true, err: '',
+      out: hit.map(([name, sha]) => `${sha}\t${name}`).join('\n') + (hit.length ? '\n' : '') };
+  };
+  const ANNOTATED = [[`refs/tags/${TAG}`, TAGOBJ], [`refs/tags/${TAG}^{}`, HEAD]];
 
   // 20. THE PUSH IS EXPLICIT. `git push` with no refspec, or --tags, is how a
   //     release comes to report "Everything up-to-date" and send nothing.
   {
-    const g = gitLog(() => ({ ok: true, out: landed, err: '' }));
+    const g = gitLog(lsRemote(ANNOTATED));
     const v = pushAndVerify({ tag: TAG, head: HEAD, git: g.git });
+    const probe = (g.calls.find((c) => c.startsWith('ls-remote')) ?? '').split(' ');
     ok('the tag is pushed by explicit refspec and then read back from origin',
       v.status === 'ok'
         && g.calls[0] === `push origin refs/tags/${TAG}`
-        && g.calls.some((c) => c.startsWith('ls-remote') && c.includes(`refs/tags/${TAG}`)),
+        && tagRefspecs(TAG).every((r) => probe.includes(r)),
       `status ${v.status}; calls: ${g.calls.join(' | ') || '(none)'}`);
+  }
+
+  // 20b. AND THE INSTRUMENT, against real git rather than against our model of
+  //      it. THE SECOND BRACE, and it is load-bearing on its own: every fake in
+  //      this file encodes what we BELIEVE ls-remote does, this defect IS that
+  //      belief being wrong, and a fake can never catch its own author. So this
+  //      builds a real repository with a real annotated tag and puts the same
+  //      two questions to real git and to lsRemote above, requiring the SAME
+  //      answer from each. Offline and hermetic - the "remote" is a directory on
+  //      this machine - and the refspecs are tagRefspecs' own, not re-typed.
+  //
+  //      Two things, and they fail independently. The model must agree with git,
+  //      which is what catches refMatch drifting from git's matching. And the
+  //      finding itself must still be true ON REAL DATA: the gate's form returns
+  //      the peeled ref, the single-pattern form does not. If that ever stops
+  //      holding there was no defect here and every fake-driven assertion around
+  //      it is decoration - so it is asserted rather than assumed.
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-lsremote-'));
+    const id = ['-c', 'user.name=mavci', '-c', 'user.email=mavci@example.invalid'];
+    const rg = (args) => execFileSync('git', args,
+      { cwd: tmp, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 20000 });
+    const names = (out) => out.split('\n').map((l) => l.trim().split(/\s+/)[1]).filter(Boolean);
+    const asked = [tagRefspecs(TAG), [`refs/tags/${TAG}`]];
+    let real = [];
+    let modelled = [];
+    let err = '';
+    try {
+      rg(['init', '-q', tmp]);
+      rg([...id, 'commit', '-q', '--allow-empty', '-m', 'base']);
+      rg([...id, 'tag', '-a', TAG, '-m', 'annotated']);
+      const all = rg(['ls-remote', '--tags', tmp]).split('\n').map((l) => l.trim().split(/\s+/))
+        .filter((p) => p.length === 2).map(([sha, name]) => [name, sha]);
+      const model = lsRemote(all);
+      real = asked.map((pats) => names(rg(['ls-remote', '--tags', tmp, ...pats])));
+      modelled = asked.map((pats) => names(model(['ls-remote', '--tags', 'origin', ...pats]).out));
+    } catch (e) {
+      err = String(e.stderr || e.message || e).trim();
+    }
+    const peeled = `refs/tags/${TAG}^{}`;
+    const agrees = real.length === 2 && modelled.length === 2
+      && real.every((r, i) => r.join() === modelled[i].join());
+    ok('real git and the fake answer alike, and only the gate\'s form returns the peeled ref',
+      err === '' && agrees && real[0]?.includes(peeled) && !real[1]?.includes(peeled),
+      err || `git -> ${JSON.stringify(real)}; fake -> ${JSON.stringify(modelled)}`);
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 
   // 21. a push that failed rolls the tag back, because there the gate KNOWS
@@ -1237,7 +1335,7 @@ function selftest() {
   //     and one that leaves an unpushed tag makes the operator work out which of
   //     three places the tag is in before they can do anything at all.
   {
-    const g = gitLog(() => ({ ok: true, out: '', err: '' }));
+    const g = gitLog(lsRemote([]));
     const v = pushAndVerify({ tag: TAG, head: HEAD, git: g.git });
     ok('a push that reported success and sent nothing DELETES the tag, leaving a retryable state',
       v.status === 'absent'
@@ -1259,17 +1357,21 @@ function selftest() {
     ok('an unreadable origin after the push is UNKNOWN, deletes the local tag, and accuses nothing',
       v.status === 'unknown' && !/does not have it/i.test(v.text)
         && g.calls.includes(`tag -d ${TAG}`)
-        && v.text.includes(`git ls-remote --tags origin refs/tags/${TAG}`),
+        // AND THE COMMAND IT HANDS OVER MUST BE THE HONEST ONE. Before finding
+        // 27 this said `refs/tags/<tag>` and nothing else, so the gate refused,
+        // told the operator to read the remote - which was right - and then gave
+        // them the same query that had just lied to it. Requiring the substring
+        // alone passes on that, because it is a prefix of the correct form.
+        && tagRefspecs(TAG).every((r) => v.text.includes(r)),
       `status ${v.status}: ${v.text.split('\n')[0]}`);
   }
 
   // 24. the two ways origin can hold something that is not what was cut.
   {
     const other = '9999999999999999999999999999999999999999';
-    const mism = gitLog(() => ({ ok: true,
-      out: `${TAGOBJ}\trefs/tags/${TAG}\n${other}\trefs/tags/${TAG}^{}\n`, err: '' }));
+    const mism = gitLog(lsRemote([[`refs/tags/${TAG}`, TAGOBJ], [`refs/tags/${TAG}^{}`, other]]));
     const a = pushAndVerify({ tag: TAG, head: HEAD, git: mism.git });
-    const light = gitLog(() => ({ ok: true, out: `${HEAD}\trefs/tags/${TAG}\n`, err: '' }));
+    const light = gitLog(lsRemote([[`refs/tags/${TAG}`, HEAD]]));
     const b = pushAndVerify({ tag: TAG, head: HEAD, git: light.git });
     ok('a tag on origin at another commit, and a lightweight one, each refuse',
       a.status === 'mismatch' && a.text.includes(other.slice(0, 7))
@@ -1284,7 +1386,7 @@ function selftest() {
   //      goes stale unnoticed. The keys are read from the map rather than
   //      re-typed, so it cannot.
   {
-    const g = gitLog(() => ({ ok: true, out: landed, err: '' }));
+    const g = gitLog(lsRemote(ANNOTATED));
     const r = cutTag({ tag: TAG, head: HEAD, git: g.git,
       checkTags: () => ({ ok: true, out: '' }),
       watch: () => ({ status: 'passed', exit: 0, text: 'run passed' }) });
@@ -1298,7 +1400,7 @@ function selftest() {
   //      describes what is owed after a release; printing it under a failure
   //      reads as a release that happened.
   {
-    const g = gitLog(() => ({ ok: true, out: landed, err: '' }));
+    const g = gitLog(lsRemote(ANNOTATED));
     const r = cutTag({ tag: TAG, head: HEAD, git: g.git,
       checkTags: () => ({ ok: true, out: '' }),
       watch: () => ({ status: 'failed', exit: 2, text: 'run failed' }) });
@@ -1313,7 +1415,7 @@ function selftest() {
   //     through v0.1.28 this sequence lived in the CLI where no test could see
   //     it at all.
   {
-    const g = gitLog(() => ({ ok: true, out: landed, err: '' }));
+    const g = gitLog(lsRemote(ANNOTATED));
     const watched = [];
     const r = cutTag({ tag: TAG, head: HEAD, git: g.git,
       checkTags: () => ({ ok: true, out: '' }),
@@ -1345,7 +1447,7 @@ function selftest() {
   //      that pushed successfully and whose release run FAILED is not a pass,
   //      and the arm that decides that is the watch's, not this one's.
   {
-    const g = gitLog(() => ({ ok: true, out: landed, err: '' }));
+    const g = gitLog(lsRemote(ANNOTATED));
     const r = cutTag({ tag: TAG, head: HEAD, git: g.git,
       checkTags: () => ({ ok: true, out: '' }),
       watch: () => ({ status: 'unfinished', exit: 3, text: 'still running' }) });
@@ -1360,7 +1462,7 @@ function selftest() {
   //     local tag and would look identical in every other respect, while origin
   //     kept the tag it had already been sent.
   {
-    const g = gitLog(() => ({ ok: true, out: landed, err: '' }));
+    const g = gitLog(lsRemote(ANNOTATED));
     let watched = 0;
     const r = cutTag({ tag: TAG, head: HEAD, git: g.git,
       checkTags: () => ({ ok: false, out: 'v9.9.9 is not the mainline' }),
@@ -1635,6 +1737,12 @@ ${generated.text}
 
   /* --- 6. and the tag must not already exist ON ORIGIN ------------------- */
 
+  // ONE pattern here, DELIBERATELY, and it is not the finding-27 form by
+  // oversight. This arm asks only whether origin holds the name at all, and the
+  // unpeeled ref answers that whether the tag is annotated or lightweight. It
+  // is left narrow rather than widened to match, so that the next reader sees
+  // the two questions are different: anything that needs to know the tag's FORM
+  // must ask with tagRefspecs, because this pattern filters `^{}` out.
   const remoteTag = git(['ls-remote', '--tags', 'origin', `refs/tags/${wanted}`], { allowFail: true });
   if (remoteTag === null) {
     failures.push('origin answered for refs/heads/main and then failed on refs/tags.\n'

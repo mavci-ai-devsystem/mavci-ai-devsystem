@@ -2423,6 +2423,96 @@ a real tag to prove that it does. That is one line, commented at the call site.
 
 45 assertions in `check-pretag --selftest`, up from 22. All 36 checks `release.yml`
 runs pass.
+
+### 0.1.30 — the fake answered the question the caller wished it had asked
+
+**Cut 2026-09-04**, hours after 0.1.29 and against 0.1.29's own first real use.
+`--cut` created `v0.1.29`, pushed it, read origin back, and reported it had
+arrived as a **LIGHTWEIGHT** tag. It had not. It was annotated, it was on origin,
+and its release run passed. Single-purpose, and it ships as its own version
+rather than riding with anything, for the reason 0.1.10 and 0.1.11 were cut that
+way: this is the release gate correcting itself, and a fix to the only door is
+attributable only when nothing else moved with it.
+
+#### 1. The query, not the reader
+
+`git ls-remote --tags origin refs/tags/<tag>` does **not** return
+`refs/tags/<tag>^{}`. A pattern is matched against the tail of a ref NAME, and
+the peeled ref's name ends in `^{}`, so it is filtered out. `pushAndVerify` then
+looked for the peeled line it had just excluded — a query that can never answer
+yes, which makes the `unpeeled` arm unreachable-except-wrongly for **every**
+annotated tag this gate will ever cut.
+
+The assertion was right about what to check and wrong about **how to ask**. That
+is v0.1.17's shape — an account compared by name where the remote could have been
+probed — and it is the third time this week a check has been correct in intent
+and wrong in its instrument.
+
+**The demonstration needed no fixture.** `git ls-remote --tags origin
+refs/tags/v0.1.28` returns one line; without the refspec, two — against a tag
+known annotated and known green an hour earlier. A failing test on real data,
+which also separates the query defect from any theory about the push.
+`tagRefspecs(tag)` now returns both refs and is the only place a tag question is
+posed. Section 6's single-pattern call is left narrow **and commented**: it asks
+only whether origin holds the name at all, which the unpeeled ref answers, and
+the comment says that anything needing the tag's FORM must ask with
+`tagRefspecs`.
+
+#### 2. The fake answered the question the caller wished it had asked
+
+**That sentence is the finding.** The self-test's `ls-remote` fake returned the
+peeled line to *any* arguments whatsoever, so it could not tell a right query
+from a wrong one, and five assertions covering this exact path were green for the
+life of 0.1.29.
+
+It is one layer below 0.1.24's caller-never-asserted: **there the caller was
+unasserted, here the INSTRUMENT was.** `check-route.mjs` asserted the router as a
+pure function with a request already in hand; this file asserted `pushAndVerify`
+against a git that answered how we wished. Same seam, one level down.
+
+**And the fix that matters is not the fake filtering correctly.** A fake
+corrected by hand is a fake corrected to today's understanding, and today's
+understanding is precisely what was wrong. So the load-bearing change is the
+assertion that **real git and the fake give the same answer**: 20b builds a real
+repository with a real annotated tag, puts `tagRefspecs`' own refspecs to both,
+and requires agreement — plus that the finding still holds on real data, because
+if the single-pattern form ever returns the peeled ref there was no defect here
+and every fake-driven assertion around it is decoration.
+
+Two braces, and each fails alone. Reverting the probe to one pattern reddens five
+fake-driven assertions with 20b green; the fake ignoring its patterns, or the
+model holding the exact wrong belief, reddens **only** 20b.
+
+**A fifth mutation went green and is recorded as a finding about the mutation.**
+Prefixing `.*` to the matcher loosens something no case exercises, so it proved
+nothing about the brace — the rule above `selftest()` says a green mutation is
+always a finding about the assertion, and here it was a finding about the
+mutation instead. It was replaced by one that encodes the wrong belief directly.
+
+#### 3. The refusal was right and the remedy was the defect
+
+The gate refused, told the operator to read the remote before doing anything
+else — correct, and the difference between a false positive that costs a minute
+and one that costs a release — and then handed over
+`git ls-remote --tags origin refs/tags/<tag>`: **the query that had just lied to
+it.** Following the remediation would have confirmed the false positive.
+
+**This is now a pattern rather than three coincidences: a check that detects a
+condition often prescribes the tool that produced it.** 0.1.12's finding 5 is one
+— the risk guard fired on commands that wrote nothing and the documented escape
+was a bypass flag. The `--sync` trap is another: `state.schema_valid` prescribed
+`--reseal` for a schema failure a reseal cannot touch. Here the instrument that
+misreported was offered as the way to check the misreport. The three share a
+mechanism — a remedy is written from inside the component that made the
+observation, so it reaches for what that component already has in its hand — and
+the guard is to ask what produced the state before naming the tool that inspects
+it. Both messages now hand over the honest query, and assertion 23 requires
+**both** refspecs to appear in the text, because the old string is a prefix of
+the correct form and asserting the substring alone passes on the defect.
+
+46 assertions in `check-pretag --selftest`, up from 45. The finding has no number:
+27 and 28 are taken in `docs/lessons/`, so the comments name it by shape until a
+retro is filed — a number assigned now would be wrong by the time anyone read it.
 ---
 
 ## Ask me before
