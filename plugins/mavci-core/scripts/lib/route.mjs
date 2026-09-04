@@ -135,23 +135,59 @@ export function hasSpec(task, specText) {
 }
 
 /**
- * The one task the chain is about.
+ * The one task the chain is about, and separately the ones parked.
  *
  * `in_progress` wins, and there is at most one because `assertSoleInProgress`
  * enforces it at the transition. Otherwise the lowest open id, so a backlog is
  * worked in the order it was allocated rather than in whatever order a directory
  * listing happens to produce.
+ *
+ * ------------------------------------------- PARKED IS OPEN AND NOT SELECTABLE
+ *
+ * 0.1.28. This used to fall back to `blocked[0]`, so a parked task became the
+ * task the chain was about and stayed that way forever. Two questions were being
+ * answered by one selection - "what is the chain working on" and "what still
+ * exists and needs the operator" - and `status` was carrying both.
+ *
+ * THE TRAP THAT PRODUCED WAS THAT THE HONEST STATUS NEVER CLEARED. Measured on
+ * gate6: a task with 23 of 25 acceptance criteria passing, whose two remaining
+ * blockers were both outside its own scope - one needing a file the builder is
+ * denied, one a checker defect - was parked with `--block`, which is exactly what
+ * `blocked` means. The router then kept routing on it and kept discarding the
+ * operator's new request, and the only two statuses that would free it assert
+ * work that is not complete (`done`) or a failure on the merits that did not
+ * happen (`failed`). An operator wanting to start new work was offered a
+ * permanently occupied chain or a false record.
+ *
+ * NEITHER CHEAP FIX IS TAKEN, and both were considered. Adding `blocked` to
+ * `CLOSED` makes parked work vanish like finished work, which is worse than the
+ * trap. Telling operators to use `failed` writes something untrue into the
+ * control plane to unblock a tool. The lever is SELECTABILITY, not closure: a
+ * parked task's lifecycle stage is "not finished" and its routing role is "not
+ * current", and those are different axes.
+ *
+ * So parked tasks come back in their own field. Every caller that has nothing
+ * else to route on reports them - see the `blocked` arm in `decide` - which is
+ * what keeps parking visible rather than silent, and no new status enters the
+ * enum for readers to learn.
+ *
+ * @returns {{task: object|null, parked: object[], conflict: string[]|null}}
  */
 export function selectTask(tasks) {
   const open = (tasks ?? []).filter((t) => t && !CLOSED.has(t.status));
+  const parked = open.filter((t) => t.status === 'blocked').sort((a, b) => a.id.localeCompare(b.id));
   const running = open.filter((t) => t.status === 'in_progress');
   if (running.length > 1) {
-    return { task: null, conflict: running.map((t) => t.id).sort() };
+    return { task: null, parked, conflict: running.map((t) => t.id).sort() };
   }
-  if (running.length === 1) return { task: running[0], conflict: null };
-  const blocked = open.filter((t) => t.status === 'blocked').sort((a, b) => a.id.localeCompare(b.id));
+  if (running.length === 1) return { task: running[0], parked, conflict: null };
   const pending = open.filter((t) => t.status === 'pending').sort((a, b) => a.id.localeCompare(b.id));
-  return { task: pending[0] ?? blocked[0] ?? null, conflict: null };
+  return { task: pending[0] ?? null, parked, conflict: null };
+}
+
+/** One line per parked task, for a `why` that names them rather than counting them. */
+function parkedSummary(parked) {
+  return parked.map((t) => `${t.id} (${t.blocked_by ?? 'no reason recorded'})`).join('; ');
 }
 
 /**
@@ -207,7 +243,7 @@ export function route(input) {
     });
   }
 
-  const { task, conflict } = selectTask(tasks);
+  const { task, parked, conflict } = selectTask(tasks);
 
   if (conflict) {
     return out('blocked', {
@@ -244,6 +280,25 @@ export function route(input) {
         ],
       });
     }
+    /* NOTHING ACTIONABLE AND NOTHING ASKED FOR, BUT SOMETHING IS PARKED. This is
+     * the one place a parked task is reported, and it is why `selectTask` no
+     * longer returns one as the subject: parked work must stay visible without
+     * occupying the chain. Named, not counted - an operator deciding whether to
+     * resume needs the reason, and `blocked_by` is where the honest one was put. */
+    if (!request && parked.length) {
+      return out('blocked', {
+        task_id: parked[0].id,
+        why: `No task is actionable. ${parked.length} parked: ${parkedSummary(parked)}. A parked task `
+          + 'is a planning problem, and a further build attempt is how loops start - but it does not '
+          + 'hold the chain: give a request and the architect starts a new task beside it.',
+        steps: [
+          step('/mavci-core:ship "<what you want built>"', 'start new work - a parked task does not block it'),
+          step('/mavci-core:retro', 'if the blocker is a defect in the system'),
+          step(`/mavci-core:waive <check_id> <path>`, 'if the check is wrong about this file'),
+          step(`state.mjs --reset-attempts ${parked[0].id}`, 'then resume it, after you have changed something'),
+        ],
+      });
+    }
     if (!request) {
       return out('idle', {
         why: 'Connected, and no task is open. Give a request and the chain starts at the architect.',
@@ -253,7 +308,8 @@ export function route(input) {
     return out('plan', {
       task_id: null,
       why: 'No task is open and a request was given. The architect turns it into a spec with '
-        + 'acceptance criteria something can actually check.',
+        + 'acceptance criteria something can actually check.'
+        + (parked.length ? ` ${parked.length} parked task(s) stay parked: ${parkedSummary(parked)}.` : ''),
       steps: [
         step(`state.mjs --begin-plan "<title>"`, 'allocate the task and enter the plan phase in one write'),
         step('dispatch mavci-architect', 'it writes the spec; it never writes application code'),
@@ -287,18 +343,12 @@ export function route(input) {
   const passed = verdict && verdict.verdict === 'pass';
   const exhausted = attempts >= max;
 
-  if (task.status === 'blocked') {
-    return out('blocked', {
-      task_id: id,
-      why: `task ${id} is blocked on ${task.blocked_by ?? '(no reason recorded)'}. A blocked task is `
-        + 'a planning problem; a further build attempt is how loops start.',
-      steps: [
-        step(`/mavci-core:retro`, 'if the blocker is a defect in the system'),
-        step(`/mavci-core:waive <check_id> <path>`, 'if the check is wrong about this file'),
-        step(`state.mjs --reset-attempts ${id}`, 'after you have changed something'),
-      ],
-    });
-  }
+  /* A `blocked` arm stood here until 0.1.28 and has moved UP, into the
+   * no-actionable-task branch. It is not deleted behaviour, it is the same
+   * report from the only place that can now produce it: `selectTask` no longer
+   * returns a parked task as the subject, so `task.status === 'blocked'` is
+   * unreachable here. Leaving the old arm in place would have been a second
+   * writer for one fact, and the one that could never fire. */
 
   /* ---- plan ------------------------------------------------------------- */
   if (task.phase === 'plan') {

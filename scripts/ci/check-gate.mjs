@@ -715,6 +715,95 @@ function assertDelivered(label, r, want) {
   }
 }
 
+/* ============ THE BLOCK MESSAGE NAMES THE BLOCKERS IT COUNTED (0.1.28)
+ *
+ * The gate counted `summary.blockers` and listed the first five checks with status
+ * `fail` or `error` in VERDICT ORDER. Two predicates, one message - so warnings
+ * could occupy every slot and push a blocker off the end silently.
+ *
+ * The fixture is gate6's own verdict shape, measured twice on consecutive prompts:
+ * four `legal.pages_present` warnings (one per scaffold legal page) ahead of
+ * `settings.marketplace_form` (critical) and `supabase.service_role_query_scoped`
+ * (blocker) in rule order. On the broken build the message named ONE of the two
+ * blockers and told the actor to fix the list and stop again.
+ *
+ *   [1] every counted blocker is NAMED   fails on the broken build   THE CONTROL
+ *   [2] cap=2 still names both blockers  fails on the broken build   GUARD vs cap
+ *   [3] truncation is disclosed          fails on the broken build   GUARD vs silence
+ *
+ * [2] is the guard the finding demands: raising the cap must not be mistakable for
+ * the fix, so the cap is a parameter and the assertion drives it DOWN. A build that
+ * merely widened `.slice()` fails [2] at any cap below the finding count - which is
+ * the situation every project with five legal pages is already in.
+ */
+{
+  const { formatBlockDetail } = await import(
+    pathToFileURL(path.join(SCRIPTS, 'lib', 'gate-detail.mjs')).href);
+
+  const warn = (i) => ({
+    check_id: 'legal.pages_present', severity: 'warning', status: 'fail',
+    path: `app/(legal)/p${i}/page.tsx`, line: 7, evidence: 'REVIEW REQUIRED', remedy: 'a lawyer',
+  });
+  const gate6 = {
+    checks: [
+      { check_id: 'supabase.rls_enabled', severity: 'warning', status: 'not_checked', path: null, line: null },
+      warn(1), warn(2), warn(3), warn(4),
+      {
+        check_id: 'settings.marketplace_form', severity: 'critical', status: 'fail',
+        path: '.claude/settings.json', line: 95, evidence: 'not enabled', remedy: 'operator',
+      },
+      {
+        check_id: 'supabase.service_role_query_scoped', severity: 'blocker', status: 'fail',
+        path: 'app/api/activity/route.ts', line: 22, evidence: 'no tenant predicate', remedy: 'add one',
+      },
+    ],
+    summary: { blockers: 2 },
+  };
+
+  const msg = formatBlockDetail(gate6);
+  const counted = gate6.checks.filter((c) => (c.status === 'fail' || c.status === 'error')
+    && (c.severity === 'critical' || c.severity === 'blocker'));
+
+  // [1] THE CONTROL.
+  const missing = counted.filter((c) => !msg.includes(c.check_id));
+  if (missing.length === 0) ok('[THE CONTROL] the block message names every blocker it counted');
+  else {
+    bad(`[THE CONTROL] the message counted ${counted.length} blocker(s) and named `
+      + `${counted.length - missing.length}: missing ${missing.map((c) => c.check_id).join(', ')}`);
+  }
+
+  // [2] GUARD - a bigger .slice() is not the fix, so drive the cap DOWN.
+  const tight = formatBlockDetail(gate6, 2);
+  if (counted.every((c) => tight.includes(c.check_id))) {
+    ok('[guard vs cap] at cap=2 both blockers are still named - severity orders the list, not position');
+  } else {
+    bad('[guard vs cap] at cap=2 a blocker was dropped: the fix is ordering, not a larger slice');
+  }
+
+  // [3] GUARD - a silently truncated list is a silently dropped signal.
+  if (/further finding\(s\) not listed/.test(tight) && /none of them blocking/.test(tight)) {
+    ok('[guard vs silence] a truncated list says how many it omitted and whether any were blocking');
+  } else {
+    bad(`[guard vs silence] truncation not disclosed: ${JSON.stringify(tight.slice(-160))}`);
+  }
+
+  // The gate6 fixture has six failing checks against a cap of five, so it DOES
+  // omit one - and must say so, naming it as non-blocking.
+  if (/1 further finding\(s\) not listed here, none of them blocking/.test(msg)) {
+    ok('the gate6 shape omits exactly one warning at the default cap, and discloses it as non-blocking');
+  } else {
+    bad(`the gate6 shape did not disclose its one omission correctly: ${JSON.stringify(msg.slice(-140))}`);
+  }
+
+  // A verdict that fits must not claim an omission it did not make.
+  const small = { checks: [gate6.checks[6], warn(1)], summary: { blockers: 1 } };
+  if (!/further finding\(s\) not listed/.test(formatBlockDetail(small))) {
+    ok('a list that omitted nothing says nothing about omissions');
+  } else {
+    bad('an untruncated list claimed findings were omitted');
+  }
+}
+
 } finally {
   for (const d of cleanup) fs.rmSync(d, { recursive: true, force: true });
 }

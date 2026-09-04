@@ -32,6 +32,7 @@ import {
   PATHS, GATE_BUDGET_MS, GATE_MAX_CONTINUES,
   GATE_MAX_FAULT_BLOCKS, GATE_FAULT_KINDS, FAULT_DETAIL_MAX_CHARS,
 } from './config.mjs';
+import { formatBlockDetail } from './lib/gate-detail.mjs';
 import { abs, exists, readJsonOrNull } from './lib/fsx.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -685,16 +686,11 @@ async function gate(input) {
   closeGateRun(root, 'fail');
   await stamp(root, { prompt_id: promptId, session_id: sessionId, verdict: 'fail', continues });
 
-  const blocking = verdict.checks
-    .filter((c) => c.status === 'fail' || c.status === 'error')
-    .slice(0, 5)
-    .map((c) => {
-      const loc = c.path ? `${c.path}${c.line ? `:${c.line}` : ''}` : '(repo)';
-      return `${c.check_id} at ${loc} - ${c.evidence ?? 'see verdict'}${c.remedy ? ` FIX: ${c.remedy}` : ''}`;
-    });
-
-  const n = verdict.summary.blockers;
-  const detail = `mavci: ${n} blocking standards violation${n === 1 ? '' : 's'}.\n- ${blocking.join('\n- ')}`;
+  /* The message is built by `lib/gate-detail.mjs`, which is pure and asserted by
+   * `check-gate.mjs`. Severity orders the list and a truncation says what it
+   * omitted - the full argument, and the gate6 measurement that produced it, are
+   * in that module's header. */
+  const detail = formatBlockDetail(verdict);
 
   /* ---- record and release when the actor cannot act (finding 6) --------
    * Ahead of the retry ceiling, because the ceiling is a loop guard and this is

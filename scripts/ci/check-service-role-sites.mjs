@@ -257,6 +257,123 @@ check(/CHECKS PRESENCE, NOT PROVENANCE/.test(rule.description),
     `N3 [not a control] scanning the shipped scaffold leaves no residue (got ${r.residue})`);
 }
 
+/* ------------------------------------------------------------------ N4
+ *
+ * ATTRIBUTION IS PER EXPORT. The other half of N3, and it fails in the opposite
+ * direction.
+ *
+ * N3 asserts the scan can SEE the scaffold's service-role query. Fixing that at
+ * 0.1.27 was done by deriving factory names from the code, and the derivation
+ * attributed every exported name in a module that built a service-role client
+ * anywhere in it. `templates/scaffold/lib/supabase/server.ts` exports `createClient`
+ * (anon, cookie-bound) beside `createAdminClient` (service role), so BOTH names
+ * entered the admin set project-wide.
+ *
+ * What that cost, measured on gate6 at 0.1.27: an ordinary membership lookup on the
+ * SESSION client - `.from('members').eq('user_id', user.id)`, filtered on the user
+ * because the tenant is not known yet - was reported as an unscoped service-role
+ * read, blocking a task whose approved spec REQUIRED that lookup to be on the
+ * session client. Two agents traced it independently and neither could fix it from
+ * inside the task, because the misattribution was here.
+ *
+ * The old code's own comment argued over-enumeration was safe, on the grounds that a
+ * false site becomes a question guardian answers and a reviewer dismisses. THAT
+ * ARGUMENT HOLDS ONLY FOR A SITE WITH A TENANT PREDICATE. `worklistFrom` filters on
+ * `has_tenant_filter` before assigning site ids, so a falsely-attributed site
+ * WITHOUT one never reaches guardian at all - it goes straight to the rule as a hard
+ * blocker with no review step anywhere.
+ *
+ * WHICH ASSERTION IS THE CONTROL, in the same terms as N3:
+ *
+ *   [1] anon factory not discovered    fails on the broken build   DIAGNOSTIC
+ *   [2] anon-owned query NOT a site    fails on the broken build   THE CONTROL
+ *   [3] admin-owned query IS a site    PASSES on the broken build  THE GUARD
+ *
+ * [1] is a unit check on the derivation and says nothing about whether `scanProject`
+ * uses it - the same argument N3 [1] makes about itself. [2] is the control: the
+ * claim is that a query owned by the anon client is not treated as service-role,
+ * and no build that treats it as one can satisfy that line whatever names it
+ * derived. [3] is the guard against the cheap fix - a build that discovers NOTHING
+ * satisfies [1] and [2] completely and is a total regression of N3, so [3] has to
+ * fail it here rather than leaving it to N3 alone.
+ *
+ * The fixture is written rather than shipped, because the shape needs a CONSUMER
+ * that queries through the anon factory and the scaffold has none. It is the
+ * scaffold's own module shape - two exports, one building with the service key -
+ * which is the shape that broke.
+ */
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-n4-'));
+  const write = (rel, body) => {
+    fs.mkdirSync(path.join(tmp, path.dirname(rel)), { recursive: true });
+    fs.writeFileSync(path.join(tmp, rel), body);
+  };
+
+  // The scaffold's shape: an anon factory and an admin factory, one module.
+  write('lib/supabase/server.ts', [
+    "import { createServerClient } from '@supabase/ssr'",
+    "import { env } from '@/lib/env'",
+    '',
+    'export function createClient() {',
+    '  return createServerClient(env.NEXT_PUBLIC_SUPABASE_URL, env.NEXT_PUBLIC_SUPABASE_ANON_KEY, {',
+    '    cookies: { getAll() { return [] }, setAll(list) { void list } },',
+    '  })',
+    '}',
+    '',
+    'export function createAdminClient() {',
+    '  return createServerClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {',
+    '    cookies: { getAll() { return [] }, setAll() {} },',
+    '  })',
+    '}',
+    '',
+  ].join('\n'));
+
+  // A consumer doing the ordinary thing: memberships on the session client keyed on
+  // the user, then the tenant read on the service-role client keyed on the org.
+  write('app/api/activity/route.ts', [
+    "import { createClient, createAdminClient } from '@/lib/supabase/server'",
+    '',
+    'export async function GET() {',
+    '  const supabase = createClient()',
+    '  const { data: user } = await supabase.auth.getUser()',
+    "  const { data: memberships } = await supabase.from('members').select('org_id').eq('user_id', user.id)",
+    '  const orgId = memberships[0].org_id',
+    '  const admin = createAdminClient()',
+    "  const { data: events } = await admin.from('activity_events').select('*').eq('org_id', orgId)",
+    '  return Response.json({ events })',
+    '}',
+    '',
+  ].join('\n'));
+
+  const files = ['lib/supabase/server.ts', 'app/api/activity/route.ts'];
+  const ctx = {
+    files,
+    readOrNull: (rel) => { try { return fs.readFileSync(path.join(tmp, rel), 'utf8'); } catch { return null; } },
+  };
+
+  const m = await import(pathToFileURL(path.join(ROOT, 'plugins', 'mavci-core', 'scripts', 'lib', 'sitescan.mjs')).href);
+  const factories = m.discoverAdminFactories(ctx);
+  const r = m.scanProject(ctx, { tenantColumn: 'org_id' });
+  const route = 'app/api/activity/route.ts';
+  const siteTables = r.sites.filter((s) => s.path === route).map((s) => s.table);
+
+  // [1] DIAGNOSTIC - the derivation, called directly.
+  check(!factories.has('createClient'),
+    `N4 [1 diagnostic] the anon factory exported beside an admin factory is NOT discovered as service-role (got: ${[...factories].join(', ') || 'none'})`);
+
+  // [2] THE CONTROL - no build that misattributes the anon client can satisfy this.
+  check(!siteTables.includes('members'),
+    `N4 [2 THE CONTROL] a query owned by the ANON client is not enumerated as a service-role site (sites on this route: ${siteTables.join(', ') || 'none'})`);
+
+  // [3] THE GUARD against the cheap fix - discovering nothing would satisfy [1] and [2].
+  check(siteTables.includes('activity_events'),
+    `N4 [3 guard] the query owned by the ADMIN client IS still enumerated (sites on this route: ${siteTables.join(', ') || 'none'})`);
+
+  check(r.residue === 0, `N4 residue = 0 (got ${r.residue})`);
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
 /* ---------------------------------------------------------------- verdict */
 
 console.log('');

@@ -309,6 +309,69 @@ console.log('\nC. completion and the operator gates:');
     `C6 an unrecognised state is REPORTED, not guessed at - got ${r.action}`);
 }
 
+/* ================================== C7. A PARKED TASK DOES NOT OCCUPY THE CHAIN
+ *
+ * 0.1.28. `blocked` used to be an OPEN, SELECTABLE status: `selectTask` fell back
+ * to `blocked[0]`, so a parked task became the chain's subject and stayed that way.
+ * The operator's new request was then discarded, because a request is only read in
+ * the no-task-open arm.
+ *
+ * THE TRAP WAS THAT THE HONEST STATUS NEVER CLEARED. Measured on gate6: a task with
+ * 23 of 25 acceptance criteria passing, both remaining blockers outside its own
+ * scope, parked with `--block` - which is precisely what `blocked` means. The two
+ * statuses that would have freed the chain assert work that is not complete
+ * (`done`) or a failure on the merits that did not happen (`failed`), so the
+ * operator's choice was a permanently occupied chain or a false record.
+ *
+ * WHICH ASSERTION IS THE CONTROL, and which two guard the cheap fixes:
+ *
+ *   [1] parked + request  -> plan       fails on the broken build   THE CONTROL
+ *   [2] parked + no req   -> blocked,   PASSES on the broken build  GUARD vs CLOSED
+ *       and NAMES the task
+ *   [3] parked + pending  -> pending    PASSES on the broken build  GUARD vs ordering
+ *
+ * [2] is the guard against the obvious fix of adding `blocked` to `CLOSED`. That
+ * frees the chain and satisfies [1] completely, and it makes parked work vanish
+ * exactly like finished work - the router would answer `idle` with the task
+ * unmentioned. So [2] requires the report AND the task named in it. [3] is the guard
+ * against freeing the chain by reordering selection instead of by changing what is
+ * selectable: a parked task must not be preferred over real pending work either.
+ */
+
+console.log('\nC7. a parked task is open, visible, and not selectable:');
+
+{
+  const parked = task({ status: 'blocked', blocked_by: 'both blockers are operator-only', attempts: 2 });
+  const r = route(base({ tasks: [parked], request: 'add a health endpoint' }));
+  check(r.action === 'plan' && r.dispatch === 'mavci-architect',
+    `C7a [THE CONTROL] a request reaches the architect while a task is parked - got ${r.action}/${r.dispatch}`);
+  check(/0001/.test(r.why),
+    'C7b and the new plan still names what stays parked, so parking is never silent');
+}
+{
+  const parked = task({ status: 'blocked', blocked_by: 'needs the operator', attempts: 2 });
+  const r = route(base({ tasks: [parked], request: null }));
+  check(r.action === 'blocked' && r.dispatch === null,
+    `C7c [guard vs CLOSED] with nothing asked for, the parked task is still REPORTED - got ${r.action}`);
+  check(/0001/.test(r.why) && /needs the operator/.test(r.why),
+    'C7d and it is named with its reason, not counted - adding `blocked` to CLOSED would answer `idle` here');
+  check(r.steps.some((s) => /ship/.test(s.run)),
+    'C7e and the operator is told new work is possible beside it');
+}
+{
+  const parked = task({ id: '0001', status: 'blocked', blocked_by: 'parked' });
+  const fresh = task({ id: '0002', status: 'pending', phase: 'plan', attempts: 0 });
+  const r = route(base({ tasks: [parked, fresh], state: { phase: 'plan' } }));
+  check(r.task_id === '0002',
+    `C7f [guard vs ordering] real pending work outranks a parked task - got ${r.task_id}`);
+}
+{
+  const parked = task({ status: 'blocked' });
+  const sel = selectTask([parked]);
+  check(sel.task === null && sel.parked.length === 1,
+    `C7g selectTask returns a parked task in its own field, not as the subject - task=${sel.task?.id ?? 'null'} parked=${sel.parked.length}`);
+}
+
 /* ============================================ D. THE SHAPE OF THE ANSWER */
 
 console.log('\nD. the answer is well formed, and the owners exist:');

@@ -93,8 +93,44 @@ const CLIENT_CTOR = /\b(createClient|createServerClient)\s*\(/;
  */
 const SERVICE_KEY_NAME = /SUPABASE_SERVICE_ROLE_KEY|SUPABASE_SERVICE_KEY/;
 
-/** How far after a constructor call to look for the service key. */
+/** How far after a constructor call to look for the service key, when the call's
+ *  own argument list cannot be delimited. Fallback only - see `buildsWithServiceKey`. */
 const CTOR_WINDOW = 400;
+
+/**
+ * Does THIS constructor call receive a service-role key?
+ *
+ * THE ANSWER IS THE CALL'S OWN ARGUMENT LIST, NOT A WINDOW, and the difference is
+ * not academic. `CTOR_WINDOW` measures 400 characters forward from the call, which
+ * runs past the end of the enclosing function whenever the function is shorter than
+ * that. The scaffold's `lib/supabase/server.ts` is exactly that shape: the anon
+ * `createServerClient(...ANON_KEY...)` is followed within a few lines by
+ * `createAdminClient`, whose body names `SUPABASE_SERVICE_ROLE_KEY` - so a window
+ * anchored on the ANON constructor finds the ADMIN key and calls the anon client
+ * service-role.
+ *
+ * That is the same proximity heuristic that produced the defect this file has now
+ * recorded four times, so the fix is to stop measuring distance and delimit the
+ * expression: match the call's parentheses over blanked source, then look for the
+ * key inside them. The window survives only for a call whose parens do not close -
+ * a truncated or malformed file - where erring wide is better than erring silent.
+ *
+ * @param {string} blanked  source with strings and comments blanked, offsets kept
+ * @param {string} original the same source, for reading key names out of literals
+ * @param {number} openIdx  index of the call's `(`
+ */
+function buildsWithServiceKey(blanked, original, openIdx) {
+  let depth = 0;
+  for (let i = openIdx; i < blanked.length; i += 1) {
+    const c = blanked[i];
+    if (c === '(') depth += 1;
+    else if (c === ')') {
+      depth -= 1;
+      if (depth === 0) return SERVICE_KEY_NAME.test(original.slice(openIdx, i + 1));
+    }
+  }
+  return SERVICE_KEY_NAME.test(original.slice(openIdx, openIdx + CTOR_WINDOW));
+}
 
 /** `export function NAME(` / `export const NAME =` - a factory this module hands out. */
 const EXPORTED_NAME = /\bexport\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(|\bexport\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/g;
@@ -111,14 +147,32 @@ const EXPORTED_NAME = /\bexport\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\
  * service-role key, and exports a function, exports a service-role factory. The
  * name is then whatever the project calls it.
  *
- * Deliberately coarse in the safe direction. It attributes every exported name in
- * such a module, not only the enclosing function, so a module exporting both an
- * anon factory and an admin factory contributes both names. That over-enumerates
- * rather than under-enumerates: a false site is a question guardian answers and a
- * reviewer dismisses, while a false exclusion is a query nobody ever looks at.
- * The scaffold's `server.ts` is exactly this shape - `createClient` (anon) beside
- * `createAdminClient` (service role) - and treating a `.from()` owned by the anon
- * one as a site costs one answered question and hides nothing.
+ * ATTRIBUTION IS PER EXPORT, NOT PER MODULE. 0.1.28, and the reason belongs here
+ * because the previous paragraph argued the opposite and was wrong in a way that
+ * cost a real project a blocking finding on correct code.
+ *
+ * It used to attribute EVERY exported name in a module that built a service-role
+ * client anywhere in it, on the argument that over-enumerating is safe: a false
+ * site becomes a question guardian answers and a reviewer dismisses. That argument
+ * holds only for a site WITH a tenant predicate, because `worklistFrom` filters on
+ * `has_tenant_filter` before assigning site ids. A falsely-attributed site WITHOUT
+ * one never reaches guardian at all - it goes straight to
+ * `supabase.service_role_query_scoped` as a hard blocker with no review step
+ * anywhere.
+ *
+ * The scaffold's own `server.ts` is exactly the shape that breaks it: it exports
+ * `createClient` (anon, cookie-bound session client) beside `createAdminClient`
+ * (service role). Under module attribution both names entered the admin set
+ * project-wide, so an ordinary membership lookup on the SESSION client -
+ * `.from('members').eq('user_id', user.id)`, filtered on the user rather than the
+ * tenant because the tenant is not known yet - was reported as an unscoped
+ * service-role read. Measured on gate6, 0.1.27, where it blocked a task whose spec
+ * REQUIRED that lookup to be on the session client.
+ *
+ * So each admin constructor is attributed to the exported definition that encloses
+ * it. `definitionSpan` does the enclosing by brace matching over blanked source,
+ * which is why a constructor in a non-exported helper contributes no name rather
+ * than the nearest export's.
  *
  * @param {{files: string[], readOrNull: (rel: string) => string|null}} ctx
  * @returns {Set<string>} factory names, possibly empty
@@ -131,15 +185,56 @@ export function discoverAdminFactories(ctx) {
     if (!text || !SERVICE_KEY_NAME.test(text)) continue;
 
     const blanked = blankSource(text);
-    let builds = false;
-    for (const m of matchAll(blanked, CLIENT_CTOR)) {
-      if (SERVICE_KEY_NAME.test(text.slice(m.index, m.index + CTOR_WINDOW))) { builds = true; break; }
-    }
-    if (!builds) continue;
 
-    for (const m of text.matchAll(EXPORTED_NAME)) names.add(m[1] ?? m[2]);
+    // Every constructor call in this module that builds with a service-role key.
+    // Read the ORIGINAL for the key, because blankSource replaces string bodies
+    // and the key is often a literal - same reason adminIdentifiers does.
+    const adminCtors = [];
+    for (const m of matchAll(blanked, CLIENT_CTOR)) {
+      // CLIENT_CTOR's match ends AT the `(`, so the call's paren opens on its last char.
+      if (buildsWithServiceKey(blanked, text, m.index + m.match.length - 1)) adminCtors.push(m.index);
+    }
+    if (!adminCtors.length) continue;
+
+    for (const m of blanked.matchAll(EXPORTED_NAME)) {
+      const end = definitionSpan(blanked, m.index);
+      if (adminCtors.some((i) => i >= m.index && i < end)) names.add(m[1] ?? m[2]);
+    }
   }
   return names;
+}
+
+/**
+ * Where the definition starting at `from` ends, by matching brackets over BLANKED
+ * source - so a brace inside a string or a comment cannot close a body early.
+ *
+ * Handles the three shapes `EXPORTED_NAME` matches:
+ *   `export function f(a) { ... }`   ends at the `}` that closes the body
+ *   `export const f = () => { ... }` likewise
+ *   `export const f = expr;`         ends at the `;`, having opened no body
+ *
+ * Returns an exclusive end offset, and never runs past the end of the file. A
+ * malformed source that never closes its body yields the file length, which
+ * over-attributes within that one module rather than throwing - the same safe
+ * direction the old module-wide behaviour took, now bounded to a broken file.
+ */
+function definitionSpan(blanked, from) {
+  let depth = 0;
+  let seenBody = false;
+  for (let i = from; i < blanked.length; i += 1) {
+    const c = blanked[i];
+    if (c === '(' || c === '[' || c === '{') {
+      depth += 1;
+      if (c === '{') seenBody = true;
+    } else if (c === ')' || c === ']' || c === '}') {
+      depth -= 1;
+      if (depth <= 0 && c === '}' && seenBody) return i + 1;
+      if (depth < 0) return i;
+    } else if (c === ';' && depth === 0) {
+      return i + 1;
+    }
+  }
+  return blanked.length;
 }
 
 /** `const x = ...` / `let x = ...` capturing the identifier. */
@@ -173,10 +268,11 @@ function adminIdentifiers(blanked, original, discovered = null) {
   }
 
   // Inline construction - read the ORIGINAL for the env name, because blankSource
-  // replaces string bodies and the key is often a literal.
+  // replaces string bodies and the key is often a literal. Delimited by the call's
+  // own argument list rather than by a window, for the reason in buildsWithServiceKey:
+  // a window anchored on an anon constructor reaches the next function's key.
   for (const m of matchAll(blanked, CLIENT_CTOR)) {
-    const tail = original.slice(m.index, m.index + CTOR_WINDOW);
-    if (!SERVICE_KEY_NAME.test(tail)) continue;
+    if (!buildsWithServiceKey(blanked, original, m.index + m.match.length - 1)) continue;
     const before = blanked.slice(Math.max(0, m.index - 80), m.index);
     const a = before.match(ASSIGN);
     if (a) ids.add(a[1]);
