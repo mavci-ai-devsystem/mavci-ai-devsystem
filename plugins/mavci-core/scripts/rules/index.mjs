@@ -997,8 +997,53 @@ const serviceRoleQueryScoped = {
       });
     }
 
+    // WHICH TABLES ARE TENANT TABLES. 0.1.27, and it closes a gap between this
+    // rule and its own description, which has always said "against a TENANT
+    // table" while the loop below asked only whether a predicate was present.
+    //
+    // It went unnoticed because the enumeration could not see the scaffold's own
+    // factory, so the scaffold's `stripe_events` insert was never a site to begin
+    // with. Fixing that (sitescan 0.1.27) made this one observable immediately:
+    // `stripe_events` is keyed by Stripe's event id, has no tenant column, and a
+    // tenant predicate on it would be meaningless - yet it would have become a
+    // blocker in every project built from the scaffold, on the scaffold's own
+    // code. A checker whose first act on a new project is to flag the template it
+    // just wrote teaches the operator that the checker is wrong.
+    //
+    // FAILS CLOSED, and that is the whole design of it. A table is treated as
+    // NON-tenant only when a migration creates it and that CREATE carries no
+    // tenant column. A table nothing creates - a schema built in a dashboard, a
+    // migration this parser cannot read - is NOT assumed innocent: it stays a
+    // finding, because "no evidence it is tenant-scoped" and "evidence it is not"
+    // are different facts and only the second is a reason to stay silent.
+    const tenantColumn = (ctx.manifest?.tenancy?.tenant_column ?? '').toLowerCase();
+    const nonTenantTables = new Set();
+    if (tenantColumn) {
+      for (const rel of ctx.files.filter((p) => /^supabase\/migrations\/.*\.sql$/.test(p))) {
+        const text = ctx.readOrNull(rel);
+        if (text === null) continue;
+        const sql = text.replace(/--[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ');
+        for (const m of matchAll(sql, /\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["']?(?:public\.)?["']?(\w+)/i)) {
+          const name = m.groups[0].toLowerCase();
+          // The body is the parenthesised column list following the name.
+          const open = sql.indexOf('(', m.index);
+          if (open === -1) continue;
+          let depth = 0; let close = -1;
+          for (let i = open; i < sql.length; i += 1) {
+            if (sql[i] === '(') depth += 1;
+            else if (sql[i] === ')') { depth -= 1; if (depth === 0) { close = i; break; } }
+          }
+          if (close === -1) continue;
+          const body = sql.slice(open + 1, close).toLowerCase();
+          if (!new RegExp(`\\b${tenantColumn}\\b`).test(body)) nonTenantTables.add(name);
+          else nonTenantTables.delete(name);
+        }
+      }
+    }
+
     for (const site of scan.sites) {
       if (site.has_tenant_filter) continue;   // -> guardian's worklist, not a finding here
+      if (nonTenantTables.has(String(site.table).toLowerCase())) continue;  // not a tenant table
       out.push({
         check_id: this.id, severity: this.severity, path: site.path, line: site.line,
         evidence: `${site.writes ? 'write' : 'read'} on "${site.table}" through the service-role `

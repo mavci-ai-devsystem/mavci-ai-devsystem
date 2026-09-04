@@ -156,6 +156,71 @@ check(/CHECKS PRESENCE, NOT PROVENANCE/.test(rule.description),
     `N2 widen an exclusion -> guardian is handed an empty worklist it would answer completely (${w.sites_total})`);
 }
 
+/* ------------------------------- N3: THE SHIPPED SCAFFOLD IS THE FIXTURE ---
+ *
+ * 0.1.27. Every assertion above runs against fixtures under
+ * templates/fixtures/supabase.service_role_query_scoped/, and all of them passed
+ * for eleven releases while the scan was blind to the factory the plugin's OWN
+ * scaffold exports. They passed BECAUSE the fixtures spell the factory using a
+ * name the scanner already knew: they test the rule against inputs written to
+ * satisfy it, which is the adjacent assertion, not the one that mattered.
+ *
+ * Measured on gate6, a project created by /mavci-core:new-project and otherwise
+ * unmodified: the scaffold's Stripe webhook constructed a service-role client
+ * and queried with it, and the scan excluded that line as `no_admin_client` -
+ * an exclusion whose own text asserts the file constructs no service-role
+ * client. sites_total was 0 and every check was green. Every project the
+ * generator creates inherited it.
+ *
+ * So the fixture here is the SHIPPED SCAFFOLD, not a file written to pass. If
+ * the scaffold ever builds a service-role client this scan cannot see, this
+ * fails - whatever the factory ends up being called, and without anyone having
+ * to remember to add the name in two places.
+ */
+{
+  const scaffold = path.join(ROOT, 'plugins', 'mavci-core', 'templates', 'scaffold');
+  const files = [];
+  (function walk(dir, rel) {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(full, r); else files.push(r);
+    }
+  }(scaffold, ''));
+
+  const ctx = {
+    files,
+    readOrNull: (rel) => { try { return fs.readFileSync(path.join(scaffold, rel), 'utf8'); } catch { return null; } },
+  };
+
+  const m = await import(pathToFileURL(path.join(ROOT, 'plugins', 'mavci-core', 'scripts', 'lib', 'sitescan.mjs')).href);
+  const r = m.scanProject(ctx, { tenantColumn: 'org_id' });
+
+  // A UNIT CHECK ON THE DERIVATION, and it is NOT the discriminating one - stated
+  // because that is the distinction this whole file exists to make. Measured against
+  // the 0.1.26 build (factory discovery disabled AND the name removed from the
+  // fallback list), this assertion still PASSES, because it calls the derivation
+  // directly and never asks whether `scanProject` uses it. The two assertions below
+  // are the ones that fail there, and they fail because they go through the wiring.
+  // Keeping this one is worth it - it localises a failure to the derivation rather
+  // than the plumbing - but a reader must not mistake it for the control.
+  const factories = m.discoverAdminFactories(ctx);
+  check(factories.has('createAdminClient'),
+    `N3 the scaffold's own service-role factory is discovered from the code (got: ${[...factories].join(', ') || 'none'})`);
+
+  const webhook = 'app/api/stripe/webhook/route.ts';
+  const enumerated = r.sites.filter((s) => s.path === webhook);
+  const excludedHere = r.excluded.filter((e) => e.path === webhook);
+
+  check(enumerated.length === 1,
+    `N3 the scaffold's service-role query is ENUMERATED as a site (got ${enumerated.length} site(s))`);
+  check(!excludedHere.some((e) => e.reason === 'no_admin_client'),
+    'N3 the scaffold\'s service-role query is NOT excluded as `no_admin_client` - that reason asserts '
+    + 'the file constructs no service-role client, which is false about this file');
+  check(r.residue === 0,
+    `N3 scanning the shipped scaffold leaves no residue (got ${r.residue})`);
+}
+
 /* ---------------------------------------------------------------- verdict */
 
 console.log('');

@@ -56,17 +56,91 @@
 import { blankSource, matchAll } from './jsscan.mjs';
 import { lineOf } from './fsx.mjs';
 
-/** Factories that hand back a service-role client. */
-const ADMIN_FACTORY = /\b(getSupabaseAdminClient|createSupabaseAdminClient|getServiceRoleClient)\s*\(/;
+/**
+ * Factories that hand back a service-role client, BY NAME.
+ *
+ * This list is a fallback and no longer the primary mechanism - see
+ * `discoverAdminFactories`, which derives factory names from the code instead.
+ * It is kept because removing a name a project might already use would be a
+ * regression, and because a name here still works in a single-file scan where
+ * there is no project to derive from.
+ *
+ * 0.1.27, and the reason belongs next to the list rather than in a changelog.
+ * This list did not contain `createAdminClient`, which is the name the plugin's
+ * OWN scaffold exports (`templates/scaffold/lib/supabase/server.ts`). So the
+ * scaffold's Stripe webhook constructed a service-role client, queried with it,
+ * and was excluded as `no_admin_client` - an exclusion whose text asserts the
+ * file constructs no service-role client, which was false about it. Every
+ * project `new-project` creates inherited that. The comment below already
+ * documented this exact failure class for the KEY name; the same bug was one
+ * field up, in the list it was written beneath.
+ */
+const ADMIN_FACTORY = /\b(getSupabaseAdminClient|createSupabaseAdminClient|getServiceRoleClient|createAdminClient)\s*\(/;
 
 /**
- * A `createClient(...)` whose key argument is a service-role env read, under either
+ * The Supabase client constructors. `createClient` is the plain SDK; the SSR
+ * package spells it `createServerClient`, and the scaffold uses that one - so a
+ * pattern that knew only the first was blind to the client the scaffold actually
+ * builds. Same defect as the key-name one below, one level out.
+ */
+const CLIENT_CTOR = /\b(createClient|createServerClient)\s*\(/;
+
+/**
+ * A client constructor whose key argument is a service-role env read, under either
  * documented spelling. Both are matched deliberately: finding 6's third instance was
  * a rule that knew one name for this key and was blind to a real client using the
  * other.
  */
-const INLINE_ADMIN = /createClient\s*\(([\s\S]{0,400}?)\)/;
 const SERVICE_KEY_NAME = /SUPABASE_SERVICE_ROLE_KEY|SUPABASE_SERVICE_KEY/;
+
+/** How far after a constructor call to look for the service key. */
+const CTOR_WINDOW = 400;
+
+/** `export function NAME(` / `export const NAME =` - a factory this module hands out. */
+const EXPORTED_NAME = /\bexport\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(|\bexport\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/g;
+
+/**
+ * Derive service-role factory names FROM THE CODE, rather than from a list.
+ *
+ * WHY THIS EXISTS AND WHY IT IS NOT A LONGER LIST. A hand-maintained set of
+ * factory names is a rule that knows some names for a thing and is blind to a
+ * real instance using another - the failure this file has now recorded three
+ * times (the key alias, the SSR constructor spelling, and the scaffold's own
+ * factory). Adding a fourth name fixes today's instance and leaves the shape
+ * intact. This walks the project instead: a module that builds a client with a
+ * service-role key, and exports a function, exports a service-role factory. The
+ * name is then whatever the project calls it.
+ *
+ * Deliberately coarse in the safe direction. It attributes every exported name in
+ * such a module, not only the enclosing function, so a module exporting both an
+ * anon factory and an admin factory contributes both names. That over-enumerates
+ * rather than under-enumerates: a false site is a question guardian answers and a
+ * reviewer dismisses, while a false exclusion is a query nobody ever looks at.
+ * The scaffold's `server.ts` is exactly this shape - `createClient` (anon) beside
+ * `createAdminClient` (service role) - and treating a `.from()` owned by the anon
+ * one as a site costs one answered question and hides nothing.
+ *
+ * @param {{files: string[], readOrNull: (rel: string) => string|null}} ctx
+ * @returns {Set<string>} factory names, possibly empty
+ */
+export function discoverAdminFactories(ctx) {
+  const names = new Set();
+  for (const rel of ctx.files ?? []) {
+    if (!/\.(ts|tsx|js|jsx|mjs|cjs)$/.test(rel)) continue;
+    const text = ctx.readOrNull(rel);
+    if (!text || !SERVICE_KEY_NAME.test(text)) continue;
+
+    const blanked = blankSource(text);
+    let builds = false;
+    for (const m of matchAll(blanked, CLIENT_CTOR)) {
+      if (SERVICE_KEY_NAME.test(text.slice(m.index, m.index + CTOR_WINDOW))) { builds = true; break; }
+    }
+    if (!builds) continue;
+
+    for (const m of text.matchAll(EXPORTED_NAME)) names.add(m[1] ?? m[2]);
+  }
+  return names;
+}
 
 /** `const x = ...` / `let x = ...` capturing the identifier. */
 const ASSIGN = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*$/;
@@ -82,17 +156,26 @@ export const EXCLUSION_REASONS = {
  * Identifiers in `text` bound to a service-role client.
  * @returns {Set<string>} may be empty
  */
-function adminIdentifiers(blanked, original) {
+function adminIdentifiers(blanked, original, discovered = null) {
   const ids = new Set();
-  for (const m of matchAll(blanked, ADMIN_FACTORY)) {
-    const before = blanked.slice(Math.max(0, m.index - 80), m.index);
-    const a = before.match(ASSIGN);
-    if (a) ids.add(a[1]);
+
+  // Named factories: the built-in list, plus any name derived from the project.
+  const named = discovered && discovered.size
+    ? new RegExp(`\\b(${[...discovered].map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\s*\\(`)
+    : null;
+  for (const re of named ? [ADMIN_FACTORY, named] : [ADMIN_FACTORY]) {
+    for (const m of matchAll(blanked, re)) {
+      const before = blanked.slice(Math.max(0, m.index - 80), m.index);
+      const a = before.match(ASSIGN);
+      if (a) ids.add(a[1]);
+      else ids.add('*inline*'); // used directly, e.g. createAdminClient().from(...)
+    }
   }
-  // Inline createClient(url, <service key>) - read the ORIGINAL for the env name,
-  // because blankSource replaces string bodies and the key is often a literal.
-  for (const m of matchAll(blanked, /createClient\s*\(/)) {
-    const tail = original.slice(m.index, m.index + 400);
+
+  // Inline construction - read the ORIGINAL for the env name, because blankSource
+  // replaces string bodies and the key is often a literal.
+  for (const m of matchAll(blanked, CLIENT_CTOR)) {
+    const tail = original.slice(m.index, m.index + CTOR_WINDOW);
     if (!SERVICE_KEY_NAME.test(tail)) continue;
     const before = blanked.slice(Math.max(0, m.index - 80), m.index);
     const a = before.match(ASSIGN);
@@ -106,12 +189,12 @@ function adminIdentifiers(blanked, original) {
  * Scan one file.
  * @returns {{sites: Array, excluded: Array, residue: Array}}
  */
-export function scanFile(rel, text, { tenantColumn = null } = {}) {
+export function scanFile(rel, text, { tenantColumn = null, adminFactories = null } = {}) {
   const out = { sites: [], excluded: [], residue: [] };
   if (!text || !text.includes('.from(')) return out;
 
   const blanked = blankSource(text);
-  const admins = adminIdentifiers(blanked, text);
+  const admins = adminIdentifiers(blanked, text, adminFactories);
 
   for (const m of matchAll(blanked, /\.from\s*\(/)) {
     const line = lineOf(text, m.index);
@@ -186,12 +269,19 @@ export function scanProject(ctx, { tenantColumn = null } = {}) {
   const excluded = [];
   let coarse = 0;
 
+  // Derived BEFORE any file is scanned, and from the whole tree, because the
+  // module that builds the client is almost never the module that queries with
+  // it. Scanning file-by-file with no project-wide pass is what made the
+  // scaffold's own factory invisible: `lib/supabase/server.ts` contains no
+  // `.from(` at all, so it was never even opened.
+  const adminFactories = discoverAdminFactories(ctx);
+
   for (const rel of ctx.files) {
     if (!/\.(ts|tsx|js|jsx|mjs|cjs)$/.test(rel)) continue;
     const text = ctx.readOrNull(rel);
     if (!text || !text.includes('.from(')) continue;
     coarse += matchAll(blankSource(text), /\.from\s*\(/).length;
-    const r = scanFile(rel, text, { tenantColumn });
+    const r = scanFile(rel, text, { tenantColumn, adminFactories });
     sites.push(...r.sites);
     excluded.push(...r.excluded);
   }
