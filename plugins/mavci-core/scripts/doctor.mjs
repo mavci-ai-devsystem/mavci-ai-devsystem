@@ -423,11 +423,18 @@ function checkVersionSkew(root, out, { sync = false } = {}) {
  * reported as unknown, which is the invariant the rest of this file follows.
  */
 /** ~/.claude, or wherever CLAUDE_CONFIG_DIR points. */
-function configDir() {
+// Exported from v0.1.29: check-pretag.mjs asks whether the tree it is about to
+// cut a tag in is generated state, and that question is `is it under
+// <configDir>/plugins`. A third copy of this resolution is the shape this
+// repository keeps finding - one value written down once and then propagated -
+// so it is imported. retro.mjs keeps its own mirror deliberately: doctor.mjs
+// imports queuedLessons() from retro.mjs, so retro importing doctor would close
+// a cycle.
+export function configDir() {
   return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 }
 
-function clonePath() {
+export function clonePath() {
   return path.join(configDir(), 'plugins', 'marketplaces', MARKETPLACE_NAME);
 }
 

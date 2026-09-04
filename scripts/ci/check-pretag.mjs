@@ -22,7 +22,7 @@
  * is no tag. The gate is not advisory when it is the only door.
  *
  *   node scripts/ci/check-pretag.mjs v0.1.9          check only
- *   node scripts/ci/check-pretag.mjs v0.1.9 --cut    check, then create the annotated tag
+ *   node scripts/ci/check-pretag.mjs v0.1.9 --cut    check, tag, push, verify, watch CI
  *   node scripts/ci/check-pretag.mjs --selftest      exercise the derivation itself
  *
  * With no tag argument it reports the tag `plugin.json` currently authorises.
@@ -82,15 +82,72 @@
  * against a remote this machine cannot read, and each would volunteer its own
  * wrong explanation for the same one cause.
  *
- * READ, NOT WRITE - and deliberately not a check. `ls-remote` proves the
- * credential can READ the repository; it proves nothing about pushing, and a
- * read-only token (`MAVCI_TOKEN` is exactly that shape) passes this gate and
- * fails at the push. That gap is left open on purpose: `--cut` creates the tag
- * LOCALLY and pushes nothing, so a credential that cannot write fails at the
- * operator's own `git push`, immediately and in words, with the tag still local
- * and deletable (`git tag -d <tag>`). The failure is loud and free to undo, and
- * a control belongs where the loss is - which is the same argument that put the
- * read probe here, applied honestly in the other direction.
+ * READ, NOT WRITE. `ls-remote` proves the credential can READ the repository;
+ * it proves nothing about pushing, and a read-only token (`MAVCI_TOKEN` is
+ * exactly that shape) passes this probe and fails at the push. That gap is
+ * still open and is now closed one step later rather than left to the operator:
+ * `--cut` pushes, and a credential that cannot write fails inside the gate,
+ * which deletes the tag it created. See section v0.1.29 below - the paragraph
+ * that used to stand here argued the failure was loud and free to undo BECAUSE
+ * the operator pushed by hand. It was right about the property and wrong about
+ * who should hold it.
+ *
+ * ---------------------------------------------------------------------------
+ * v0.1.29: THE PUSH IS INSIDE THE GATE, AND THE TAG IS READ BACK OFF ORIGIN.
+ *
+ * Through v0.1.28 `--cut` created the tag, printed `git push origin <tag>` as
+ * advice, and exited. Two things then failed silently, on the same day, and
+ * neither was visible from the other's output:
+ *
+ *   - `--cut` run inside `~/.claude/plugins/marketplaces/mavci` cut the tag in
+ *     generated state. Every arm of this gate passes there - it is a real
+ *     checkout of this repository, same remote, same branch - and propagation
+ *     resets the directory.
+ *   - the push reported "Everything up-to-date" and sent nothing, which is
+ *     indistinguishable from a push that worked.
+ *
+ * Section 2 of this header already settled where such a check belongs: a check
+ * nobody is required to run is the same failure one layer up, which is why
+ * `--cut` creates the tag rather than advising a tag. The post-push assertion
+ * is that argument applied once more. `--cut` cannot make it after it exits, so
+ * `--cut` does not exit before the push: it pushes by EXPLICIT REFSPEC, then
+ * reads the tag back off origin and compares the peeled commit against the one
+ * it tagged. A second command the operator has to remember is advice with a
+ * different shape.
+ *
+ * WHAT IT ASSERTS, AND WHERE IT STOPS. Three facts had to be checked by hand
+ * after every release: the tag reached origin, the release run started, and the
+ * release run passed. `--cut` takes all three - it reads the tag back off
+ * origin, then polls the release run to a bound.
+ *
+ * THE BOUND HAS A STATED BEHAVIOUR, which is the part with no obvious right
+ * answer. Ten minutes total, two of them for the run to appear at all, polled
+ * every fifteen seconds. Still running when that is spent is UNKNOWN: not a
+ * pass, because invariant 5 says a failed probe is never reported as one, and
+ * not a failure, because the tag IS released and calling it a failure invites
+ * the one repair that must never happen. So there are three exit statuses and
+ * they are three different answers:
+ *
+ *   0   the tag is on origin and its release run passed
+ *   2   a refusal - and up to and including the push, nothing was released
+ *   3   the tag is on origin and the verdict could not be read. Finish the
+ *       watch by hand; the tag stands.
+ *
+ * ATOMICITY, AND WHY IT IS THE PROPERTY THAT MATTERS. Every arm up to and
+ * including the push leaves either the tag on origin or NO TAG AT ALL - never a
+ * local tag that origin does not have. A failed `--cut` is therefore retryable
+ * by re-running the same command, and nobody has to work out which of three
+ * places the tag is in before they can act. That is why the `absent` and
+ * `unknown` arms delete the local tag rather than keeping it as evidence: a
+ * state with one possibility in it beats a state with three, even when all
+ * three are individually recoverable.
+ *
+ * From the watch onward the direction reverses and NOTHING is rolled back. The
+ * tag is on origin, immutable, and possibly already fetched; un-pushing a
+ * released tag is worse than an unresolved watch, and a machine that has
+ * fetched a tag keeps the object it holds, so a moved tag means one name and
+ * two commits. `watchRelease` is not even given a git runner, and every arm of
+ * it that is not a pass says the tag stands.
  */
 
 import fs from 'node:fs';
@@ -101,7 +158,7 @@ import { fileURLToPath } from 'node:url';
 // Imported, not reimplemented. doctor owns the probe and the decision; this gate
 // owns the moment. A second copy of either would be the shape this system has
 // hit repeatedly - a value written down once, wrongly, and then propagated.
-import { ghAccountFinding, readGhAccounts } from '../../plugins/mavci-core/scripts/doctor.mjs';
+import { clonePath, configDir, ghAccountFinding, readGhAccounts } from '../../plugins/mavci-core/scripts/doctor.mjs';
 import { SYSTEM_REPO } from '../../plugins/mavci-core/scripts/config.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -109,6 +166,10 @@ const MANIFEST = path.join(ROOT, 'plugins/mavci-core/.claude-plugin/plugin.json'
 const RELEASE_YML = path.join(ROOT, '.github/workflows/release.yml');
 const SELFTEST_YML = path.join(ROOT, '.github/workflows/selftest.yml');
 const OWNER = SYSTEM_REPO.split('/')[0];
+
+/** Canonical path, or the path itself when it does not exist yet. A clone held
+ *  as a junction or a symlink is the case a lexical comparison misses. */
+const realpath = (p) => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
 
 /* --- what release.yml runs that this gate deliberately does not --------- */
 // Declared, with the reason, because an exclusion implied by absence is
@@ -327,12 +388,453 @@ export function identityVerdict({ origin, accounts, owner = OWNER }) {
       + `    ${reflow(finding.text)}` + stop };
 }
 
+/* --- the tree this gate must never cut a tag in (v0.1.29) ---------------- */
+/**
+ * `--cut` creates the tag in the tree it is RUNNING FROM, and that tree is not
+ * always the one the operator is editing.
+ *
+ * `~/.claude/plugins/marketplaces/mavci` is a real git checkout of this
+ * repository - same remote, same branch, same workflows, same manifest - so
+ * every arm in this gate passes there. It is also generated state: propagation
+ * is `git fetch origin` then `git checkout -B main origin/main`, which discards
+ * whatever is in that directory with no prompt and no reflog entry for content
+ * never committed (0.1.18, docs/lessons/0.1.18-the-clone-is-generated-state.md).
+ *
+ * The two halves of the failure do not meet. A tag cut in the clone is a tag in
+ * a directory that gets reset; the operator then pushes from the repository they
+ * ARE editing, where the tag does not exist, and `git push --follow-tags`
+ * answers "Everything up-to-date". Neither output mentions the other, and the
+ * first symptom is the worst signal this system has: a release that is green
+ * everywhere and absent.
+ *
+ * retro.mjs got this refusal in v0.1.25 by the same argument - it had been
+ * writing findings into the clone, reporting success, and the next propagation
+ * erased them. This is that refusal placed at the one step that is irreversible.
+ *
+ * THE PREDICATE IS THE CLASS, NOT THE INSTANCE. Everything under
+ * `<config>/plugins` is written by `/plugin` and replaced by it - the clone and
+ * the plugin cache both live there - so the containment test is what refuses,
+ * and the clone is matched by canonical path as well, because a development
+ * machine can hold it as a junction or a symlink and a lexical test would miss
+ * that entirely.
+ *
+ * Pure, and given its three paths rather than reading them, so the self-test can
+ * assert the decision without relocating this file.
+ */
+export function generatedStateVerdict({ root, pluginsDir, clone }) {
+  const canon = (p) => {
+    const abs = path.resolve(p);
+    return process.platform === 'win32' ? abs.toLowerCase() : abs;
+  };
+  const within = (dir, p) => {
+    const rel = path.relative(canon(dir), canon(p));
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  };
+
+  const tail = '\n\n  Run this from the source checkout - the repository you edit, commit and push in.\n'
+    + '  Nothing else can produce a release.';
+
+  if (clone && canon(root) === canon(clone)) {
+    return { text:
+      'REFUSING: a release cut in generated state is not a release - this is the marketplace\n'
+      + '  clone, and the tag you are about to create would be destroyed by the next propagation\n'
+      + '  into it, unread by anybody.\n\n'
+      + `  ${root}\n\n`
+      + '  Propagation into that directory is `git fetch origin` then\n'
+      + '  `git checkout -B main origin/main`, which discards whatever is there with no prompt and\n'
+      + '  no reflog entry for content never committed. And `git push --follow-tags` from the\n'
+      + '  repository you ARE editing would then answer "Everything up-to-date", because the tag is\n'
+      + '  not in it - so neither half of that failure is visible from the other half\'s output.'
+      + tail };
+  }
+
+  if (pluginsDir && within(pluginsDir, root)) {
+    return { text:
+      'REFUSING: a release cut in generated state is not a release - this tree is inside the\n'
+      + '  plugin directory, which `/plugin` overwrites, so the tag you are about to create would\n'
+      + '  be destroyed by the next propagation or install.\n\n'
+      + `  ${root}\n`
+      + `  is under ${pluginsDir}\n\n`
+      + '  Everything there is written by `/plugin` and replaced by it: the marketplace clone is\n'
+      + '  reset by `git checkout -B main origin/main`, and the cache is re-populated on install.'
+      + tail };
+  }
+
+  return null;
+}
+
+/* --- the push, and the assertion after it (v0.1.29) ---------------------- */
+/**
+ * What a fully green `--cut` still does NOT establish, declared with the reason
+ * rather than left silent - the same rule EXCLUDED_STEPS follows, and for the
+ * same reason: an exclusion expressed by not appearing is indistinguishable
+ * from an omission.
+ *
+ * This list SHRANK in v0.1.29 and the shape of what is left changed with it.
+ * It used to hold "the release run started" and "the release run passed",
+ * because the gate stopped at the push and those were checked by hand after
+ * every release. They are watched now, to a bound. What remains is not another
+ * thing the gate could check and chose not to - it is the two links that are
+ * manual by design, and naming them here is the only place a passing release
+ * says so.
+ */
+export const POST_PUSH_NOT_COVERED = new Map([
+  ['PROPAGATION to any machine',
+    'a pushed tag moves nothing by itself. The clone is moved by `git fetch origin` and\n'
+    + '    `git checkout -B main origin/main`, and the install by `claude plugin uninstall` then\n'
+    + '    `claude plugin install --scope user`, then a restart - one operator visit per machine\n'
+    + '    per release. `/plugin marketplace update` and `claude plugin update` move neither.'],
+  ['that the released plugin ANSWERS correctly',
+    'release.yml runs this repository\'s own suite against the tagged tree, which is a\n'
+    + '    different question from whether guardian\'s answers are right. That is the corpus,\n'
+    + '    it is operator-run, and doctor FAILs every project until a result for it exists.'],
+]);
+
+export function postPushReport(tag) {
+  return ['  A green release run is where this gate ends. It does NOT establish:',
+    ...[...POST_PUSH_NOT_COVERED].map(([what, why]) => `    ${what} - ${why}`),
+    `  Nothing further is owed for ${tag} itself.`,
+  ].join('\n');
+}
+
+/**
+ * Push the tag this gate just created, and then prove it arrived by reading it
+ * back off the remote.
+ *
+ * THE PUSH IS INSIDE THE GATE, and v0.1.17's paragraph saying it deliberately
+ * was not is rewritten above rather than left standing. The reason given there
+ * - that a read-only credential should fail loudly with the tag still local and
+ * deletable - is not an argument against pushing here; it is an argument for
+ * exactly what the `push-failed` arm below does, which is better than the
+ * operator's own push because the rollback is automatic instead of remembered.
+ * The reason the push moved is that a post-push assertion `--cut` cannot make is
+ * a second command someone has to remember, and this file's own header already
+ * settled what those are worth: a check nobody is required to run is the same
+ * failure one layer up. That is why `--cut` creates the tag; it is why `--cut`
+ * now pushes it.
+ *
+ * EXPLICIT REFSPEC, ALWAYS. `git push` with no refspec, and `git push --tags`,
+ * are both able to answer "Everything up-to-date" and send nothing - which is
+ * the observation that reads as success and is the whole reason this exists.
+ *
+ * @param {{tag: string, head: string, git: (args: string[]) =>
+ *          {ok: boolean, out: string, err: string}}} input
+ * @returns {{status: 'ok'|'push-failed'|'unknown'|'absent'|'unpeeled'|'mismatch', text: string}}
+ */
+export function pushAndVerify({ tag, head, git }) {
+  const push = git(['push', 'origin', `refs/tags/${tag}`]);
+  if (!push.ok) {
+    // The one arm that rolls back KNOWING: a single-ref push either happened or
+    // it did not. The two arms below also delete, for the weaker reason that a
+    // local tag origin may not have is the one state worth ruling out - but this
+    // is the only one that can say the push definitely sent nothing.
+    const rolled = git(['tag', '-d', tag]);
+    return { status: 'push-failed',
+      text: `the push FAILED, so ${tag} was ${rolled.ok ? 'DELETED locally' : 'left in place - `git tag -d ' + tag + '` failed too'} and nothing was released:\n`
+        + `      ${(push.err || '(no output)').split('\n').join('\n      ')}\n`
+        + '    A read-only credential fails exactly here. MAVCI_TOKEN is that shape by design and is\n'
+        + '    not what a release is pushed with; check which identity git is using before re-running.' };
+  }
+
+  const probe = git(['ls-remote', '--tags', 'origin', `refs/tags/${tag}`]);
+  if (!probe.ok) {
+    // Invariant 5 at the last step. The push exited 0 and the remote could not
+    // be read, and this gate will not choose between the two explanations - the
+    // defect it exists to remove is a message that picked one confidently.
+    //
+    // The local tag still goes, for the reason the absent arm gives: it is the
+    // one half this gate CAN make certain, and removing it collapses three
+    // possible states into two - the tag is on origin, or it is nowhere. What
+    // it must NOT do is say which, because it has not established that.
+    const rolled = git(['tag', '-d', tag]);
+    return { status: 'unknown',
+      text: `${tag} was pushed without error and origin could not then be read, so whether it arrived\n`
+        + '    is UNKNOWN - and could-not-check is not a pass:\n'
+        + `      ${(probe.err || '(no output)').split('\n').join('\n      ')}\n`
+        + (rolled.ok
+          ? '    The local tag was deleted, so this is now either on origin or nowhere - never a\n'
+            + '    third state. This gate has NOT established which, and does not guess.\n'
+          : `    The local tag could not be deleted either; remove it by hand: git tag -d ${tag}\n`)
+        + '    Settle it before re-running - if origin has it, the release happened:\n'
+        + `      git ls-remote --tags origin refs/tags/${tag}` };
+  }
+
+  const lines = probe.out.split('\n').map((l) => l.trim()).filter(Boolean);
+  const refs = lines.filter((l) => l.includes(`refs/tags/${tag}`));
+
+  if (!refs.length) {
+    // ATOMICITY, and it is the property that makes the whole step survivable.
+    // The tag is not on origin, so the local one is deleted and no tag now
+    // exists anywhere: the failure is retryable by re-running this command, and
+    // nobody has to work out which of three places the tag is in before they
+    // can act. A state with one possibility in it beats a state with three,
+    // even when all three are individually recoverable.
+    const rolled = git(['tag', '-d', tag]);
+    return { status: 'absent',
+      text: `${tag} pushed WITHOUT ERROR and origin does not have it.\n`
+        + '    This is the observation this arm exists for: a push that reports success and sends\n'
+        + '    nothing leaves a release that exists on one machine, while every project CI clones\n'
+        + '    v<state.json.plugin_version> and gets a tag that resolves for nobody.\n'
+        + (rolled.ok
+          ? '    The local tag was DELETED, so no tag now exists anywhere and re-running this command\n'
+            + '    is the whole recovery.'
+          : `    The local tag could NOT be deleted, so nothing is on origin and one tag remains here.\n`
+            + `    Remove it before re-running:  git tag -d ${tag}`) };
+  }
+
+  const peeled = refs.find((l) => l.endsWith(`refs/tags/${tag}^{}`));
+  if (!peeled) {
+    return { status: 'unpeeled',
+      text: `${tag} reached origin as a LIGHTWEIGHT tag: the remote reports no ${tag}^{} to compare\n`
+        + '    against the commit this gate tagged. check-tags.mjs has required annotated tags since\n'
+        + '    v0.1.7, and a lightweight one silently breaks every ^{commit} comparison downstream.\n'
+        + '    Nothing was deleted. Read the remote before doing anything else:\n'
+        + `      git ls-remote --tags origin refs/tags/${tag}` };
+  }
+
+  const commit = peeled.split(/\s+/)[0];
+  if (commit !== head) {
+    return { status: 'mismatch',
+      text: `${tag} is on origin at ${commit.slice(0, 7)}, not the commit this gate tagged `
+        + `(${head.slice(0, 7)}).\n`
+        + '    Origin did not have this tag when this run checked, minutes ago, so something else\n'
+        + '    created it in between. One tag name now means two commits on two machines, which is\n'
+        + '    the one state a released tag must never reach. Do NOT move it; resolve it by hand\n'
+        + '    before anything fetches it.' };
+  }
+
+  return { status: 'ok',
+    text: `${tag} is on origin at ${head.slice(0, 7)}, read back off the remote rather than inferred\n`
+      + '  from the push exiting 0.' };
+}
+
+/* --- watching the release run (v0.1.29) ---------------------------------- */
+/**
+ * The bound, and it is a decision rather than a number.
+ *
+ * `appearMs` is how long to wait for a run to EXIST for the tag. GitHub creates
+ * it asynchronously, so nothing has happened yet is the normal first answer.
+ * `totalMs` is the whole budget. `release.yml` installs Claude Code and runs the
+ * full suite, so a healthy run is minutes; ten is roughly double that, which is
+ * the shape a bound should have - long enough that hitting it means something,
+ * short enough that a release does not hang on a queue nobody is watching.
+ *
+ * Both are exported so the self-test asserts the loop against the same numbers
+ * the gate uses, rather than against a copy that can drift from them.
+ */
+export const WATCH = { appearMs: 120_000, totalMs: 600_000, pollMs: 15_000 };
+
+/** Dependency-free synchronous sleep. Node builtin, no npm, Node 22 safe. */
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Poll the release run for a tag that is already on origin, to a bound.
+ *
+ * THREE OUTCOMES, NOT TWO, and the third is the reason this is written out
+ * rather than shelled to `gh run watch`. A watch can end without a verdict -
+ * the run has not appeared, the run is still going, gh cannot be read - and
+ * every one of those is UNKNOWN. Not a pass, because invariant 5 says a failed
+ * probe is never reported as one. Not a failure, because the tag IS released
+ * and calling it a failure would invite exactly the wrong repair.
+ *
+ * IT IS GIVEN NO `git`, DELIBERATELY. By the time this runs the tag is on
+ * origin, immutable, and possibly fetched; the correct response to every
+ * unknown here is to leave it there and finish the watch by hand. A function
+ * that cannot reach git cannot be talked into un-pushing a released tag by some
+ * later edit, and every non-passing arm says out loud that the tag stands.
+ *
+ * @param {{tag: string,
+ *          gh: (args: string[]) => {ok: boolean, out: string, err: string},
+ *          sleep?: (ms: number) => void, now?: () => number, cfg?: typeof WATCH}} input
+ * @returns {{status: 'passed'|'failed'|'unfinished'|'no-run'|'unavailable',
+ *            exit: 0|2|3, text: string}}
+ */
+export function watchRelease({ tag, gh, sleep = sleepSync, now = Date.now, cfg = WATCH }) {
+  const minutes = Math.round(cfg.totalMs / 60_000);
+  const seconds = Math.round(cfg.appearMs / 1000);
+  const stands = `\n    The tag was NOT deleted and must not be: it is on origin, it is immutable, and`
+    + '\n    un-pushing a released tag is worse than an unresolved watch.';
+  const byHand = `\n    Finish it by hand:\n      gh run list --workflow release.yml --branch ${tag}`;
+
+  const started = now();
+  let seen = null;
+
+  for (;;) {
+    const r = gh(['run', 'list', '--workflow', 'release.yml', '--branch', tag,
+      '--limit', '1', '--json', 'databaseId,status,conclusion,url']);
+
+    if (!r.ok) {
+      return { status: 'unavailable', exit: 3,
+        text: `${tag} is on origin and its release run could NOT be read, so whether the release\n`
+          + '    passed is UNKNOWN - and could-not-check is never a pass:\n'
+          + `      ${(r.err || '(no output)').split('\n').join('\n      ')}\n`
+          + '    gh is unavailable, unauthenticated, or offline.' + stands + byHand };
+    }
+
+    let rows;
+    try { rows = JSON.parse(r.out || '[]'); } catch {
+      return { status: 'unavailable', exit: 3,
+        text: `${tag} is on origin and gh answered with something this gate cannot parse, so whether\n`
+          + '    the release passed is UNKNOWN - and could-not-check is never a pass:\n'
+          + `      ${String(r.out).slice(0, 200)}` + stands + byHand };
+    }
+
+    if (Array.isArray(rows) && rows.length) {
+      seen = rows[0];
+      if (seen.status === 'completed') {
+        if (seen.conclusion === 'success') {
+          return { status: 'passed', exit: 0,
+            text: `${tag} is on origin and its release run PASSED.\n      ${seen.url ?? ''}` };
+        }
+        return { status: 'failed', exit: 2,
+          text: `${tag} is on origin and its release run FAILED (${seen.conclusion}):\n`
+            + `      ${seen.url ?? `run ${seen.databaseId}`}` + stands + '\n'
+            + '    The fix is a NEW version - never a moved tag, because a machine that has already\n'
+            + '    fetched this one keeps the object it holds and one tag name then means two commits.\n'
+            + '    Read the run before doing anything else.' };
+      }
+    }
+
+    const elapsed = now() - started;
+
+    if (!seen && elapsed >= cfg.appearMs) {
+      return { status: 'no-run', exit: 3,
+        text: `${tag} is on origin and no release run appeared for it within ${seconds} seconds, so\n`
+          + '    whether CI ran at all is UNKNOWN - which is not a pass.\n'
+          + '    This is NOT evidence that the workflow did not trigger: GitHub creates the run\n'
+          + '    asynchronously and a queue can exceed this bound. The gate waited and did not look\n'
+          + '    long enough to say which it is.' + stands + byHand };
+    }
+
+    if (elapsed >= cfg.totalMs) {
+      return { status: 'unfinished', exit: 3,
+        text: `${tag} is on origin and its release run was STILL RUNNING after ${minutes} minutes, so\n`
+          + '    whether the release passed is UNKNOWN. That is not a pass and not a failure.' + stands
+          + `\n    Finish the watch by hand:\n      gh run watch ${seen?.databaseId ?? '<id>'}\n`
+          + '    If it passes, the release is good and nothing further is owed. If it fails, the tag\n'
+          + '    stands and the fix is a NEW version.' };
+    }
+
+    sleep(cfg.pollMs);
+  }
+}
+
+/**
+ * Everything `--cut` does once the gate has passed: create the annotated tag,
+ * let check-tags.mjs judge it, push it, prove it arrived, and watch the release
+ * run it triggers.
+ *
+ * EXTRACTED FROM main() DELIBERATELY. Through v0.1.28 this sequence lived
+ * inline in the CLI, where no test could reach it - which is exactly where
+ * v0.1.26 found finding 25 sitting for three releases. The order is the part
+ * that matters and the part that was unasserted:
+ *
+ *   - the check-tags rollback has to fire BEFORE anything is pushed, because
+ *     that is the last moment the tag is free to undo. A sequence that pushed
+ *     first would have a correct-looking rollback that deletes a local copy of
+ *     a tag origin already holds.
+ *   - the watch has to fire AFTER the tag is confirmed on origin, and not at
+ *     all when it is not. Watching for a run of a tag that is not there polls
+ *     to its bound and reports UNKNOWN, burying the one thing that IS known.
+ *
+ * ATOMICITY. Every arm up to and including the push either leaves the tag on
+ * origin or leaves no tag at all - never a local tag that origin does not have.
+ * That is what makes a failed cut retryable by re-running the same command
+ * instead of a thing somebody has to diagnose first. From the watch onward the
+ * tag is on origin and immutable, so nothing is rolled back and every arm says
+ * so; `watchRelease` is not even given a git runner.
+ *
+ * @param {{tag: string, head: string,
+ *          git: (args: string[]) => {ok: boolean, out: string, err: string},
+ *          checkTags: () => {ok: boolean, out: string},
+ *          watch: () => {status: string, exit: number, text: string}}} input
+ */
+export function cutTag({ tag, head, git, checkTags, watch }) {
+  // Annotated, because check-tags.mjs requires it from v0.1.7 forward and a
+  // lightweight tag silently breaks every `^{commit}` comparison downstream.
+  const made = git(['tag', '-a', tag, '-m',
+    `${tag} - see docs/ROADMAP.md and docs/NATIVE-CAPABILITIES.md`]);
+  if (!made.ok) {
+    return { status: 'tag-failed', exit: 2,
+      text: `git could not create ${tag}, so nothing was cut and nothing was pushed:\n`
+        + `      ${(made.err || '(no output)').split('\n').join('\n      ')}` };
+  }
+
+  // Now that the tag exists, its own post-condition is checkable: annotated
+  // form, and the newest tag IS the mainline. If it does not hold, roll it back
+  // - it is local and unpushed, so this is the last moment it is free to undo.
+  const judged = checkTags();
+  if (!judged.ok) {
+    git(['tag', '-d', tag]);
+    return { status: 'check-tags-rejected', exit: 2,
+      text: `check-tags.mjs rejected ${tag} after it was created, so the tag was DELETED:\n`
+        + `      ${(judged.out || '(no output)').trim().split('\n').join('\n      ')}\n`
+        + '    Nothing was pushed. The repository is as it was.' };
+  }
+
+  const landed = pushAndVerify({ tag, head, git });
+  const cut = `created annotated tag ${tag} at ${head.slice(0, 7)}, and check-tags.mjs accepts it.\n\n`;
+  if (landed.status !== 'ok') return { status: landed.status, exit: 2, text: cut + landed.text };
+
+  const ran = watch();
+  return { status: ran.status, exit: ran.exit,
+    text: cut + landed.text + '\n\n' + ran.text
+      + (ran.exit === 0 ? '\n\n' + postPushReport(tag) : '') };
+}
+
 /* --- the self-test ------------------------------------------------------ */
 // v0.1.13 recorded the rule this obeys: a component that reports on others
 // needs a test that EXERCISES it, not only checks that construct it. This gate
-// is a reporter, and until now it had no behavioural test of any kind - which
-// is the whole reason its suite could disagree with release.yml for four checks
-// across several releases while every release run went green.
+// is a reporter, and until v0.1.14 it had no behavioural test of any kind -
+// which is the whole reason its suite could disagree with release.yml for four
+// checks across several releases while every release run went green.
+//
+// ===========================================================================
+// BEFORE YOU ADD AN ASSERTION HERE, READ THIS.
+// ===========================================================================
+//
+// A GREEN MUTATION IS A FINDING ABOUT THE ASSERTION, ALWAYS. It is never
+// evidence that the fix was unnecessary. Break the thing an assertion is
+// supposed to catch, run this file, and watch it go red - and when it does not,
+// the assertion is what you have just learned something about.
+//
+// This is not general advice; it is the only instrument that has ever caught
+// the failure this file keeps producing, which is an assertion that is correct,
+// adjacent to the defect, and unable to fail. Four scales of it are on record,
+// each one further from the code and closer to the thing meant to catch it:
+//
+//   comment    ARCHITECTURE 6.4 still showed the `"command": ["node", ...]`
+//              array form - the one that made v0.1.2 install with ZERO hooks -
+//              as canonical, in the governing document. check-guardian.mjs's
+//              Bash assertion read "fully natively contained" after guardian's
+//              reads had become hook-enforced, so a green check made a false
+//              claim.
+//   fixture    v0.1.14's assertion 4 tested the undeclared-step arm against a
+//              FIXTURE only, so adding a shell step to the real release.yml
+//              changed nothing - the blind spot that release was about,
+//              reproduced inside the test written to prevent it. That is why
+//              assertion 3b exists and reads the real file.
+//   lesson     v0.1.25: docs/lessons/0.1.18-the-clone-is-generated-state.md sat
+//              IN the directory `retro --apply` was writing into, and did not
+//              bind.
+//   assertion  v0.1.26's E6 was written to catch a mutation whose whole point
+//              was that the decision and the REASON are two facts. It matched
+//              neither: adjacent wording, no match, green.
+//
+// v0.1.29 added a fifth, a PLACEMENT, and it is the one closest to home. The
+// generated-state refusal was put first in main(), ahead of the --selftest
+// dispatch, which is what a control placed early looks like. Mutating the
+// predicate to fire on every tree (P12) made the gate refuse to run its own
+// self-test - so assertion 16, which exists precisely to catch an over-firing
+// predicate, was the first thing the defect took offline, and the mutation
+// reported NO failures at all. Nothing static could have found that. The
+// --selftest dispatch is above the refusal now, with the reason at the line.
+//
+// check-ci-gates.mjs proves every assertion in here CAN fail. It says outright
+// that it cannot prove any of them DISCRIMINATES. That gap is closed by hand,
+// per assertion, by mutation, or it is not closed.
 
 function selftest() {
   const failed = [];
@@ -600,6 +1102,399 @@ function selftest() {
         : out.split('\n').slice(0, 6).join(' | ')}`);
   }
 
+  /* --- generated state (v0.1.29) ---------------------------------------
+   *
+   * BROKEN BUILD THESE MUST CATCH: every version through 0.1.28, in which
+   * `--cut` run inside ~/.claude/plugins/marketplaces/mavci passes every arm
+   * above - same remote, same branch, same workflows - and creates the release
+   * tag in a directory whose whole contract is that propagation overwrites it.
+   */
+  const CLONE = path.join('/home/u/.claude', 'plugins', 'marketplaces', 'mavci');
+  const PLUGINS = path.join('/home/u/.claude', 'plugins');
+
+  // 16. an ordinary checkout is not generated state, and a refusal that fired
+  //     on one would refuse every release on every machine.
+  ok('a source checkout is NOT reported as generated state',
+    generatedStateVerdict({ root: '/src/mavci', pluginsDir: PLUGINS, clone: CLONE }) === null);
+
+  // 17. the observed case: the tree IS the marketplace clone.
+  {
+    const v = generatedStateVerdict({ root: CLONE, pluginsDir: PLUGINS, clone: CLONE });
+    // The FIRST LINE has to name what is refused and why, in one sentence.
+    // Mutation P21 replaced it with "REFUSING: generated state." and every
+    // assertion here stayed green, because they all read the body: the path was
+    // still printed and the propagation command was still quoted three lines
+    // down. Somebody who hits this needs to understand that the tag they are
+    // about to create would be destroyed - not that a path check failed.
+    ok('the marketplace clone is refused, naming the path and what resets it',
+      v !== null && v.text.includes(CLONE) && /checkout -B main origin\/main/.test(v.text),
+      v ? v.text : 'no refusal');
+
+    ok('...and the refusal SENTENCE says what it refuses and why, before any path',
+      v !== null
+        && /^REFUSING: a release cut in generated state is not a release/.test(v.text)
+        && /destroyed by the next propagation/.test(v.text.split(`  ${CLONE}`)[0]),
+      v ? v.text.split('\n').slice(0, 3).join(' ') : 'no refusal');
+  }
+
+  // 18. THE CLASS, not the instance. The plugin cache is generated state by
+  //     the same argument and is not the clone.
+  {
+    const cache = path.join(PLUGINS, 'cache', 'mavci-core');
+    const v = generatedStateVerdict({ root: cache, pluginsDir: PLUGINS, clone: CLONE });
+    ok('anything under <config>/plugins is refused, not only the clone',
+      v !== null && v.text.includes(cache), v ? v.text : 'no refusal');
+  }
+
+  // 19. WIRING, END TO END. A junction at <tmp>/plugins/marketplaces/mavci
+  //     pointing at this repository makes the canonical clone path equal the
+  //     canonical root, which is the shape a development machine produces when
+  //     the clone is a link. The assertion is that the gate STOPPED: it must
+  //     not reach the identity probe, and MAVCI_PRETAG_NO_SUITE marks the line
+  //     it must never reach.
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-generated-'));
+    const link = path.join(tmp, 'plugins', 'marketplaces');
+    fs.mkdirSync(link, { recursive: true });
+    let linked = true;
+    try {
+      fs.symlinkSync(ROOT, path.join(link, 'mavci'), 'junction');
+    } catch { linked = false; }
+
+    if (!linked) {
+      ok('the gate refuses to cut a tag in generated state', false,
+        'could not create a junction, so the wiring could not be exercised - and an unexercised '
+        + 'probe is not a pass (invariant 5).');
+    } else {
+      const authorised = `v${JSON.parse(fs.readFileSync(MANIFEST, 'utf8')).version}`;
+      let out = '';
+      let status = 0;
+      try {
+        execFileSync(process.execPath, [path.join(ROOT, 'scripts/ci/check-pretag.mjs'), authorised], {
+          cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120000,
+          env: { ...process.env, CLAUDE_CONFIG_DIR: tmp, MAVCI_PRETAG_NO_SUITE: '1' },
+        });
+      } catch (err) {
+        status = err.status ?? -1;
+        out = String(err.stderr ?? '') + String(err.stdout ?? '');
+      }
+      ok('the gate refuses to cut a tag in generated state, before anything else runs',
+        status === 2 && /generated state/i.test(out) && !/MAVCI_PRETAG_NO_SUITE=1/.test(out)
+          && !/pre-tag check FAILED/.test(out) && !/already exists locally/.test(out),
+        `exit ${status}. ${out.split('\n').slice(0, 6).join(' | ') || '(no output)'}`);
+    }
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+
+  /* --- the push, and the assertion after it (v0.1.29) -------------------
+   *
+   * BROKEN BUILD THESE MUST CATCH: every version through 0.1.28, where --cut
+   * created the tag, printed `git push origin <tag>` as advice, and exited. The
+   * push was the operator's, and nothing anywhere read origin back. A push that
+   * sends nothing reports "Everything up-to-date", which is indistinguishable
+   * from a push that worked.
+   */
+  const gitLog = (script) => {
+    const calls = [];
+    return {
+      calls,
+      git: (args) => { calls.push(args.join(' ')); return script(args) ?? { ok: true, out: '', err: '' }; },
+    };
+  };
+  const HEAD = '1234567890abcdef1234567890abcdef12345678';
+  const TAGOBJ = 'fedcba0987654321fedcba0987654321fedcba09';
+  const TAG = 'v9.9.9';
+  const landed = `${TAGOBJ}\trefs/tags/${TAG}\n${HEAD}\trefs/tags/${TAG}^{}\n`;
+
+  // 20. THE PUSH IS EXPLICIT. `git push` with no refspec, or --tags, is how a
+  //     release comes to report "Everything up-to-date" and send nothing.
+  {
+    const g = gitLog(() => ({ ok: true, out: landed, err: '' }));
+    const v = pushAndVerify({ tag: TAG, head: HEAD, git: g.git });
+    ok('the tag is pushed by explicit refspec and then read back from origin',
+      v.status === 'ok'
+        && g.calls[0] === `push origin refs/tags/${TAG}`
+        && g.calls.some((c) => c.startsWith('ls-remote') && c.includes(`refs/tags/${TAG}`)),
+      `status ${v.status}; calls: ${g.calls.join(' | ') || '(none)'}`);
+  }
+
+  // 21. a push that failed rolls the tag back, because there the gate KNOWS
+  //     the tag did not go and the repository can be left as it was.
+  {
+    const g = gitLog((args) => (args[0] === 'push'
+      ? { ok: false, out: '', err: 'remote: Write access to repository not granted.' }
+      : { ok: true, out: '', err: '' }));
+    const v = pushAndVerify({ tag: TAG, head: HEAD, git: g.git });
+    ok('a failed push deletes the local tag and says the repository is as it was',
+      v.status === 'push-failed' && g.calls.includes(`tag -d ${TAG}`)
+        && /Write access/.test(v.text),
+      `status ${v.status}; calls: ${g.calls.join(' | ')}`);
+  }
+
+  // 22. THE ASSERTION THIS RELEASE EXISTS FOR, and the atomicity that makes it
+  //     survivable. The push reported success and origin does not have the tag,
+  //     so the local tag is DELETED: a failure that leaves no tag is retryable,
+  //     and one that leaves an unpushed tag makes the operator work out which of
+  //     three places the tag is in before they can do anything at all.
+  {
+    const g = gitLog(() => ({ ok: true, out: '', err: '' }));
+    const v = pushAndVerify({ tag: TAG, head: HEAD, git: g.git });
+    ok('a push that reported success and sent nothing DELETES the tag, leaving a retryable state',
+      v.status === 'absent'
+        && g.calls.includes(`tag -d ${TAG}`)
+        && /no tag now exists/i.test(v.text),
+      `status ${v.status}; deleted: ${g.calls.includes(`tag -d ${TAG}`)}`);
+  }
+
+  // 23. invariant 5 at the last step: a probe that could not run is not a pass,
+  //     and it is not an accusation either. The tag is still deleted - that is
+  //     the only half the gate CAN make certain, and the state it leaves is
+  //     "either on origin or nowhere", never the three-way one - but the text
+  //     must not claim the push did nothing, because it has not established it.
+  {
+    const g = gitLog((args) => (args[0] === 'ls-remote'
+      ? { ok: false, out: '', err: 'fatal: unable to access origin' }
+      : { ok: true, out: '', err: '' }));
+    const v = pushAndVerify({ tag: TAG, head: HEAD, git: g.git });
+    ok('an unreadable origin after the push is UNKNOWN, deletes the local tag, and accuses nothing',
+      v.status === 'unknown' && !/does not have it/i.test(v.text)
+        && g.calls.includes(`tag -d ${TAG}`)
+        && v.text.includes(`git ls-remote --tags origin refs/tags/${TAG}`),
+      `status ${v.status}: ${v.text.split('\n')[0]}`);
+  }
+
+  // 24. the two ways origin can hold something that is not what was cut.
+  {
+    const other = '9999999999999999999999999999999999999999';
+    const mism = gitLog(() => ({ ok: true,
+      out: `${TAGOBJ}\trefs/tags/${TAG}\n${other}\trefs/tags/${TAG}^{}\n`, err: '' }));
+    const a = pushAndVerify({ tag: TAG, head: HEAD, git: mism.git });
+    const light = gitLog(() => ({ ok: true, out: `${HEAD}\trefs/tags/${TAG}\n`, err: '' }));
+    const b = pushAndVerify({ tag: TAG, head: HEAD, git: light.git });
+    ok('a tag on origin at another commit, and a lightweight one, each refuse',
+      a.status === 'mismatch' && a.text.includes(other.slice(0, 7))
+        && b.status === 'unpeeled',
+      `mismatch -> ${a.status}; lightweight -> ${b.status}`);
+  }
+
+  // 25. and a fully green cut names what it did NOT establish. A gate that
+  //      stops asserting and does not say where it stopped is asserting more
+  //      than it verified - and this list SHRANK in 0.1.29 when the watch took
+  //      over two of its entries, which is exactly when a declaration like this
+  //      goes stale unnoticed. The keys are read from the map rather than
+  //      re-typed, so it cannot.
+  {
+    const g = gitLog(() => ({ ok: true, out: landed, err: '' }));
+    const r = cutTag({ tag: TAG, head: HEAD, git: g.git,
+      checkTags: () => ({ ok: true, out: '' }),
+      watch: () => ({ status: 'passed', exit: 0, text: 'run passed' }) });
+    const named = [...POST_PUSH_NOT_COVERED.keys()].every((k) => r.text.includes(k));
+    ok('a green cut names the two manual links it does NOT cover',
+      POST_PUSH_NOT_COVERED.size >= 2 && named && /PROPAGATION/.test(r.text),
+      `${POST_PUSH_NOT_COVERED.size} declared; named: ${named}`);
+  }
+
+  // 25b. and a cut that did NOT end green does not print that block. The list
+  //      describes what is owed after a release; printing it under a failure
+  //      reads as a release that happened.
+  {
+    const g = gitLog(() => ({ ok: true, out: landed, err: '' }));
+    const r = cutTag({ tag: TAG, head: HEAD, git: g.git,
+      checkTags: () => ({ ok: true, out: '' }),
+      watch: () => ({ status: 'failed', exit: 2, text: 'run failed' }) });
+    ok('a cut that did not end green does not print the post-release block',
+      r.exit === 2 && !r.text.includes([...POST_PUSH_NOT_COVERED.keys()][0]),
+      r.text.split('\n').slice(-2).join(' | '));
+  }
+
+  // 26. WIRING FOR THE TAIL. The four steps in order, from one call, with every
+  //     runner faked - because a correct pushAndVerify that the cut path never
+  //     reaches is the shape this repository has now found a dozen times, and
+  //     through v0.1.28 this sequence lived in the CLI where no test could see
+  //     it at all.
+  {
+    const g = gitLog(() => ({ ok: true, out: landed, err: '' }));
+    const watched = [];
+    const r = cutTag({ tag: TAG, head: HEAD, git: g.git,
+      checkTags: () => ({ ok: true, out: '' }),
+      watch: () => { watched.push(g.calls.length); return { status: 'passed', exit: 0, text: 'run passed' }; } });
+    ok('--cut tags, judges, pushes, reads back, and only THEN watches',
+      r.exit === 0 && r.status === 'passed'
+        && g.calls[0].startsWith(`tag -a ${TAG}`)
+        && g.calls[1] === `push origin refs/tags/${TAG}`
+        && g.calls[2].startsWith('ls-remote')
+        && watched.length === 1 && watched[0] === 3,
+      `exit ${r.exit}/${r.status}; calls: ${g.calls.join(' | ')}; watched after ${watched[0]}`);
+  }
+
+  // 26b. and the watch is NOT reached when the tag did not arrive. Watching for
+  //      a run of a tag that is not on origin would poll until its bound and
+  //      report UNKNOWN, burying the one thing that IS known.
+  {
+    const g = gitLog(() => ({ ok: true, out: '', err: '' }));
+    let watched = 0;
+    const r = cutTag({ tag: TAG, head: HEAD, git: g.git,
+      checkTags: () => ({ ok: true, out: '' }),
+      watch: () => { watched += 1; return { status: 'passed', exit: 0, text: '' }; } });
+    ok('a tag that did not reach origin is reported, and never watched',
+      r.exit === 2 && r.status === 'absent' && watched === 0,
+      `exit ${r.exit}/${r.status}; watched ${watched} time(s)`);
+  }
+
+  // 26c. the watch's verdict is the run's verdict, carried out whole. A cut
+  //      that pushed successfully and whose release run FAILED is not a pass,
+  //      and the arm that decides that is the watch's, not this one's.
+  {
+    const g = gitLog(() => ({ ok: true, out: landed, err: '' }));
+    const r = cutTag({ tag: TAG, head: HEAD, git: g.git,
+      checkTags: () => ({ ok: true, out: '' }),
+      watch: () => ({ status: 'unfinished', exit: 3, text: 'still running' }) });
+    ok('the watch verdict is carried out whole, exit status included',
+      r.exit === 3 && r.status === 'unfinished' && r.text.includes('still running')
+        && !g.calls.includes(`tag -d ${TAG}`),
+      `exit ${r.exit}/${r.status}`);
+  }
+
+  // 27. and the rollback arm fires BEFORE anything is pushed. Ordering is the
+  //     whole property: a sequence that pushed first would still delete the
+  //     local tag and would look identical in every other respect, while origin
+  //     kept the tag it had already been sent.
+  {
+    const g = gitLog(() => ({ ok: true, out: landed, err: '' }));
+    let watched = 0;
+    const r = cutTag({ tag: TAG, head: HEAD, git: g.git,
+      checkTags: () => ({ ok: false, out: 'v9.9.9 is not the mainline' }),
+      watch: () => { watched += 1; return { status: 'passed', exit: 0, text: '' }; } });
+    ok('a tag check-tags.mjs rejects is deleted, NEVER pushed, and never watched',
+      r.exit === 2 && r.status === 'check-tags-rejected'
+        && g.calls.includes(`tag -d ${TAG}`)
+        && !g.calls.some((c) => c.startsWith('push')) && watched === 0,
+      `exit ${r.exit}; calls: ${g.calls.join(' | ')}; watched ${watched}`);
+  }
+
+  /* --- the watch, and its bound (v0.1.29) -------------------------------
+   *
+   * BROKEN BUILD THESE MUST CATCH: every version through 0.1.28, where the
+   * release run was watched by an operator reading a `gh run watch` line
+   * printed at the bottom of a passing gate - which is to say, sometimes.
+   *
+   * The bound is the part with no obvious right answer, so it is asserted
+   * rather than left to whatever the loop happens to do: a watch that never
+   * gives up hangs the release, and one that treats "still running" as either
+   * verdict reports something it does not know.
+   */
+  const ghLog = (script) => {
+    const calls = [];
+    let t = 0;
+    return {
+      calls,
+      clock: () => t,
+      sleep: (ms) => { t += ms; },
+      gh: (args) => {
+        calls.push(args.join(' '));
+        // A watch with no bound does not fail an assertion, it HANGS the suite -
+        // and a self-test that never returns reports nothing at all. This makes
+        // "no bound" a red assertion instead of a stalled run.
+        if (calls.length > 500) throw new Error('UNBOUNDED: watchRelease polled 500 times');
+        return script(calls.length, t);
+      },
+    };
+  };
+  const RUN = (status, conclusion) => ({ ok: true, err: '',
+    out: JSON.stringify([{ databaseId: 42, status, conclusion,
+      url: 'https://github.com/o/r/actions/runs/42' }]) });
+  const NORUN = { ok: true, out: '[]', err: '' };
+  const WT = { appearMs: 120000, totalMs: 600000, pollMs: 15000 };
+  const runWatch = (h, cfg = WT) => {
+    try { return watchRelease({ tag: TAG, gh: h.gh, sleep: h.sleep, now: h.clock, cfg }); }
+    catch (e) { return { status: 'UNBOUNDED', exit: -1, text: e.message }; }
+  };
+
+  // 28. the run passed. The only arm that exits 0.
+  {
+    const h = ghLog(() => RUN('completed', 'success'));
+    const v = runWatch(h);
+    ok('a release run that passed is the only arm that exits 0',
+      v.status === 'passed' && v.exit === 0 && v.text.includes('runs/42'),
+      `${v.status}/${v.exit}: ${v.text.split('\n')[0]}`);
+  }
+
+  // 29. the run failed. The tag is on origin and immutable, so the gate must
+  //     not offer to undo it - the fix is a new version, never a moved tag.
+  {
+    const h = ghLog(() => RUN('completed', 'failure'));
+    const v = runWatch(h);
+    ok('a release run that failed refuses, and offers a NEW version rather than moving the tag',
+      v.status === 'failed' && v.exit === 2 && /NEW version/.test(v.text)
+        && !/tag -d/.test(v.text) && !/--delete/.test(v.text),
+      `${v.status}/${v.exit}: ${v.text.split('\n')[0]}`);
+  }
+
+  // 30. THE BOUND. Still running when the budget is spent is UNKNOWN - not a
+  //     pass and not a failure - and it must name the bound it hit, because a
+  //     timeout that does not say how long it waited is unactionable.
+  {
+    const h = ghLog(() => RUN('in_progress', null));
+    const v = runWatch(h);
+    ok('a run still going at the bound is UNKNOWN, names the bound, and exits neither 0 nor 2',
+      v.status === 'unfinished' && v.exit === 3 && /UNKNOWN/.test(v.text)
+        && /10 minutes/.test(v.text) && /gh run watch/.test(v.text),
+      `${v.status}/${v.exit}: ${v.text.split('\n')[0]}`);
+  }
+
+  // 31. no run yet. Distinct from "still running" because the causes differ,
+  //     and it must NOT assert that the workflow did not trigger - a queue can
+  //     exceed this bound and the gate has not established which it is.
+  {
+    const h = ghLog(() => NORUN);
+    const v = runWatch(h);
+    ok('no run within the appearance bound is UNKNOWN, and does not accuse the workflow',
+      v.status === 'no-run' && v.exit === 3 && /UNKNOWN/.test(v.text)
+        && /NOT evidence that the workflow did not trigger/.test(v.text)
+        && /queue can exceed this bound/.test(v.text),
+      `${v.status}/${v.exit}: ${v.text.split('\n')[0]}`);
+  }
+
+  // 32. invariant 5 again, one step further out: gh unreadable is not a pass.
+  {
+    const h = ghLog(() => ({ ok: false, out: '', err: 'gh: not authenticated' }));
+    const v = runWatch(h);
+    ok('an unreadable gh after the push is UNKNOWN, not a pass',
+      v.status === 'unavailable' && v.exit === 3 && /not authenticated/.test(v.text),
+      `${v.status}/${v.exit}: ${v.text.split('\n')[0]}`);
+  }
+
+  // 33. THE LOOP TERMINATES, and it polls a number of times the bound explains.
+  //     A watch with no bound is the release hanging; a bound nothing asserts
+  //     is a number in a constant.
+  {
+    const h = ghLog(() => RUN('in_progress', null));
+    const expected = Math.floor(WT.totalMs / WT.pollMs) + 1;
+    const v = runWatch(h);
+    ok('the poll loop is bounded, and polls the number of times the bound implies',
+      v.status !== 'UNBOUNDED' && h.calls.length >= expected - 1 && h.calls.length <= expected + 1,
+      v.status === 'UNBOUNDED' ? v.text : `polled ${h.calls.length} times, expected about ${expected}`);
+  }
+
+  // 34. EVERY arm that is not a pass leaves the tag on origin and says so.
+  //     Un-pushing a released tag is worse than an unresolved watch, and this
+  //     function is given no git at all - it could not delete one if it tried.
+  {
+    const arms = [
+      ['unfinished', () => RUN('in_progress', null)],
+      ['no-run', () => NORUN],
+      ['unavailable', () => ({ ok: false, out: '', err: 'x' })],
+      ['failed', () => RUN('completed', 'failure')],
+    ];
+    const silent = arms.filter(([, s]) => {
+      const h = ghLog(s);
+      const v = runWatch(h);
+      return v.status === 'UNBOUNDED' || !/NOT deleted/.test(v.text);
+    }).map(([n]) => n);
+    ok('every non-passing watch arm says the tag stands on origin',
+      silent.length === 0, `silent about the tag: ${silent.join(', ')}`);
+  }
+
   if (failed.length) {
     console.error(`\ncheck-pretag --selftest FAILED (${failed.length}):\n`);
     for (const f of failed) console.error('  - ' + f + '\n');
@@ -616,7 +1511,31 @@ function selftest() {
 
 function main() {
   const argv = process.argv.slice(2);
+  // --selftest is dispatched BEFORE the generated-state refusal, and the order
+  // is deliberate. Mutating the predicate to fire on everything (P12) put the
+  // refusal ahead of this line, and the gate then refused to run the very
+  // self-test whose assertion 16 exists to catch an over-firing predicate: the
+  // check that would have reported the defect was the first thing the defect
+  // took offline. --selftest is the one mode that cannot report on a release or
+  // create one, so it is the one mode the refusal must not reach. Everything
+  // below it can, and does.
   if (argv.includes('--selftest')) { selftest(); return; }
+
+  // A gate that reports on this tree while running in a copy of it that gets
+  // reset is answering about the wrong repository - and the informational
+  // no-argument path reads a plugin.json that is not the one being edited
+  // either, so this sits ahead of that too.
+  const generated = generatedStateVerdict({
+    root: realpath(ROOT),
+    pluginsDir: path.join(configDir(), 'plugins'),
+    clone: realpath(clonePath()),
+  });
+  if (generated) {
+    console.error(`
+${generated.text}
+`);
+    process.exit(2);
+  }
 
   const cut = argv.includes('--cut');
   const wanted = argv.find((a) => !a.startsWith('--')) ?? null;
@@ -843,32 +1762,70 @@ function main() {
   console.log(`  not covered here, by declaration: ${[...EXCLUDED_STEPS.keys()].join('; ')}`);
 
   if (!cut) {
-    console.log(`\nNothing was created. To cut it:\n  node scripts/ci/check-pretag.mjs ${wanted} --cut`);
+    console.log(`\nNothing was created. To cut it - which creates the tag, pushes it, reads it back off
+origin, and then watches the release run:\n  node scripts/ci/check-pretag.mjs ${wanted} --cut`);
     process.exit(0);
   }
 
-  // Annotated, because check-tags.mjs requires it from v0.1.7 forward and a
-  // lightweight tag silently breaks every `^{commit}` comparison downstream.
-  git(['tag', '-a', wanted, '-m', `${wanted} - see docs/ROADMAP.md and docs/NATIVE-CAPABILITIES.md`]);
+  // v0.1.29. The push is the gate's, and so is the assertion after it. A second
+  // runner because this one must REPORT a failure rather than throw: the push's
+  // own stderr is the evidence, and `git()` above turns it into an exception
+  // message. stdio is pinned - check-plugin.mjs fails any exec*Sync in
+  // scripts/ci/ that does not, since a child's stderr forwarded into a green run
+  // is what trained everyone to read past red marks (0.1.14).
+  const runGit = (args) => {
+    try {
+      const out = execFileSync('git', args, {
+        cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120000,
+      });
+      return { ok: true, out: String(out ?? ''), err: '' };
+    } catch (err) {
+      return { ok: false, out: String(err.stdout ?? ''), err: String(err.stderr ?? err.message ?? '').trim() };
+    }
+  };
 
-  // Now that the tag exists, its own post-condition is checkable: annotated form,
-  // and the newest tag IS the mainline. If it does not hold, roll the tag back -
-  // it is local-only until pushed, so this is the last moment it is free to undo.
-  try {
-    execFileSync(process.execPath, [path.join(ROOT, 'scripts/ci/check-tags.mjs')],
-      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000 });
-  } catch (err) {
-    git(['tag', '-d', wanted], { allowFail: true });
-    console.error(`\ncheck-tags.mjs rejected ${wanted} after it was created, so the tag was DELETED:\n`);
-    console.error(String(err.stdout ?? '').trim());
-    console.error('\nNothing was pushed. The repository is as it was.');
-    process.exit(2);
+  const runCheckTags = () => {
+    try {
+      execFileSync(process.execPath, [path.join(ROOT, 'scripts/ci/check-tags.mjs')],
+        { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000 });
+      return { ok: true, out: '' };
+    } catch (err) {
+      return { ok: false, out: String(err.stdout ?? '') + String(err.stderr ?? '') };
+    }
+  };
+
+  // THE RESIDUAL, SAID OUT LOUD: cutTag's whole sequence is asserted by the
+  // self-test with both runners faked, and what is left unasserted is this call
+  // itself - a release gate cannot cut and push a real tag to prove it does.
+  // That is one line, it is named here, and it is the honest boundary rather
+  // than a check that appears to cover it.
+  const runGh = (args) => {
+    try {
+      const out = execFileSync('gh', args, {
+        cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000,
+      });
+      return { ok: true, out: String(out ?? ''), err: '' };
+    } catch (err) {
+      return { ok: false, out: String(err.stdout ?? ''), err: String(err.stderr ?? err.message ?? '').trim() };
+    }
+  };
+
+  console.log(`\nwatching the release run for ${wanted}, up to ${Math.round(WATCH.totalMs / 60000)} `
+    + `minutes. Still running at that point is UNKNOWN, not a pass - the tag stays on origin.`);
+
+  const result = cutTag({ tag: wanted, head, git: runGit, checkTags: runCheckTags,
+    watch: () => watchRelease({ tag: wanted, gh: runGh }) });
+  if (result.exit !== 0) {
+    // exit 3 is UNKNOWN and exit 2 is a refusal, and they are different answers:
+    // 3 means the tag IS released and this gate could not read the verdict, so
+    // the operator finishes the watch. Collapsing them into 2 would report a
+    // released version as a failed cut and invite the one repair that must never
+    // happen, which is moving the tag.
+    console.error(`\n--cut ${result.exit === 3 ? 'could not finish' : 'FAILED'} for ${wanted}:\n`);
+    console.error('  - ' + result.text + '\n');
+    process.exit(result.exit);
   }
-
-  console.log(`\ncreated annotated tag ${wanted} at ${head.slice(0, 7)} (local only), and check-tags.mjs accepts it.`);
-  console.log(`Push it, then WATCH THE RELEASE JOB - it is the last gate and nothing downstream reads it:`);
-  console.log(`  git push origin ${wanted}`);
-  console.log(`  gh run watch "$(gh run list --workflow release.yml --branch ${wanted} --limit 1 --json databaseId --jq '.[0].databaseId')"`);
+  console.log(`\n${result.text}`);
 }
 
 // Basename, not endsWith. v0.1.13's finding: `scripts/ci/check-retro.mjs` ends

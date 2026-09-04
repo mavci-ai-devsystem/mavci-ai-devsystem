@@ -156,6 +156,36 @@ first.
                                       next decision. No assertion is proposed,
                                       and the record says why.
 
+    0.1.29-the-step-after-the-only-door.md
+                                      system repo, plugin 0.1.28, 2026-09-04.
+                                      Finding 22. --cut was the only door to a
+                                      tag and everything after the tag existed
+                                      was advice: it can cut in the marketplace
+                                      clone, which propagation resets, and the
+                                      push can answer "Everything up-to-date"
+                                      and send nothing - neither visible from
+                                      the other. The push and the release watch
+                                      both moved inside the gate.
+                                      Two things worth reading for themselves:
+                                      ATOMICITY - every arm up to the push
+                                      leaves the tag on origin or no tag at all,
+                                      so a failure is retryable and nobody has
+                                      to work out where the tag is; and the
+                                      BOUND - ten minutes, after which a running
+                                      job is UNKNOWN, exit 3, tag left standing.
+                                      P12 is the entry worth reading twice: the
+                                      refusal was placed ahead of --selftest, so
+                                      an over-firing predicate took its own
+                                      detector offline and the mutation reported
+                                      nothing. That rule now lives in
+                                      check-pretag.mjs above selftest(), because
+                                      a lesson file in the right directory has
+                                      already failed to bind once.
+
+**Not indexed above: 0.1.25, 0.1.26 and 0.1.27.** Those files are in this
+directory and their entries were never added. Named rather than left to be
+inferred from a gap - an index that is silently partial is read as complete.
+
 ## Why this copy was manual
 
 `/mavci-core:retro` — the command whose whole job is to carry a finding out of a

@@ -102,7 +102,27 @@ action — nothing propagates to any project until it is bumped. `release.yml`
 fails a tag that disagrees with it.
 
     edit → build-agents.mjs if a def changed → bump plugin.json → commit →
-    push → tag vX.Y.Z → push tag
+    push → node scripts/ci/check-pretag.mjs vX.Y.Z --cut
+
+`--cut` is the only door to a tag, and since 0.1.29 it is the only door to a
+RELEASED one: it runs the release suite, creates the annotated tag, pushes it by
+explicit refspec, reads it back off origin, and then watches the release run for
+up to **10 minutes**. Do not tag or push a tag by hand — a hand-cut tag skips
+every arm of that gate, and a hand `git push` or `git push --follow-tags` can
+answer "Everything up-to-date" and send nothing.
+
+It refuses to run in `~/.claude/plugins/marketplaces/mavci` at all: a release cut
+in generated state is not a release, because the next propagation destroys it.
+
+**Three exit statuses, and they are three different answers.** `0` the tag is on
+origin and CI passed. `2` a refusal — and up to and including the push, nothing
+was released; **no tag exists anywhere**, so re-running the same command is the
+whole recovery. `3` the tag IS on origin and the verdict could not be read (the
+run has not appeared, is still going, or `gh` could not be reached): finish the
+watch by hand, and never move the tag.
+
+Nothing propagates when a tag is pushed. That is the next paragraph, and `--cut`
+names it on every green run.
 
 Propagation is **manual at both links** and costs one operator visit per
 machine per release: `git fetch origin` + `checkout -B main origin/main` in
@@ -2252,6 +2272,157 @@ to the walk that owns the chain and to the guard's own case table, and finding 8
 to `check-state-transition.mjs`, which owns the approval gate. A fifth file
 asserting the same three components would be a second list.
 
+---
+
+**Note on this log:** 0.1.27 and 0.1.28 have no entry here. They are in the commit
+log and, for 0.1.27, in `docs/lessons/`. The gap is named rather than stepped over,
+for the reason given at 0.1.17 and again at 0.1.25 — a release log that skips a
+release silently reads as a release in which nothing happened. This is the fourth
+occurrence, which is itself the observation: the entry is written by whoever cuts
+the release and nothing checks that one exists.
+
+### 0.1.29 — the step after the only door
+
+**Cut 2026-09-04**, against finding 22. `check-pretag.mjs --cut` has been the only
+door to a tag since 0.1.9, for the reason its own header gives: *a check nobody is
+required to run is the same failure one layer up.* It created the tag, printed
+`git push origin <tag>` and a `gh run watch` line as advice, and exited.
+Everything after the tag existed was advice, and today both halves of it failed.
+
+**`--cut` can create a tag in a directory that gets reset.** The marketplace clone
+is a real checkout of this repository — same remote, same branch, same workflows,
+same manifest — so every arm of the gate passes there, and propagation is
+`git checkout -B main origin/main`, which discards it.
+
+**And a push can report nothing to send.** `git push --follow-tags` from the
+repository the operator IS editing answers `Everything up-to-date`, because the
+tag is not in it.
+
+**Neither is visible from the other's output**, which is what makes the pair worse
+than either. The first symptom is the signal 0.1.18 named as the worst this system
+has: CI green on a version that does not exist.
+
+#### 1. Where the assertion lives — the push and the watch moved inside the gate
+
+`--cut` cannot assert after it exits, so the choice was a second mode the operator
+runs afterwards, or the push. A second command is advice with a different shape,
+and this file's own header settled what those are worth two releases before it had
+a name for it. So `--cut` **pushes** — by EXPLICIT refspec, never a bare `push` and
+never `--tags`, both of which can answer "Everything up-to-date" — reads the tag
+back off origin, and then **watches the release run**.
+
+**0.1.17's paragraph saying it deliberately did NOT push is rewritten, not left
+standing.** Its argument was that a read-only credential should fail loudly with
+the tag still local and deletable — `MAVCI_TOKEN` is exactly that shape. That was
+right about the property and wrong about who holds it: the `push-failed` arm
+preserves it exactly and performs the rollback, instead of relying on the operator
+to remember `git tag -d`.
+
+#### 2. Atomicity is the property, and it is what makes a failure survivable
+
+**Every arm up to and including the push leaves either the tag on origin or NO TAG
+AT ALL — never a local tag origin does not have.** A failed `--cut` is retryable by
+re-running the same command, and nobody has to work out which of three places the
+tag is in before they can act.
+
+That reverses a decision inside this release. The first build kept the tag on
+`absent` and `unknown`, reasoning that it was the evidence. It is not worth much as
+evidence — the commit is still HEAD and re-cutting produces an identical tag — and
+it costs the one thing that matters at that moment, which is a state with one
+possibility in it rather than three. `unknown` deletes too, and says exactly what
+that establishes and what it does not: *either on origin or nowhere, and this gate
+has NOT established which.*
+
+**From the watch onward the direction reverses and nothing is rolled back.** The
+tag is on origin, immutable and possibly fetched; a moved tag means one name and
+two commits on two machines. `watchRelease` is not even given a git runner, and
+every non-passing arm says the tag stands.
+
+#### 3. The bound, and what it says at the bound
+
+Ten minutes total, two of them for the run to appear at all, polled every fifteen
+seconds. Still running when that is spent is **UNKNOWN — not a pass and not a
+failure.** Three exit statuses, because they are three different answers:
+
+| exit | meaning |
+|---|---|
+| 0 | the tag is on origin and its release run passed |
+| 2 | a refusal — up to and including the push, nothing was released |
+| 3 | the tag is on origin and the verdict could not be read |
+
+Collapsing 3 into 2 would report a released version as a failed cut and invite the
+one repair that must never happen. The message at the bound names the elapsed
+bound, says the tag was NOT deleted and must not be, gives `gh run watch <id>`, and
+says what each outcome means: *if it passes the release is good; if it fails the
+tag stands and the fix is a NEW version.*
+
+Five watch verdicts, because collapsing them is how a message explains one cause
+confidently and wrongly: `passed`, `failed`, `unfinished`, `no-run` (and it says
+outright that this is **not** evidence the workflow failed to trigger — a queue can
+exceed the bound), `unavailable`.
+
+#### 4. The refusal names what it refuses and why, in its first sentence
+
+*A release cut in generated state is not a release* — followed, before any path, by
+the consequence: the tag you are about to create would be destroyed by the next
+propagation, unread by anybody. Someone who hits this needs to understand that, not
+that a path check failed. The predicate refuses the **class**: anything under
+`<config>/plugins`, with the clone also matched by canonical path so a junctioned
+clone is caught. 0.1.25's `retro --apply` fix at the irreversible step.
+
+#### 5. Verification — 21 mutations, and three of them found defects in the fix
+
+Nine assertions were red against 0.1.28 before anything was implemented, with the
+guard that a source checkout is NOT refused green throughout — the half that
+matters when a control is being added. Then 21 mutations, each producing labelled
+red. **Three of them were findings rather than confirmations:**
+
+**P21 — nothing asserted the sentence.** Replacing the whole first line with
+`REFUSING: generated state.` left every assertion green: they all read the body,
+where the path and the propagation command still sat. The requirement the operator
+stated had no assertion behind it until P21 said so. Assertion 17b now anchors on
+the first line and requires the consequence to appear *before* the path.
+
+**P11 crashed the suite instead of failing it.** Assertion 27 was written before
+`cutTag` took a `watch`, so killing the check-tags arm walked into an undefined
+call — and a crash reports nothing about which arm broke. Fixed, and the assertion
+now also requires that a rejected tag is never watched.
+
+**P19b could not be caught at all.** A poll loop with no bound does not fail an
+assertion, it *hangs the suite* — the one shape of "no bound" the bound assertion
+most needs to catch. The fake `gh` now refuses to answer past a ceiling and every
+watch assertion routes through one helper, so an unbounded loop is four labelled
+reds instead of a stalled run.
+
+**And P12, from the first build, is the one that generalises.** The generated-state
+refusal was placed first in `main()`, ahead of the `--selftest` dispatch — which is
+what a control placed early looks like. Mutating the predicate to fire on every
+tree made the gate refuse to run its own self-test, so assertion 16, which exists
+precisely to catch an over-firing predicate, was the first thing the defect took
+offline; the mutation reported *no failures at all*. `--selftest` is dispatched
+first now.
+
+**That note is no longer only in the day record.** It sits above `selftest()` in
+`check-pretag.mjs`, where the next person adding an assertion reads it: *a green
+mutation is a finding about the assertion, always — never evidence the fix was
+unnecessary*, with the five scales on record (comment, fixture, lesson, assertion,
+placement) and the closing line that `check-ci-gates.mjs` proves an assertion CAN
+fail and says outright it cannot prove any of them discriminates.
+
+**The tail was extracted from the CLI to be testable at all.** Through 0.1.28 the
+tag-create / check-tags / push sequence lived inline in `main()` — where 0.1.26
+found finding 25 sitting for three releases. `cutTag` is that sequence with all
+three runners injected, and the two ordering properties are asserted directly: the
+rollback fires before anything is pushed, and the watch fires only after the tag is
+confirmed on origin (watching a tag that is not there polls to the bound and
+reports UNKNOWN, burying the one thing that IS known).
+
+**The residual is named rather than covered.** `cutTag`'s sequence is asserted with
+every runner faked; `main()` calling it is not — a release gate cannot cut and push
+a real tag to prove that it does. That is one line, commented at the call site.
+
+45 assertions in `check-pretag --selftest`, up from 22. All 36 checks `release.yml`
+runs pass.
 ---
 
 ## Ask me before
