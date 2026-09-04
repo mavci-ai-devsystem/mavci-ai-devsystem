@@ -449,6 +449,36 @@ function bareAgentName(agentType) {
   return colon === -1 ? agentType : agentType.slice(colon + 1);
 }
 
+/**
+ * The task whose APPROVED spec is `rel`, or null.
+ *
+ * Reads the control tasks rather than the surface half: `spec_approved` is the
+ * operator's recorded decision and it carries its own `spec_path`, so the
+ * question "is this file an approved document" is answered by the record that
+ * approved it and not by a convention about where specs live. A task with no
+ * approval yields null - the architect writes a spec before anyone approves it,
+ * and that write is not this rule's business.
+ *
+ * FAILS OPEN BY DESIGN, and the reason is that it must not be the only control.
+ * An unreadable control-tasks directory means "no approvals found", so this rule
+ * goes quiet rather than denying every write under `.mavci/tasks/`. The scribe's
+ * edit scope - which does not include the spec at all - is what holds when this
+ * cannot answer, and that is why both mechanisms shipped together.
+ */
+function approvedSpecFor(root, rel) {
+  const dir = abs(root, PATHS.controlTasks);
+  if (!exists(dir)) return null;
+  let names = [];
+  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.json')); } catch { return null; }
+  for (const n of names) {
+    const t = readJsonOrNull(path.join(dir, n));
+    const a = t?.spec_approved;
+    if (!a?.spec_path || !a?.spec_sha256) continue;
+    if (toPosix(a.spec_path) === rel) return { id: t.id ?? n.replace(/\.json$/, ''), sha: a.spec_sha256 };
+  }
+  return null;
+}
+
 /* ------------------------------------------------------ tier-3 patterns */
 
 const HARD_BLOCK = [
@@ -663,6 +693,43 @@ function main() {
         confirm('editing the project manifest changes which checks run and which environments are protected.');
       }
 
+      /* --- an APPROVED SPEC is immutable to every agent (finding 7) -----
+       *
+       * `--approve-spec` records an operator decision about a SPECIFIC document,
+       * and the recorded sha256 is what makes "specific" mean anything:
+       * `--advance-phase` refuses when the document has changed since. That
+       * refusal is the control working. Finding 7 is not a defect in it - it is
+       * that an agent was granted the ability to invalidate it.
+       *
+       * Observed on gate5 task 0003: the router's `document` action dispatches
+       * the scribe and then names `--advance-phase` as the very next step. The
+       * scribe appended a "Completion Summary" to `.mavci/tasks/0003.md` - the
+       * approved document - and the next step refused. The router's own
+       * prescribed sequence broke itself.
+       *
+       * REORDERING WOULD HAVE BEEN THE WRONG FIX, and this is why the deny lives
+       * here rather than in the step list. Advancing before the scribe runs makes
+       * the sequence exit 0 and leaves the approved document mutated after the
+       * last thing that checks it - the damage of finding 8 with the alarm
+       * removed. The invariant is not "advance first"; it is "the approved
+       * document does not change".
+       *
+       * This is a CLASS control, not the scribe's. The architect and the builder
+       * both hold `.mavci/tasks/**` legitimately - the architect authors the spec
+       * before approval - and both would deadlock identically on an approved one.
+       */
+      {
+        const approved = approvedSpecFor(root, rel);
+        if (approved && agent) {
+          deny(`${rel} is task ${approved.id}'s spec, and the operator approved THAT document `
+            + `(sha256 ${approved.sha.slice(0, 12)}). Editing it invalidates the approval, and `
+            + '--advance-phase - the next step in the document action - refuses on a changed hash, '
+            + 'so this write deadlocks the task rather than finishing it. A completion summary goes '
+            + `in ${PATHS.tasks}/${approved.id}.summary.md. If the SPEC itself is wrong, say so in `
+            + '`suggested_next` and stop: only the operator can re-approve one.');
+        }
+      }
+
       /* --- secrets must never reach .mavci/ (B5, prevention) ------------ */
       if (rel.startsWith(MAVCI_DIR + '/')) {
         const body = [ti.content, ti.new_string, ti.new_source].filter((x) => typeof x === 'string').join('\n');
@@ -781,6 +848,7 @@ function main() {
         '--block': 'declare a task terminally blocked, which stops the rework loop and moves the phase',
         '--approve-spec': 'record the operator decision that unlocks every phase transition on a task',
         '--advance-phase': 'move one task from a named phase to the next, which for build means making application code writable',
+        '--restore-spec': 'overwrite a spec in the working tree with the bytes an approval names, which is a whole-document write and is needed exactly when an agent has already written that document once',
       };
 
       const flags = cmd.match(/--[a-z-]+/g) ?? [];

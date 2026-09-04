@@ -478,6 +478,68 @@ export function specHash(root, task) {
   return sha256(readText(p));
 }
 
+/**
+ * Where the approved bytes of `spec` at `sha` are kept. Derived, never stored.
+ *
+ * A field in the task record would be a second name for one fact, and the record
+ * already carries the hash under a seal. Deriving the path means a snapshot
+ * cannot be pointed somewhere the approval does not name.
+ */
+export function specSnapshotPath(id, sha) {
+  return `${PATHS.specSnapshots}/${id}-${sha.slice(0, 12)}.md`;
+}
+
+/**
+ * Put the approved bytes back, and refuse to put anything else back.
+ *
+ * FINDING 8. The prevention - an approved spec is denied to every agent by
+ * `risk-guard.mjs` - is a HOOK, and hooks fail open on timeout and crash
+ * (NATIVE-CAPABILITIES 4.17/4.18) and are defeated outright by `disableAllHooks`.
+ * So the prevention is the control and this is the recovery, and they are
+ * independently load-bearing: neither covers the case the other is for.
+ *
+ * THE SNAPSHOT IS NOT TRUSTED, it is verified. Its bytes are hashed and compared
+ * against `spec_approved.spec_sha256`, which lives in a SEALED record - so an
+ * edited snapshot fails here rather than restoring a document nobody approved.
+ * The restored file is then re-read and hashed again, because "I wrote it" and
+ * "it is on disk with those bytes" are two facts and the second is the one that
+ * matters. That is the exact gap the scribe fell into on gate5: it reported a
+ * successful restore, held no shell, could not hash what it had written, and had
+ * in fact produced a third distinct document.
+ */
+export function restoreSpec(root, id) {
+  const t = readControlTask(root, id);
+  const a = t?.spec_approved;
+  if (!a?.spec_path || !a?.spec_sha256) {
+    throw new Error(`task ${id} has no recorded spec approval, so there are no approved bytes to `
+      + 'restore. There is nothing this command can put back that anyone agreed to.');
+  }
+  const snapRel = specSnapshotPath(id, a.spec_sha256);
+  const snapAbs = abs(root, snapRel);
+  if (!exists(snapAbs)) {
+    throw new Error(`task ${id}'s approval names ${a.spec_sha256.slice(0, 12)} and no snapshot of `
+      + `those bytes exists at ${snapRel}. Approvals recorded before this version were not `
+      + 'snapshotted, so the approved document is only recoverable from version control. '
+      + `Check: git log -- ${a.spec_path}`);
+  }
+  const body = readText(snapAbs);
+  const have = sha256(body);
+  if (have !== a.spec_sha256) {
+    throw new Error(`the snapshot at ${snapRel} hashes to ${have.slice(0, 12)}, and the sealed `
+      + `approval names ${a.spec_sha256.slice(0, 12)}. Refusing to restore it. A snapshot that `
+      + 'does not match the approval is not the approved document, whatever its name says.');
+  }
+  const target = abs(root, a.spec_path);
+  const before = exists(target) ? sha256(readText(target)) : null;
+  writeTextAtomic(target, body);
+  const after = sha256(readText(target));
+  if (after !== a.spec_sha256) {
+    throw new Error(`wrote ${a.spec_path} and it hashes to ${after.slice(0, 12)}, not the approved `
+      + `${a.spec_sha256.slice(0, 12)}. The restore did NOT succeed. Do not report it as done.`);
+  }
+  return { spec: a.spec_path, sha: after, changed: before !== after, from: snapRel };
+}
+
 export function approveSpec(root, id) {
   const t = readControlTask(root, id);
   const surface = readJsonOrNull(abs(root, surfaceTaskPath(id)));
@@ -491,10 +553,18 @@ export function approveSpec(root, id) {
     throw new Error(`task ${id} points at ${spec}, which does not exist. Approving a spec that is `
       + 'not on disk would record a decision about a document nobody can read.');
   }
+  /* THE SNAPSHOT IS TAKEN BEFORE THE RECORD IS WRITTEN.
+   *
+   * Finding 8. If the copy fails, no approval is recorded - so there is never a
+   * recorded approval whose bytes were never kept. The other order gives an
+   * approval that looks recoverable and is not, which is the state gate5 was in.
+   */
+  const snapRel = specSnapshotPath(id, hash);
+  writeTextAtomic(abs(root, snapRel), readText(abs(root, spec)));
   updateControlTask(root, id, {
     spec_approved: { at: nowIso(), by: 'operator', spec_path: spec, spec_sha256: hash },
   });
-  return { spec, hash, phase: t.phase };
+  return { spec, hash, phase: t.phase, snapshot: snapRel };
 }
 
 /**
@@ -548,7 +618,11 @@ export function advancePhase(root, id, from, to) {
     throw new Error(`task ${id}'s spec has changed since it was approved `
       + `(${ok.spec_path}: approved ${ok.spec_sha256.slice(0, 12)}, now `
       + `${current ? current.slice(0, 12) : 'MISSING'}). The approval was of a specific document. `
-      + `Re-approve it if the change is intended: state.mjs --approve-spec ${id}`);
+      + 'TWO EXITS, and they are different decisions. If the change was INTENDED, the operator '
+      + `re-approves: state.mjs --approve-spec ${id}. If it was NOT - an agent wrote the document `
+      + 'you approved - put the approved bytes back rather than blessing the new ones: '
+      + `state.mjs --restore-spec ${id}. Re-approving in order to close a task empties the gate `
+      + 'of its meaning, which is why it is not the only exit named here.');
   }
   /* BOTH HALVES, EXPLICITLY, AND NOT THROUGH `setPhase`.
    *
@@ -1289,6 +1363,16 @@ async function main() {
         console.log(`task ${id}: spec approved - ${r.spec} @ ${r.hash.slice(0, 12)}`);
         console.log('This records YOUR decision. --advance-phase executes it and cannot make it, '
           + 'and it refuses again if the spec changes.');
+        return;
+      }
+      case '--restore-spec': {
+        const id = arg('--restore-spec');
+        if (id === true || !id) die('usage: --restore-spec <task-id>');
+        const r = restoreSpec(root, id);
+        console.log(`task ${id}: ${r.changed ? 'restored' : 'already at'} the approved bytes - `
+          + `${r.spec} @ ${r.sha.slice(0, 12)} (from ${r.from})`);
+        console.log('The written file was re-read and re-hashed. This is not "I wrote it"; it is '
+          + 'the document on disk hashing to what the operator approved.');
         return;
       }
       case '--advance-phase': {

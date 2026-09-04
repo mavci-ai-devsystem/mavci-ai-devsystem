@@ -153,6 +153,30 @@ const CASES = [
   // PROVENANCE MUST NEVER COST THE CHANNEL (0.1.12 item 1). An agent that omits
   // --agent is filing unattributed, which is allowed; an agent that names a
   // DIFFERENT caller is producing a wrong record, which is not.
+
+  /* THE SPEC IS A SOURCE, NOT A DESTINATION - and this fixture has NO recorded
+   * approval, which is the whole point of asserting it here.
+   *
+   * Two mechanisms guard the approved spec and they cover different failures.
+   * `risk-guard`'s approved-spec rule reads `spec_approved` from the control
+   * tasks, so it is silent on a project with no approvals - and it fails open by
+   * design when that directory cannot be read, because a rule that denies every
+   * write under `.mavci/tasks/` on an unreadable control plane would block the
+   * architect from authoring a spec at all. The scribe's EDIT SCOPE is what holds
+   * in both of those cases, and it holds unconditionally.
+   *
+   * Asserted here rather than left to the end-to-end walk in check-route.mjs,
+   * because that walk runs against an APPROVED spec, where the dynamic rule
+   * answers first: deleting the scope narrowing leaves it green. Two braces, two
+   * assertions - 0.1.11's rule, applied to the pair that shipped together. */
+  ['deny', { ...edit('.mavci/tasks/0001.md'), agent_type: 'mavci-scribe' },
+    'scribe edits a SPEC on a project with no approval recorded - the scope holds where the '
+    + 'approval rule is silent'],
+  ['allow', { ...edit('.mavci/tasks/0001.summary.md'), agent_type: 'mavci-scribe' },
+    'and the completion summary it was given instead IS writable - a scope that denies '
+    + 'everything satisfies the case above on its own'],
+  ['deny', { ...edit('.mavci/tasks/0001.md'), agent_type: 'mavci-verifier' },
+    'the verifier writes nothing at all, spec included'],
   ['deny', { ...bash('node scripts/retro.mjs --record "x" --finding "y" --agent mavci-builder'), agent_type: 'mavci-scribe' }, 'scribe files a finding AS the builder'],
   ['allow', { ...bash('node scripts/retro.mjs --record "x" --finding "y" --agent mavci-scribe'), agent_type: 'mavci-scribe' }, 'scribe files a finding as ITSELF'],
   ['allow', { ...bash('node scripts/retro.mjs --record "x" --finding "y"'), agent_type: 'mavci-guardian' }, 'guardian files unattributed - never blocked from reporting'],

@@ -64,6 +64,26 @@ export const PATHS = {
   state: `${CONTROL_DIR}/state.json`,
   controlTasks: `${CONTROL_DIR}/tasks`,
   verdicts: `${CONTROL_DIR}/verdicts`,
+  /**
+   * The bytes the operator approved, one file per approval, content-addressed.
+   *
+   * FINDING 8. gate5 task 0003: an agent wrote the approved spec, a second agent
+   * told to restore it produced a THIRD state, and no artefact anywhere in the
+   * repository or its history held the approved bytes - `.mavci/tasks/` was
+   * untracked, so `git log` on it was empty. The approval was recoverable in
+   * principle and gone in fact.
+   *
+   * THE NAME CARRIES THE HASH, so the snapshot needs no field in the task record
+   * and no second list to drift: `<id>-<sha256 first 12>.md` is derived from
+   * `spec_approved.spec_sha256`, which IS sealed. A tampered snapshot therefore
+   * fails its own restore rather than restoring a document nobody approved.
+   *
+   * NOT in CONTROL_GLOBS, and not JSON. Sealing it would hash a copy against
+   * itself; the hash that authenticates it lives in the sealed task record. It is
+   * a byte copy and deliberately NOT redacted - a redacted copy cannot restore
+   * the document it is a copy of, and the spec is already in the working tree.
+   */
+  specSnapshots: `${CONTROL_DIR}/specs`,
   baseline: `${CONTROL_DIR}/baseline.json`,
   waivers: `${CONTROL_DIR}/waivers.json`,
   integrity: `${CONTROL_DIR}/integrity.json`,

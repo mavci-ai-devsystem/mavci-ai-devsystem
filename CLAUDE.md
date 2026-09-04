@@ -1998,6 +1998,260 @@ can read a transcript, and a check that appeared to would be the house failure
 mode exactly. The full record is
 `docs/lessons/0.1.24-the-caller-was-never-asserted.md`.
 
+
+### 0.1.25 — a lesson that was written down and did not bind
+
+**Cut 2026-09-03, and it has no entry here until now.** The record was in the
+commit message and in `docs/lessons/gate5-2026-09-03.md`, and this file said
+nothing — which reads, to the next person, as a release in which nothing
+happened. The same omission was named for 0.1.15 and 0.1.16 and it recurred
+inside one day, so it is written down here rather than left to be noticed a third
+time.
+
+`retro.mjs --apply` resolved its write target through the plugin root and
+accepted the **marketplace clone** as a fallback. An agent running from
+`~/.claude/plugins/cache/` misses the first candidate, so the clone won, and the
+finding landed in generated state that the next propagation resets. The command
+reported success.
+
+**Three things were already in place and not one of them bound**: the lesson file
+`docs/lessons/0.1.18-the-clone-is-generated-state.md`, sitting in the very
+directory being written into; the refusal at the `!repo` branch, already written
+and already naming the manual step, unreachable while the clone counted as a
+valid target; and the comment above `systemRepo()` recording that the FIRST draft
+preferred the clone, that this was fixed to prefer the running copy, and that the
+clone was left as a fallback. Nothing was lost only because `--clear` had not run
+yet — and the documented workflow is apply THEN clear, so an operator following
+it destroys the only durable copy.
+
+The fix removes one element from a candidates list. **The assertion is a round
+trip and not an exit code**: `--apply` exited 0 on the broken build and the file
+existed, just in a directory that gets reset, so asserting either passes on the
+bug. `check-retro.mjs` case 7 builds a tree where only the clone carries the
+marker and requires the resolver to refuse.
+
+### 0.1.26 — the writer, not the order
+
+**Cut 2026-09-04**, against gate5 findings 7 and 8. Both strand the next task,
+and they concealed each other in the way 0.1.21's findings 19 and 20 did: the
+deadlock was reported, and the report went into a hole.
+
+#### 1. Finding 7 — the document action deadlocked its own closing step
+
+`route.mjs`'s `document` action names three steps: dispatch `mavci-scribe`, then
+`state.mjs --advance-phase <id> --from verify --to release`, then
+`--task-status <id> --status done`. On gate5 task 0003 the scribe wrote a
+"Completion Summary" into `.mavci/tasks/0003.md` — **the spec, which is the
+document the operator's approval is hashed against.** The spec's sha256 went
+`2dd65597ac15` to `054a570a32b5`, and step 2 refused: *the approval was of a
+specific document.* The router's own prescribed sequence broke itself.
+
+**THE FIX IS THE REMOVAL OF A WRITER'S ABILITY, NOT AN ARRANGEMENT AROUND IT, AND
+THIS SECTION IS LONG ON PURPOSE.** This is the third ordering defect at that step
+list. The first had `--task-status` before the phase move, which left the task
+frozen at `verify` while the project went to `release`. The second — the fix for
+it, with a comment explaining the order — did not anticipate this one. A reader
+arriving at that step list now sees an ordering that looks fragile and will want
+to make it robust by sequencing. That instinct is wrong twice over, and the
+reasoning is recorded here and beside the step list so it does not have to be
+re-derived on the fourth occasion.
+
+**Reordering — advance first, dispatch second — was available, is smaller, and
+makes the failure worse.** The sequence would exit 0. The scribe's write would
+then land *after* the last thing that reads the approval hash, so the approved
+document is still mutated, permanently and unrecoverably (that is finding 8), and
+**the refusal that told us about it never fires again.** The deadlock would be
+gone and the damage would not. That converts a working control into a silent one,
+which is the failure this repository has named more often than any other — the
+Stop gate exiting 0 for seven releases, the corpus record read as project
+evidence, thirty-one assertions printing FAIL behind a process that exited 0.
+
+**The deadlock was the better failure because it was loud.** It cost an
+afternoon, it named the file, the two hashes and the command, and it stopped
+before anything else was built on top of a document nobody had agreed to. A
+reorder buys back that afternoon by spending the only signal that the document
+was damaged. Measured on the axis that matters — what does a broken build look
+like, and would this say so — the loud version is the better one, and a change
+that trades it for silence is a regression whatever the step list looks like
+afterwards.
+
+**Making the dependencies explicit was the other candidate, and it is
+adjacent-but-wrong in the exact sense this file keeps recording.** It would have
+each step carry its preconditions and let the router order them, so
+`--advance-phase` declares that it needs the spec hash intact. But that is not a
+scheduling constraint. The invariant is *the approved document does not change*,
+full stop — and encoding it as an ordering asserts the opposite: that changing it
+is fine as long as you sequence around it. It would also be machinery ROADMAP
+forbids, added to a function whose whole definition is that it is a pure decision
+over the control plane, in order to **hold** a hazard rather than remove it. A
+dependency graph would have made the third defect impossible and left the
+fourth — a second writer, a later step, another precondition — exactly as
+available as it was.
+
+So neither. `spec_approved` records an operator decision about a **specific**
+document and the sha256 is what makes "specific" mean anything; `--advance-phase`
+refusing on a changed hash is that control working correctly, and finding 7 is not
+a defect in it. The defect is that an agent held the ability to invalidate an
+operator's recorded decision. Two mechanisms remove it, and they shipped together
+because neither covers the other's case:
+
+- **The class control.** `risk-guard.mjs` denies **every** agent a write to a spec
+  that carries a recorded approval, matched against `spec_approved.spec_path` in
+  the control task rather than against a convention about where specs live. Not
+  the scribe's rule: the architect and the builder both hold `.mavci/tasks/**`
+  legitimately — the architect authors the spec before anyone approves it — and
+  both would have deadlocked identically on an approved one. Fixing the instance
+  and not the class is what let 0.1.21's fix walk past 0.1.23's phase gate.
+- **The scope.** `mavci-scribe` no longer holds `.mavci/tasks/**` at all; it holds
+  `.mavci/tasks/*.summary.md`. The reasoning is the one already written in its own
+  definition for `.mavci/lessons/`: ask whether the job needs it before asking how
+  to contain it. `.mavci/tasks/<id>.md` was a **source** for this agent, named as
+  one in `skills/scribe/SKILL.md` step 1 — the same path was a read source and a
+  write destination, which is the whole defect stated in one line.
+
+The class control reads the control plane and is therefore silent on a project
+with no approvals, and fails open on an unreadable one — deliberately, because a
+rule that denied every write under `.mavci/tasks/` on an unreadable control plane
+would stop the architect authoring a spec at all. The scope is what holds in both
+of those cases. **Two braces, two assertions**, 0.1.11's rule applied to the pair:
+`check-risk-guard.mjs` asserts the scribe is refused a spec on a project with **no
+approval recorded**, and asserts the summary path is writable, because a scope
+that denies everything satisfies the first case alone.
+
+What is left in the step list is the one real dependency — phase before close —
+which was already right, and is now right **because nothing can invalidate it**
+rather than because the order was guessed a third time.
+
+#### 2. Finding 8 — an agent write to an approved spec was unrecoverable
+
+Follow-on, and it is why finding 7 could not be waited out. After the scribe broke
+the hash it was dispatched again, told to restore the file to exactly the approved
+bytes, and given the target sha256 verbatim. It reported success and produced a
+**third** distinct document, `4af04f42aef1`. It could not have known: it holds
+`Write` and `Edit` and no shell, so it cannot hash what it has written. Recovery
+was absent rather than difficult — `.mavci/tasks/` was untracked, `git log` on the
+file was empty, and no snapshot or backup existed anywhere under `.mavci`. **The
+approved bytes were gone**, so the only remaining moves were an operator
+re-approving a spec in order to record that it is finished, or the free override.
+
+`--approve-spec` now writes the approved bytes to
+`.mavci/control/specs/<id>-<sha12>.md`, **before** it records the approval, so
+there is never a recorded approval whose bytes were not kept. The path is
+**derived** from `spec_approved.spec_sha256` rather than stored in a field — a
+second name for one fact is what drifts, and the record already carries the hash
+under a seal.
+
+**The snapshot is verified, not trusted.** It is content-addressed by a hash that
+lives in a sealed record, so a tampered copy fails its own restore rather than
+restoring a document nobody approved; without that it would be an unsealed second
+authority over the operator's decision, carrying the operator's name — a worse
+defect than the one it fixes. `--restore-spec` checks the snapshot **before**
+writing, then re-reads the written file and hashes it again, because "I wrote it"
+and "it is on disk with those bytes" are two facts and only the second matters.
+That second check is the gap the scribe fell into, made structural.
+
+`--restore-spec` is **operator-only** and is in the privilege table by name. It
+overwrites a whole document, and the situation calling for it is one where an
+agent has already written that document once; restoring is executing a recorded
+decision exactly, which is `--advance-phase`'s category, not `--approve-spec`'s.
+And the changed-hash refusal now names **both** exits, restore first: a message
+offering only "re-approve" teaches re-approving, and re-approving a spec in order
+to close the task it describes empties the gate of its meaning.
+
+The other half of the finding's ask is asserted and is honest about its reach: the
+scaffold's `.gitignore` does not exclude `.mavci/`, so a checkout **is** a second
+recovery path — once someone commits. Nobody had, which is why gate5's `git log`
+was empty. The assertion keeps that path open. It cannot assert that a project
+committed, and it does not pretend to.
+
+#### 3. The failing test had to run the whole action, and that is where it had never run
+
+`check-route.mjs`'s end-to-end walk did `if (!m) continue` on `dispatch
+mavci-scribe` and executed only the two `state.mjs` lines — so it asserted the
+closing sequence against a project **in which the scribe had never run.** Every
+check on the scribe's own result passes on this bug: it exited 0, it wrote a
+correct-looking changelog, its citations resolved. The failure is entirely in what
+its write did to the next step, and only a test that runs dispatch *and* the
+transition can see it.
+
+A subagent cannot be dispatched from a CI script, so the dispatch is replayed as
+the one act that had a consequence — an `Edit` of the approved spec, submitted to
+the real guard under the real agent name and **honoured**: allowed means the write
+happens, denied means it does not. **What that does not claim** is written beside
+it. It says nothing about whether a scribe would attempt the write (one did, once,
+unprompted); it says that if one does, the guard refuses and the action completes.
+Against the pre-fix tree: guard allowed, `--advance-phase` exited 1, the spec's
+sha moved, both halves stranded at `verify`, and the project fell back to `idle` —
+five red, the live defect reproduced.
+
+#### 4. E6 went green on its first mutation run, and that is the fourth scale
+
+**An assertion written to catch M5's shape reproduced M5's shape inside itself.**
+
+0.1.23's mutation M5 is the one where deleting three lifecycle verbs from
+`risk-guard`'s privilege table changed **nothing observable**: the guard also fails
+closed on an unrecognised flag, so an unclassified verb is denied by the wrong arm,
+with the wrong message, and with no operator confirm on the main-session side.
+Decision and reason are two facts and only the reason discriminates. E6 was
+written to hold `--restore-spec` to exactly that: deny, *and* denied by the
+privilege table rather than by the fail-closed arm.
+
+Removing `--restore-spec` from the table left **E6 green.** The decision assertion
+was right and inert — the verb is denied either way — and the reason matcher, the
+half that was supposed to discriminate, looked for `unrecognised|not recognised|
+fails closed|could not be` against a message that actually reads *"may only run
+state.mjs with … which is not classified as agent-safe."* Adjacent wording, no
+match, green. Fixed to match the text the guard emits, after which the mutation
+fails both E6 cases and names the arm.
+
+**Only running the mutation exposed it.** Reading E6 shows an assertion that
+plainly separates the two arms; it separates them in intent and matched neither in
+fact. There is no static reading of that file which reveals it, and `check-ci-gates`
+cannot see it either — it proves an assertion *can* fail, never that it
+discriminates, and it says so.
+
+**This is the fourth scale we have hit this pattern at — the operator's framing,
+and it is the useful part of the finding.** The pattern is: *the artefact written
+to prevent a defect contains the defect.*
+
+- **Comment.** ARCHITECTURE 6.4's `hooks.json` example still showed
+  `"command": ["node", …]` — the array form that made v0.1.2 install with **zero
+  hooks** — as canonical, in the governing document. And `check-guardian.mjs`'s
+  Bash assertion read "fully natively contained" after guardian's reads had become
+  hook-enforced, so a green check made a false claim.
+- **Fixture.** 0.1.14's assertion 4 tested the undeclared-step arm against a
+  fixture only, so adding a shell step to the real `release.yml` changed nothing —
+  the blind spot that release was about, reproduced inside the test written to
+  prevent it. 0.1.12's evidence-cap fixture did the same thing one branch early.
+- **Lesson file.** 0.1.25: `docs/lessons/0.1.18-the-clone-is-generated-state.md`
+  sat **in the directory being written into** while `retro --apply` wrote into it,
+  and did not bind.
+- **Assertion about the pattern.** This one.
+
+Each scale is further from the code and closer to the thing that is supposed to
+catch the code, and the defect survives the move every time. The only instrument
+that has caught any of them is the same one: name the broken build the assertion
+must catch, produce it, and watch. **A green mutation is a finding about the
+assertion, always** — it is never evidence that the fix was unnecessary.
+
+#### Verification
+
+Every fix was demonstrated failing first, and each mutation is independent.
+
+| Mutation | Restores | What goes red |
+|---|---|---|
+| the pre-fix guard | no approved-spec rule | 5 in the end-to-end walk — finding 7 reproduced live |
+| no snapshot at `--approve-spec` | 0.1.25's approval | E1, E3, E4 |
+| one exit in the refusal | 0.1.25's message | E2b only |
+| `--restore-spec` unclassified | no table entry | E6 only — **and this is the mutation that was green first** |
+| a trusted snapshot | no pre-write check | E5b only — the exit status stays right, the tree does not |
+| scribe keeps `.mavci/tasks/**` | 0.1.25's scope | `check-risk-guard` only; the walk stays green, which is why both are asserted |
+
+33 CI check scripts, all passing. No new check file: finding 7's assertions belong
+to the walk that owns the chain and to the guard's own case table, and finding 8's
+to `check-state-transition.mjs`, which owns the approval gate. A fifth file
+asserting the same three components would be a second list.
+
 ---
 
 ## Ask me before

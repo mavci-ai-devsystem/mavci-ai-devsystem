@@ -56,6 +56,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -392,6 +393,163 @@ if (/written_by_plugin_version/.test(ciSrc)) {
     } else ok('the legacy pin is migrated, not dropped');
   }
   fs.rmSync(p, { recursive: true, force: true });
+}
+
+/* ============================================ E. THE APPROVED BYTES SURVIVE */
+
+console.log('\nE. an approved spec is recoverable after an agent writes it:');
+
+{
+  const p = makeProject();
+  fs.mkdirSync(path.join(p, PATHS.tasks), { recursive: true });
+  const specRel = `${PATHS.tasks}/0001.md`;
+  const specAbs = path.join(p, specRel);
+  const APPROVED = '# 0001\n\nAcceptance: /api/health returns 200.\n';
+  const shaOf = (f) => createHash('sha256').update(fs.readFileSync(f)).digest('hex');
+
+  run(p, ['--begin-plan', 'a task with a spec', '--spec', specRel]);
+  fs.writeFileSync(specAbs, APPROVED);
+  const approvedSha = shaOf(specAbs);
+
+  const a = run(p, ['--approve-spec', '0001']);
+  if (a.status !== 0) bad(`E0 --approve-spec failed: ${a.out.trim().slice(0, 200)}`);
+  else ok('E0 the operator approves the spec');
+
+  /* THE SNAPSHOT EXISTS, AND IS THE APPROVED BYTES.
+   *
+   * Finding 8. On gate5 nothing anywhere held them: `.mavci/tasks/` was untracked
+   * so `git log` on it was empty, and no backup or snapshot existed under
+   * `.mavci`. The approval was recoverable in principle and gone in fact. */
+  const snapRel = state.specSnapshotPath('0001', approvedSha);
+  const snapAbs = path.join(p, snapRel);
+  if (!fs.existsSync(snapAbs)) {
+    bad(`E1 --approve-spec kept no snapshot of the bytes it approved (expected ${snapRel}). `
+      + 'An approval that records a hash and keeps no copy can detect the damage and cannot undo it.');
+  } else if (shaOf(snapAbs) !== approvedSha) {
+    bad(`E1 the snapshot is not the approved bytes - ${shaOf(snapAbs).slice(0, 12)} vs `
+      + `${approvedSha.slice(0, 12)}`);
+  } else ok('E1 --approve-spec snapshots the exact bytes it approved');
+
+  // An agent writes the approved document. This is gate5 task 0003, verbatim.
+  fs.appendFileSync(specAbs, '\n## Completion Summary\n\nDone.\n');
+  const damaged = shaOf(specAbs);
+
+  const blocked = run(p, ['--advance-phase', '0001', '--from', 'plan', '--to', 'build']);
+  if (blocked.status === 0) {
+    bad('E2 --advance-phase accepted a changed spec. The hash gate is what makes an approval be '
+      + 'about a document rather than about a task.');
+  } else ok('E2 --advance-phase refuses on the changed document (the control working)');
+
+  /* THE REFUSAL NAMES A WAY OUT THAT IS NOT "BLESS THE DAMAGE".
+   *
+   * Finding 7 recorded that the only escapes were both wrong: re-approve a spec
+   * in order to record that it is finished, which empties the gate, or have the
+   * orchestrator edit the document back, which is the orchestrator authoring a
+   * document it must not author. A refusal that names only the first TEACHES the
+   * first. */
+  if (!/--restore-spec/.test(blocked.out)) {
+    bad('E2b the changed-spec refusal names only --approve-spec. Re-approving is how an operator '
+      + 'blesses a change they meant; it is not how they undo one they did not, and a message '
+      + 'that offers only that exit trains everyone to take it.');
+  } else ok('E2b and it names the restore, not only the re-approval');
+
+  const r = run(p, ['--restore-spec', '0001']);
+  if (r.status !== 0) {
+    bad(`E3 --restore-spec failed: ${r.out.trim().slice(0, 200)}`);
+  } else if (shaOf(specAbs) !== approvedSha) {
+    bad(`E3 --restore-spec did not reproduce the approved bytes - now `
+      + `${shaOf(specAbs).slice(0, 12)}, approved ${approvedSha.slice(0, 12)}, damaged `
+      + `${damaged.slice(0, 12)}. On gate5 the second agent produced a THIRD state and reported `
+      + 'success, because it held no shell and could not hash what it had written.');
+  } else ok('E3 --restore-spec reproduces the approved bytes EXACTLY');
+
+  const after = run(p, ['--advance-phase', '0001', '--from', 'plan', '--to', 'build']);
+  if (after.status !== 0) {
+    bad(`E4 the transition still refuses after a restore: ${after.out.trim().slice(0, 200)}`);
+  } else ok('E4 and the deadlock is gone - the transition it blocked now passes');
+
+  /* A SNAPSHOT IS VERIFIED, NOT TRUSTED. It is content-addressed by a hash that
+   * lives in a SEALED record, so a tampered copy must fail here rather than
+   * restore a document nobody approved. Without this the snapshot is a second,
+   * unsealed, authoritative copy of the spec - a worse defect than the one it
+   * fixes, because it would carry the operator's name. */
+  const DAMAGED_AGAIN = 'damaged again\n';
+  fs.writeFileSync(specAbs, DAMAGED_AGAIN);
+  fs.writeFileSync(snapAbs, '# 0001\n\nAcceptance: anything I like.\n');
+  const tampered = run(p, ['--restore-spec', '0001']);
+  const afterTampered = shaOf(specAbs);
+  if (tampered.status === 0) {
+    bad('E5 --restore-spec restored a snapshot that does not hash to the approval. The snapshot '
+      + 'is not sealed; the hash naming it is. Trusting the file makes it an unsealed second '
+      + 'authority over the document the operator agreed to.');
+  } else if (afterTampered !== createHash('sha256').update(DAMAGED_AGAIN).digest('hex')) {
+    /* THE COMMAND FAILING IS NOT THE ASSERTION. A restore that verifies only
+     * AFTER writing still puts unapproved bytes in the working tree and then
+     * errors - so the exit status is right and the tree is wrong, which is the
+     * state gate5 was actually in. Verified by mutation: removing the pre-write
+     * check leaves the exit status arm above GREEN and fails only this one. */
+    bad('E5b the refused restore WROTE the tampered bytes and then errored. What the operator has '
+      + 'to live with is the working tree, not the exit status.');
+  } else ok('E5 a snapshot that does not match the sealed approval is refused, and nothing is written');
+
+  fs.rmSync(p, { recursive: true, force: true });
+}
+
+/* An agent may not run the restore, and it must be refused BY NAME. An
+ * unclassified flag is denied by the fail-closed arm instead - right decision,
+ * wrong reason, and no operator confirm on the main-session side. That is
+ * 0.1.23's mutation M5, where deleting three verbs from the privilege table
+ * changed nothing observable. */
+{
+  for (const who of ['mavci-builder', 'mavci-scribe']) {
+    const p = makeProject();
+    let out = '';
+    try {
+      out = execFileSync(process.execPath, [RISK_GUARD], {
+        input: JSON.stringify({
+          tool_name: 'Bash',
+          tool_input: { command: 'node scripts/state.mjs --restore-spec 0001' },
+          agent_type: who,
+          cwd: p,
+        }),
+        encoding: 'utf8', timeout: 15_000, stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch (err) { out = err.stdout?.toString() ?? ''; }
+    let decision = 'allow';
+    let reason = '';
+    try {
+      const o = JSON.parse(out).hookSpecificOutput ?? {};
+      decision = o.permissionDecision ?? 'allow';
+      reason = String(o.permissionDecisionReason ?? '');
+    } catch { decision = out.trim() ? 'unparseable' : 'allow'; }
+    if (decision !== 'deny') {
+      bad(`E6 ${who} running --restore-spec: expected deny, got ${decision}`);
+    } else if (/not classified as agent-safe|may only run state.mjs with/i.test(reason)) {
+      bad(`E6 ${who} is refused --restore-spec by the FAIL-CLOSED arm, not by the privilege `
+        + 'table. The decision is right and the reason is wrong, and only the reason tells the '
+        + `reader whether the verb is classified at all: "${reason.slice(0, 120)}"`);
+    } else ok(`E6 ${who} may not run --restore-spec, and is told why`);
+    fs.rmSync(p, { recursive: true, force: true });
+  }
+}
+
+/* The other half of finding 8's ask, and it is honest about what it establishes.
+ * The scaffold's .gitignore does NOT exclude `.mavci/`, so an ordinary checkout
+ * IS a second recovery path - once someone commits. Nobody had, which is why
+ * gate5's `git log -- .mavci/tasks/0003.md` was empty. This asserts the path
+ * stays open. It does not, and cannot, assert that a project committed. */
+{
+  const gi = path.join(ROOT, 'plugins/mavci-core/templates/scaffold/.gitignore');
+  const src = fs.existsSync(gi) ? fs.readFileSync(gi, 'utf8') : '';
+  const ignoresMavci = src.split('\n').some((l) => {
+    const t = l.trim();
+    if (!t || t.startsWith('#') || t.startsWith('!')) return false;
+    return /^\.mavci(\/|$)/.test(t);
+  });
+  if (ignoresMavci) {
+    bad('E7 the scaffold .gitignore excludes .mavci/, so a scaffolded project cannot recover an '
+      + 'approved spec from version control at all, and the snapshot would be the only copy.');
+  } else ok('E7 the scaffold leaves .mavci/ trackable, so a checkout stays a second recovery path');
 }
 
 if (failures.length) {

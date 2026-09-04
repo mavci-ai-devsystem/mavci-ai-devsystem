@@ -53,8 +53,17 @@ exactly like a working one.
 
 2. **Delegate to `@agent-mavci-scribe`** with the task id, the list of source
    paths, and the document to write. Its write scope is `docs/**`, `README.md`,
-   `CHANGELOG.md`, `.mavci/decisions/**`, `.mavci/tasks/**` and SEO metadata
-   files, enforced by a `PreToolUse` hook; anything else is refused.
+   `CHANGELOG.md`, `.mavci/decisions/**`, `.mavci/tasks/*.summary.md` and SEO
+   metadata files, enforced by a `PreToolUse` hook; anything else is refused.
+
+   **A task summary goes in `.mavci/tasks/<id>.summary.md`, never in
+   `.mavci/tasks/<id>.md`.** That second path is the SPEC, and step 1 above names
+   it as a SOURCE — it was a read source and a write destination at once, and it
+   is the document the operator approved. On gate5 the scribe appended a
+   completion summary to it, the approval hash changed, and `--advance-phase` —
+   the very next step the router names in the `document` action — refused. The
+   scope no longer includes it, and `risk-guard` separately denies every agent a
+   write to an APPROVED spec, so this is refused twice rather than remembered.
 
 3. When it returns, check the **citations resolve**. Every task id, verdict file,
    commit sha and path it names must exist. `check-scribe-refs.mjs` asserts this

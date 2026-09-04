@@ -507,17 +507,90 @@ console.log('\nF. the CLI over a real control plane:');
    * router. It is also the closest this file gets to testing that `skills/ship/`
    * obeys the decision; it tests that the decision is obeyable and correct when
    * obeyed, which is the half a check can reach. */
+  /* AND THE DISPATCH STEP IS A STEP.
+   *
+   * Finding 7. Every earlier version of this loop did `if (!m) continue` on
+   * `dispatch mavci-scribe` and executed only the two `state.mjs` lines - so it
+   * asserted the closing sequence against a project in which the scribe had
+   * never run. On gate5 task 0003 the scribe ran, wrote a "Completion Summary"
+   * into `.mavci/tasks/0003.md` - the spec, which is the document the operator's
+   * approval is HASHED against - and the very next step the router names,
+   * `--advance-phase`, refused: the approval was of a different document. The
+   * router's own prescribed sequence broke itself, and this walk stayed green
+   * because the step that breaks it was the one step it skipped.
+   *
+   * WHAT THIS STANDS IN FOR, AND WHAT IT DOES NOT CLAIM. A subagent cannot be
+   * dispatched from a CI script, so the dispatch is replayed as the one act of
+   * the scribe's that had a consequence: an Edit of the approved spec, submitted
+   * to the REAL guard under the REAL agent name, and HONOURED - allowed means the
+   * write happens, denied means it does not. That asserts nothing about whether a
+   * scribe would attempt it (one did, once, unprompted); it asserts that if one
+   * does, the guard refuses and the action still completes. A guard that allows
+   * it is what this walk must not survive.
+   */
+  const specFile = path.join(tmp, '.mavci', 'tasks', '0001.md');
+  const shaOf = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+  const specShaBefore = shaOf(specFile);
+
+  const guard = (input) => {
+    let stdout = '';
+    try {
+      stdout = execFileSync(process.execPath, [path.join(SCRIPTS, 'risk-guard.mjs')], {
+        input: JSON.stringify({ ...input, cwd: tmp }), encoding: 'utf8', timeout: 15000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch (err) { stdout = err.stdout?.toString() ?? ''; }
+    if (!stdout.trim()) return { decision: 'allow', reason: '' };
+    try {
+      const o = JSON.parse(stdout).hookSpecificOutput ?? {};
+      return { decision: o.permissionDecision ?? 'allow', reason: String(o.permissionDecisionReason ?? '') };
+    } catch { return { decision: 'unparseable', reason: stdout.slice(0, 200) }; }
+  };
+
   const executed = [];
+  const statuses = [];
+  let dispatched = null;
+  let scribeWrite = null;
   for (const s of d.steps) {
+    const disp = /^dispatch\s+(mavci-[a-z]+)/.exec(s.run);
+    if (disp) {
+      dispatched = disp[1];
+      scribeWrite = guard({
+        tool_name: 'Edit',
+        tool_input: {
+          file_path: '.mavci/tasks/0001.md',
+          old_string: 'Acceptance: /api/health returns 200.',
+          new_string: 'Acceptance: /api/health returns 200.\n\n## Completion Summary\n\nDone.',
+        },
+        agent_type: disp[1],
+      });
+      if (scribeWrite.decision !== 'deny') {
+        fs.appendFileSync(specFile, '\n## Completion Summary\n\nDone.\n');
+      }
+      continue;
+    }
     const m = /^state\.mjs\s+(.+)$/.exec(s.run);
     if (!m) continue;
     const args = m[1].match(/"[^"]*"|\S+/g).map((a) => a.replace(/^"|"$/g, ''));
     executed.push(args.join(' '));
-    run(STATE, args);
+    statuses.push(run(STATE, args).status);
   }
+  check(dispatched === 'mavci-scribe',
+    `F10a0 the document action's dispatch step was EXECUTED, not skipped - dispatched ${dispatched}`);
+  check(scribeWrite?.decision === 'deny',
+    `F10a1 the scribe's write to the APPROVED SPEC is refused - got ${scribeWrite?.decision}. `
+    + 'An agent that can edit the document an operator approved can invalidate that approval, and '
+    + 'the very next step the router names is the one that checks it.');
   check(executed.length === 2 && /--advance-phase 0001 --from verify --to release/.test(executed[0])
     && /--status done/.test(executed[1]),
     `F10a the document steps were executed in the router's order - ran: ${executed.join(' THEN ') || '(none)'}`);
+  check(statuses[0] === 0,
+    `F10a2 --advance-phase EXITED 0 AFTER the dispatch - got ${statuses[0]}. This is finding 7. An `
+    + 'assertion that the scribe exited 0, or that a changelog was written, passes on this bug: the '
+    + 'scribe did succeed. The failure is entirely in what its write did to the next step.');
+  check(shaOf(specFile) === specShaBefore,
+    `F10a3 the approved spec's sha256 is unchanged across the WHOLE document action - `
+    + `${specShaBefore.slice(0, 12)} -> ${shaOf(specFile).slice(0, 12)}`);
   const doneTask = JSON.parse(fs.readFileSync(path.join(tmp, PATHS.controlTasks, '0001.json'), 'utf8'));
   const doneState = JSON.parse(fs.readFileSync(path.join(tmp, PATHS.state), 'utf8'));
   check(doneTask.phase === 'release' && doneState.phase === 'release',

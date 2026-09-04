@@ -440,9 +440,41 @@ export function route(input) {
        * `release` - reproducing, through the close path, exactly the divergence
        * `--set-phase` was fixed to prevent. Observed on gate5: `state.phase =
        * release` over `task 0001 phase = verify`, on a task that had passed.
+       *
+       * THIRD ORDERING DEFECT AT THIS STEP LIST, AND THE ORDER IS NOT WHAT
+       * CHANGED. Finding 7: the scribe, dispatched by step 1, wrote the approved
+       * spec, and step 2 - `--advance-phase` - refuses on a changed approval
+       * hash. The sequence broke itself.
+       *
+       * Two fixes were available and both are wrong, so the reasoning is written
+       * here rather than left to be re-derived on the fourth occasion.
+       *
+       * REORDERING - advance first, dispatch second - makes the sequence exit 0
+       * and leaves the approved document mutated AFTER the last thing that checks
+       * it. The refusal never fires, the damage still happens, and nothing
+       * reports it. That is a working control made silent, which is worse than
+       * the deadlock: the deadlock was loud.
+       *
+       * MAKING THE DEPENDENCIES EXPLICIT - steps carrying preconditions, ordered
+       * by a solver - encodes "advance-phase needs the hash intact" as a
+       * SCHEDULING constraint. It is not one. The invariant is "the approved
+       * document does not change", full stop, and expressing it as an ordering
+       * asserts the opposite: that changing it is fine if you sequence around it.
+       * It is also machinery ROADMAP forbids, added to a pure decision function,
+       * to hold a hazard rather than remove it.
+       *
+       * So the writer that could break the precondition no longer can:
+       * `risk-guard.mjs` denies every agent a write to an APPROVED spec, and the
+       * scribe's edit scope no longer names `.mavci/tasks/**` at all. What is
+       * left below is the ONE real dependency - phase before close - which was
+       * already right, and is now right because nothing can invalidate it rather
+       * than because the order was guessed a third time.
        * Phase first, close second, and the two halves agree at rest. */
       steps: [
-        step('dispatch mavci-scribe', 'it transcribes from named sources; it does not reconstruct'),
+        step('dispatch mavci-scribe',
+          'it transcribes from named sources; it does not reconstruct. The task summary goes in '
+          + `.mavci/tasks/${id}.summary.md - NOT the spec, which is the document the operator `
+          + 'approved and which the very next step hashes'),
         step(`state.mjs --advance-phase ${id} --from verify --to release`,
           'FIRST: the scoped transition moves this task and the project together, and a task '
           + 'closed beforehand is left behind'),

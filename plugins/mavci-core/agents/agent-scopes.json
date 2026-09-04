@@ -73,7 +73,7 @@
       "README.md",
       "CHANGELOG.md",
       ".mavci/decisions/**",
-      ".mavci/tasks/**",
+      ".mavci/tasks/*.summary.md",
       "app/**/metadata.ts",
       "app/**/opengraph-image.tsx"
     ],
