@@ -47,7 +47,7 @@ The hard constraint was: build on native features, and justify every piece of cu
 | Distribution and versioned updates across machines | Plugin marketplace in a private GitHub repo, `extraKnownMarketplaces` + `enabledPlugins` in each project's committed settings. |
 | Blocking a dangerous operation | `permissions.deny` plus a `PreToolUse` hook. |
 | Blocking writes to the control plane | One `Edit(./.mavci/control/**)` deny rule — verified to cover the `Write` tool too (5.17). |
-| Forcing a confirmation | `permissions.ask` plus `PreToolUse` returning `deferToUser`. |
+| Forcing a confirmation | `permissions.ask` plus `PreToolUse` returning `ask`. |
 | Making a task actually fail | `Stop` / `SubagentStop` hook returning `continue: true`. |
 | Reading live data into a command prompt | Skill dynamic-context backtick-bang syntax. |
 | Running a command in isolation | Skill `context: fork` with `agent:`. |
@@ -1057,7 +1057,7 @@ Twelve blocking checks written as regex rather than AST **will** produce a false
 | Control | Mechanism |
 |---|---|
 | An agent cannot grant itself a waiver | `/mavci-core:waive` sets `disable-model-invocation: true` (verified 2.4). Only a human typing the command can reach it. An agent that believes a check is wrong must `escalate` (contract section 7). |
-| A waiver is a deliberate act | The command is tier-2: `risk-guard.mjs` returns `deferToUser`, so the operator confirms the exact check, path, and reason. |
+| A waiver is a deliberate act | The command is tier-2: `risk-guard.mjs` returns `ask`, so the operator confirms the exact check, path, and reason. |
 | No empty justifications | `state.mjs` rejects a `reason` shorter than 20 characters. |
 | No permanent waivers | `--days` defaults to 90, hard cap 180. An expired waiver stops applying and the check blocks again. |
 | No silent expiry | `doctor` warns 14 days out and lists expired waivers. `gate.mjs` names the expiry date when a formerly-waived check starts blocking. |
@@ -1157,11 +1157,11 @@ Three tiers. Every tier-3 operation is enforced **twice**: a `permissions.deny` 
 | Local Supabase: `start`, `db reset`, `migration new` | 1 | auto | `allow: ["Bash(supabase start*)", "Bash(supabase db reset*)", "Bash(supabase migration new*)"]` |
 | `git add`, `git commit`, `git switch -c` | 1 | auto | `allow: ["Bash(git add *)", "Bash(git commit *)"]` |
 | `git push` to a feature branch | 1 | auto | `allow: ["Bash(git push origin feat/*)"]`; hook rejects a push resolving to `deploy.prod_branch` |
-| Write `.env*` | 2 | confirm | `ask: ["Edit(./.env*)"]` + hook `deferToUser`; the hook names the key, never the value |
+| Write `.env*` | 2 | confirm | `ask: ["Edit(./.env*)"]` + hook `ask`; the hook names the key, never the value |
 | Edit `.claude/settings.json` | 2 | confirm | `ask` + hook |
 | Add an npm dependency | 2 | confirm | `ask: ["Bash(npm install *)", "Bash(npm i *)"]` |
 | Migration touching an existing table | 2 | confirm | hook parses SQL for `ALTER` / `DROP COLUMN` against a tracked table |
-| **Granting a waiver** | 2 | confirm | `/mavci-core:waive` is `disable-model-invocation: true`; hook returns `deferToUser` |
+| **Granting a waiver** | 2 | confirm | `/mavci-core:waive` is `disable-model-invocation: true`; hook returns `ask` |
 | `git push --force`, `reset --hard`, branch delete | 3 | **hard-block** | `deny: ["Bash(git push --force*)", "Bash(git push -f*)", "Bash(git reset --hard*)", "Bash(git branch -D*)", "Bash(git push origin --delete*)"]` + hook |
 | `rm -rf`, recursive delete outside `node_modules`/`.next` | 3 | **hard-block** | `deny: ["Bash(rm -rf *)", "Bash(rm -r *)"]` + hook path allowlist |
 | Repo delete or visibility change | 3 | **hard-block** | `deny: ["Bash(gh repo delete*)", "Bash(gh repo edit*)"]` + hook |

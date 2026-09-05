@@ -59,6 +59,7 @@ export const ACTIONS = [
   'rework',          // builder again, starting from the failing verdict
   'verify',          // verifier: run the checker and the build against the criteria
   'document',        // scribe: render what happened from sources that already exist
+  'incomplete',      // a verdict that does not say what the acceptance criteria returned. Operator.
   'awaiting_approval', // the spec is written and the operator has not approved it. Operator.
   'blocked',         // the ceiling, or a declared blocker. Operator.
   'release_gate',    // everything a task can prove is proved. Operator.
@@ -118,6 +119,48 @@ export function approvalCurrent(task, specText) {
  * corpus and the project sharing `guardian/records/`, and a PASSING corpus leaving
  * a failing record as the release gate's input.
  */
+/**
+ * What a verdict actually says: `pass`, `fail`, `incomplete`, or null for none.
+ *
+ * cartoonify finding 6. `verdict.verdict === 'pass'` was the whole test, and it
+ * is true of a verdict that examined none of the acceptance criteria - which is
+ * every verdict written before 0.1.33, because the field did not exist. Task
+ * 0001 recorded `pass` with criterion 4 reproducibly failing and the router
+ * answered `document`.
+ *
+ * FAIL-CLOSED ON ABSENCE, and that is the load-bearing line. An old verdict with
+ * no `criteria[]` decides nothing rather than deciding wrongly. It means every
+ * project on disk today stops here instead of closing tasks, which is the
+ * intended cost: the alternative is that they all silently become passes.
+ *
+ * FAIL BEATS INCOMPLETE. A criterion that failed is actionable - the builder has
+ * somewhere to go - while `incomplete` is a question for a person. A verdict
+ * holding both is reported as the one that can be worked on.
+ */
+export function verdictOutcome(verdict) {
+  if (!verdict) return null;
+  const criteria = Array.isArray(verdict.criteria) ? verdict.criteria : null;
+  if (verdict.verdict === 'fail') return 'fail';
+  if (criteria && criteria.some((c) => c && c.status === 'fail')) return 'fail';
+  if (verdict.verdict === 'incomplete') return 'incomplete';
+  if (!criteria || criteria.length === 0) return 'incomplete';
+  if (criteria.some((c) => !c || c.status === 'not_run')) return 'incomplete';
+  return verdict.verdict === 'pass' ? 'pass' : 'incomplete';
+}
+
+/** `29 of 32 criteria executed, 2 inspected, 1 skipped` - the sentence the gate can say. */
+export function criteriaSummary(verdict) {
+  const c = Array.isArray(verdict?.criteria) ? verdict.criteria : [];
+  if (!c.length) return 'no acceptance criteria recorded';
+  const executed = c.filter((x) => x?.mode === 'executed' && x.status !== 'skipped').length;
+  const inspected = c.filter((x) => x?.mode === 'inspected' && x.status !== 'skipped').length;
+  const skipped = c.filter((x) => x?.status === 'skipped').length;
+  const parts = [`${executed} of ${c.length} criteria executed`];
+  if (inspected) parts.push(`${inspected} inspected (READ, not run)`);
+  if (skipped) parts.push(`${skipped} skipped by decision`);
+  return parts.join(', ');
+}
+
 export function verdictForAttempt(verdicts, taskId, attempt) {
   if (!Array.isArray(verdicts) || !attempt) return null;
   const mine = verdicts.filter((v) => v && v.task_id === taskId && v.attempt === attempt);
@@ -339,8 +382,10 @@ export function route(input) {
   const tries = typeof task.attempts_total === 'number' ? task.attempts_total : attempts;
   const max = task.max_attempts ?? 3;
   const verdict = verdictForAttempt(verdicts, id, tries);
-  const failed = verdict && verdict.verdict !== 'pass';
-  const passed = verdict && verdict.verdict === 'pass';
+  const outcome = verdictOutcome(verdict);
+  const failed = outcome === 'fail';
+  const passed = outcome === 'pass';
+  const incomplete = outcome === 'incomplete';
   const exhausted = attempts >= max;
 
   /* A `blocked` arm stood here until 0.1.28 and has moved UP, into the
@@ -475,6 +520,42 @@ export function route(input) {
     });
   }
 
+  /* ---- the verdict does not answer -------------------------------------
+   * Ahead of `passed`, and that ordering is the finding. On the broken build
+   * this state WAS `passed`: `verdict.verdict === 'pass'` is true of a verdict
+   * that examined none of the acceptance criteria, so the router said
+   * `document` and the task would have closed. Placing this arm after `passed`
+   * would leave it unreachable and look exactly like a fix.
+   */
+  if (incomplete) {
+    const missing = !Array.isArray(verdict.criteria) || verdict.criteria.length === 0;
+    const notRun = missing ? [] : verdict.criteria.filter((c) => c && c.status === 'not_run');
+    return out('incomplete', {
+      task_id: id,
+      why: `attempt ${attempts} of task ${id} has a verdict that does not say whether the acceptance `
+        + `criteria were met: ${missing
+          ? 'it records no `criteria[]` at all'
+          : `${notRun.length} of ${verdict.criteria.length} criteria are not_run (${notRun.slice(0, 6).map((c) => c.id).join(', ')})`}. `
+        + 'A criterion nobody ran is not a criterion that passed, and the spec is what the operator '
+        + 'approved by hash. This is NOT a failure of the code: nothing here says the work is wrong, '
+        + 'only that the record does not answer.',
+      steps: [
+        step(`/mavci-core:verify ${id}`,
+          're-run it once the verifier can record per-criterion results. Until that lands nothing '
+          + 'populates `criteria[]`, and this arm will keep reporting - which is the intended '
+          + 'fail-closed state, not a malfunction'),
+        step('/mavci-core:retro',
+          'if the verdict is empty because the system cannot record criteria yet, the finding is in '
+          + 'the system and not in this project'),
+        step(`state.mjs --task-status ${id} --status done`,
+          'THE OPERATOR\'S OVERRIDE, and it is named rather than hidden because leaving the only '
+          + 'exit unwritten is how a fail-closed gate becomes a deadlock. It closes the task on '
+          + 'evidence the control plane does not hold, and the verdict on disk will still say the '
+          + 'criteria were never examined'),
+      ],
+    });
+  }
+
   if (passed) {
     // `selectTask` never returns a `done` task, so this branch is only ever
     // reached while the task is still open - which is exactly when the record
@@ -482,8 +563,16 @@ export function route(input) {
     // actually lands: the no-open-task path above.
     return out('document', {
       task_id: id,
-      why: `task ${id} passed attempt ${attempts}. What is left is the record: a changelog entry and `
-        + 'a task summary, rendered from the verdict and the diff, which both already exist.',
+      /* THE SPLIT IS IN THE `why`, NOT ONLY IN THE FILE. A criterion that was
+       * read rather than run is a legitimate result and a weaker one, and on
+       * both projects that fact survived only in a subagent's prose - gate6 task
+       * 0002's "execution evidence exists only from the builder agent",
+       * cartoonify's criteria 20 and 29 needing a browser the verifier does not
+       * have. Recording `mode` and then not reporting it would move the fact
+       * from prose into a file nobody opens. */
+      why: `task ${id} passed attempt ${attempts} - ${criteriaSummary(verdict)}. What is left is the `
+        + 'record: a changelog entry and a task summary, rendered from the verdict and the diff, '
+        + 'which both already exist.',
       /* ORDER MATTERS HERE, and the first version had it backwards.
        * `--set-phase` carries the IN_PROGRESS task with it, so closing the task
        * first left the task frozen at `verify` while the project moved to

@@ -132,9 +132,9 @@ const CASES = [
   ['deny', { tool_name: 'mcp__claude_ai_Vercel__buy_domain', tool_input: {} }, 'spends money'],
 
   // tier 2
-  ['deferToUser', bash('npm install lodash'), 'dependency'],
-  ['deferToUser', edit('.env.local'), 'env write'],
-  ['deferToUser', edit('.claude/settings.json'), 'risk policy edit'],
+  ['ask', bash('npm install lodash'), 'dependency'],
+  ['ask', edit('.env.local'), 'env write'],
+  ['ask', edit('.claude/settings.json'), 'risk policy edit'],
 
   // state.mjs is the PRIVILEGED CHANNEL (Q1). The Edit deny and the seal do
   // nothing about an agent running the writer itself over Bash: it would mutate
@@ -217,18 +217,18 @@ const CASES = [
    * confirms like every other privileged flag. A reader finding `allow` here again
    * should look for an orchestrator that has been handed the override.
    */
-  ['deferToUser', bash('node scripts/state.mjs --set-phase build'),
+  ['ask', bash('node scripts/state.mjs --set-phase build'),
     'MAIN SESSION free phase set is the OVERRIDE and confirms - the routine path is --advance-phase'],
   ['allow', bash('node scripts/state.mjs --advance-phase 0007 --from plan --to build'),
     'MAIN SESSION scoped transition is the routine one, and is exempt because it carries four refusals'],
   // Tier-2 confirm, not allow: --set-phase is the ONLY privileged flag exempted from the
   // operator confirm, because slash commands run it routinely. Rewriting the manifest is not
-  // routine. NOTE: this is the 6th case asserting the literal 'deferToUser', a value Claude Code
+  // routine. NOTE: this is the 6th case asserting the literal 'ask', a value Claude Code
   // REJECTS (carried-forward item 7) - it asserts what the guard emits, not that the decision is
   // applied. Real containment here rests on the deny rules, not on this confirm.
-  ['deferToUser', bash('node scripts/state.mjs --migrate-manifest'), 'MAIN SESSION migrates the manifest (operator, per doctor)'],
-  ['deferToUser', bash('node scripts/state.mjs --reset-attempts 0001'), 'main session resets the ceiling - deliberate act'],
-  ['deferToUser', bash('node scripts/state.mjs --reseal'), 'main session reseals - deliberate act'],
+  ['ask', bash('node scripts/state.mjs --migrate-manifest'), 'MAIN SESSION migrates the manifest (operator, per doctor)'],
+  ['ask', bash('node scripts/state.mjs --reset-attempts 0001'), 'main session resets the ceiling - deliberate act'],
+  ['ask', bash('node scripts/state.mjs --reseal'), 'main session reseals - deliberate act'],
 
   /* --- retro.mjs, the escalation channel (Gate 4c, finding 4) ----------
    * Filing must be reachable by an agent or the channel does not exist - that
@@ -242,7 +242,7 @@ const CASES = [
   ['deny', { ...bash('node scripts/retro.mjs --apply'), agent_type: 'mavci-builder' }, 'an agent applies into the system repo'],
   ['deny', { ...bash('node scripts/retro.mjs --clear'), agent_type: 'mavci-verifier' }, 'an agent deletes the queued findings'],
   ['allow', bash('node scripts/retro.mjs --apply'), 'the OPERATOR applies'],
-  ['deferToUser', bash('node scripts/retro.mjs --clear'), 'the operator clears - deliberate act'],
+  ['ask', bash('node scripts/retro.mjs --clear'), 'the operator clears - deliberate act'],
   // 0.1.13 gave --clear an argument, because the queue is a directory and a bare
   // --clear could delete one file while another stayed queued with nothing left
   // pointing at it. The authority is unchanged, and these two say so: a flag
@@ -250,7 +250,7 @@ const CASES = [
   // an agent the one deletion it must never make.
   ['deny', { ...bash('node scripts/retro.mjs --clear pending-system-change-0.1.12.md'), agent_type: 'mavci-verifier' },
     'an agent deletes a NAMED queued file'],
-  ['deferToUser', bash('node scripts/retro.mjs --clear pending-system-change-0.1.12.md'),
+  ['ask', bash('node scripts/retro.mjs --clear pending-system-change-0.1.12.md'),
     'the operator clears a named file'],
 
   // must NOT be blocked - a guard that blocks everything is useless
@@ -387,6 +387,111 @@ try {
         + 'The two forms name the same agent and must be governed identically.');
     }
   }
+/* --- THE ACCEPTED SET, WHICH IS NOT OURS TO DECIDE -----------------------
+ *
+ * Carried-forward item 7, closed at 0.1.33. For seven releases this file held
+ * eleven cases whose expected value was the literal `'deferToUser'` - a string
+ * Claude Code does not accept - so every one of them asserted that THE GUARD
+ * EMITS WHAT THE GUARD EMITS. Internally consistent, and never once compared
+ * against the contract outside it. That is the shape this repository has now
+ * found six times, and 0.1.30 named it: the fake answered the question the
+ * caller wished it had asked.
+ *
+ * QUOTED VERBATIM from the decision-control text at
+ * https://code.claude.com/docs/en/hooks-guide, read 2026-09-05:
+ *
+ *   "On `PreToolUse`, Claude Code handles each `permissionDecision` value as
+ *    follows:
+ *      `"allow"`: skip the interactive permission prompt. Deny and ask rules,
+ *        including enterprise managed deny lists, still apply, as do prompts
+ *        for MCP tools marked `requiresUserInteraction` and for connector tools
+ *        your organization set to `ask` in sessions where that setting reaches
+ *        Claude Code
+ *      `"deny"`: cancel the tool call and send the reason to Claude
+ *      `"ask"`: show the permission prompt to the user as normal
+ *    A fourth value, `"defer"`, is available in non-interactive mode with the
+ *    `-p` flag. It exits the process with the tool call preserved so an Agent
+ *    SDK wrapper can collect input and resume."
+ *
+ * THIS IS A TRANSCRIPTION OF AN EXTERNAL CONTRACT, and it is the honest limit of
+ * what a zero-dependency offline check can do: nothing here fetches that page,
+ * so this constant is only as current as the date above. What it buys is that
+ * the set is now written down as SOMEBODY ELSE'S, with a citation a reader can
+ * re-check in one fetch - rather than being implied by whatever the guard
+ * happened to emit. Re-verify it when Claude Code's hook contract changes; the
+ * blanket assertion below is what makes a new value a deliberate act.
+ */
+const ACCEPTED_PERMISSION_DECISIONS = ['allow', 'deny', 'ask', 'defer'];
+
+/* A. NOTHING THE GUARD EMITS MAY FALL OUTSIDE THAT SET.
+ *
+ * Blanket, over every case above, rather than per-case. A per-case expectation
+ * is what failed for seven releases: eleven of them expected an invalid string
+ * and all eleven passed. This one cannot pass on a value the contract does not
+ * contain, whatever any individual case expects. */
+{
+  const emitted = new Set();
+  for (const [, input] of CASES) {
+    try { emitted.add(runGuard(input).decision); } catch { /* reported by the loop above */ }
+  }
+  const outside = [...emitted].filter((d) => !ACCEPTED_PERMISSION_DECISIONS.includes(d));
+  if (outside.length) {
+    failures.push(`the guard emits permissionDecision value(s) Claude Code does not accept: `
+      + `${outside.map((d) => JSON.stringify(d)).join(', ')}. Accepted: `
+      + `${ACCEPTED_PERMISSION_DECISIONS.join(', ')} (hooks-guide, decision control). An `
+      + 'unrecognised value is not a weaker decision, it is NO decision: the tier it belongs to '
+      + 'stops being enforced and nothing reports that.');
+  } else {
+    console.log(`  ok   every permissionDecision the guard emits is in Claude Code's accepted set `
+      + `(${[...emitted].sort().join(', ')})`);
+  }
+
+  /* B. AND TIER 2 IS `ask` SPECIFICALLY, NOT MERELY SOMETHING VALID.
+   *
+   * A is satisfied by a guard that answers `allow` to everything. This is the
+   * discriminating half: tier 2 exists to put the question to the operator, and
+   * `"ask"` is the only value documented to "show the permission prompt to the
+   * user as normal". */
+  const tier2 = runGuard(bash('node scripts/state.mjs --reseal'));
+  if (tier2.decision === 'ask') {
+    console.log('  ok   the tier-2 confirm emits "ask", the value documented to show the prompt');
+  } else {
+    failures.push(`the tier-2 confirm emitted ${JSON.stringify(tier2.decision)}, not "ask". `
+      + 'Tier 2 is the channel that puts a question to the operator, and "ask" is the only value '
+      + 'documented to show the permission prompt.');
+  }
+
+  /* C. AND IT IS NOT `defer`, WHICH IS THE ADJACENT-AND-WRONG ONE.
+   *
+   * `defer` is in the accepted set, so A cannot catch it. The documentation is
+   * explicit that it belongs to non-interactive `-p` mode and "exits the process
+   * with the tool call preserved so an Agent SDK wrapper can collect input and
+   * resume" - which in an interactive session is not a question, it is a
+   * different failure. Item 7 predicted exactly this confusion before the table
+   * was read, and this assertion is what stops the next reader resolving it the
+   * other way. */
+  if (tier2.decision === 'defer') {
+    failures.push('the tier-2 confirm emitted "defer". That value exits the process for an Agent '
+      + 'SDK wrapper to resume, in -p mode. It does not ask anybody anything in an interactive '
+      + 'session.');
+  }
+
+  /* D. AND THE DEAD STRING CANNOT COME BACK.
+   *
+   * A source sweep, because A, B and C all run the guard and would go quiet if
+   * some future branch reintroduced `deferToUser` on a path no case reaches. */
+  const guardSrc = fs.readFileSync(GUARD, 'utf8');
+  const live = guardSrc.split('\n')
+    .filter((l) => l.includes('deferToUser') && !/^\s*\*/.test(l) && !l.includes('//'));
+  if (live.length) {
+    failures.push(`risk-guard.mjs still emits or references "deferToUser" outside a comment: `
+      + `${live.map((l) => l.trim().slice(0, 60)).join(' | ')}. It is not in Claude Code's accepted `
+      + 'set, and a decision it does not accept is a decision that is not applied.');
+  } else {
+    console.log('  ok   "deferToUser" survives only in the comment recording why it was wrong');
+  }
+}
+
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
@@ -400,7 +505,7 @@ if (failures.length) {
 const roster = Object.keys(SCOPES);
 console.log(`risk guard: ${CASES.length} cases behave as specified `
   + `(${CASES.filter((c) => c[0] === 'deny').length} deny, `
-  + `${CASES.filter((c) => c[0] === 'deferToUser').length} confirm, `
+  + `${CASES.filter((c) => c[0] === 'ask').length} confirm, `
   + `${CASES.filter((c) => c[0] === 'allow').length} allow)`);
 // Reported separately and by name. The count above stayed at 62 through the
 // whole 6.22 defect, so a total that silently absorbs the roster cases would

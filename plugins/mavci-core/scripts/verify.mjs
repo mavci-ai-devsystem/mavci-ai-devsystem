@@ -32,6 +32,7 @@
  * two would disagree on exactly the run where it mattered.
  */
 
+import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import {
@@ -42,6 +43,7 @@ import {
   abs, exists, readTextOrNull, readJsonOrNull, walk, nowIso, canonicalJson, matchesAny, toPosix,
 } from './lib/fsx.mjs';
 import { rulesFor, ruleById } from './rules/index.mjs';
+import { verdictOutcome } from './lib/route.mjs';
 import {
   loadContext, validateAll, verifyIntegrity, recordVerdict, readControlTask, attemptsTotal,
   isBaselined, activeWaiver, pluginVersion, projectRoot,
@@ -264,9 +266,10 @@ export function summarise(checks, ranIds) {
   return { counts, passingIds: passing };
 }
 
-export function buildVerdict(root, { checks, summary, scope, task_id = null, attempt = null }) {
+export function buildVerdict(root, { checks, summary, scope, task_id = null, attempt = null,
+  criteria = null }) {
   const ctx = loadContext(root);
-  return {
+  const doc = {
     schema_version: 1,
     project_id: ctx.state?.project_id ?? ctx.manifest?.project_id ?? 'unknown',
     task_id,
@@ -278,17 +281,31 @@ export function buildVerdict(root, { checks, summary, scope, task_id = null, att
     checks: checks.filter((c) => c.status !== 'pass'), // passing checks are the default; recording them is noise
     summary,
   };
+  /* ONE DERIVATION, NOT TWO. The router decides pass/fail/incomplete from a
+   * verdict; a writer computing it independently is two answers to one question
+   * and they diverge the moment either is edited. So the writer asks the same
+   * function the reader asks, which is why it is imported rather than copied.
+   *
+   * With no criteria supplied the FIELD IS ABSENT, not empty. An empty array
+   * would assert that the criteria were examined and there were none; absence
+   * says the run did not answer, which is what a standards-only run did. */
+  if (Array.isArray(criteria)) {
+    doc.criteria = criteria;
+    doc.verdict = verdictOutcome(doc);
+  }
+  return doc;
 }
 
 /**
  * One call: run, classify, summarise, build. Everything else is presentation.
  */
-export async function evaluate(root = projectRoot(), { scope = 'full', task_id = null, attempt = null } = {}) {
+export async function evaluate(root = projectRoot(), { scope = 'full', task_id = null, attempt = null,
+  criteria = null } = {}) {
   const ctx = loadContext(root);
   const { findings, ran, scope: actualScope, ruleErrors } = await runChecks(root, { scope });
   const checks = classify(findings, { baseline: ctx.baseline, waivers: ctx.waivers });
   const { counts } = summarise(checks, ran);
-  const verdict = buildVerdict(root, { checks, summary: counts, scope: actualScope, task_id, attempt });
+  const verdict = buildVerdict(root, { checks, summary: counts, scope: actualScope, task_id, attempt, criteria });
   return { verdict, checks, findings, ran, ruleErrors, ctx };
 }
 
@@ -393,7 +410,40 @@ async function main() {
     process.exit(ci ? 1 : 0);
   }
 
-  const { verdict } = await evaluate(root, { scope, task_id, attempt });
+  /* --criteria takes a PATH, never inline JSON. An argument goes through the
+   * shell, and 0.1.31 records what that costs: `--record` lost four backticked
+   * words to command substitution, one of them the word the finding was about.
+   *
+   * THIS IS THE PLUMBING HALF OF FINDING 6 FIX 3, AND NOT THE AGENT HALF. It
+   * makes `criteria[]` populable at all - without some writer the fail-closed
+   * router is a deadlock with no key. What it does NOT do is give the verifier
+   * a way to produce this file: mavci-verifier holds no Write and no Edit, so
+   * today only the main session can supply it. The agent that is qualified to
+   * judge the task still cannot record its judgement. */
+  const critIx = argv.indexOf('--criteria');
+  let criteria = null;
+  if (critIx !== -1) {
+    const cp = argv[critIx + 1];
+    if (!cp || cp.startsWith('--')) {
+      console.error('--criteria expects a path to a JSON array of per-criterion results.');
+      process.exit(2);
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(fs.readFileSync(cp, 'utf8'));
+    } catch (err) {
+      console.error(`--criteria ${cp}: ${err.message}. Refusing to record a verdict whose criteria `
+        + 'could not be read - an unreadable input recorded as an absent one is the fail-quiet shape.');
+      process.exit(2);
+    }
+    if (!Array.isArray(parsed)) {
+      console.error(`--criteria ${cp}: expected a JSON array, got ${typeof parsed}.`);
+      process.exit(2);
+    }
+    criteria = parsed;
+  }
+
+  const { verdict } = await evaluate(root, { scope, task_id, attempt, criteria });
 
   if (advisory) {
     // PostToolUse: informational only, must never exit non-zero and never block.

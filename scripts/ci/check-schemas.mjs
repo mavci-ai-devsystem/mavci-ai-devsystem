@@ -67,6 +67,7 @@ for (const f of files) {
     ['state.schema.json', 'phase', config.PHASES],
     ['hook-run.schema.json', 'event', config.HOOK_RUN_EVENTS],
     ['unverified.schema.json', 'fault', config.GATE_FAULT_KINDS],
+    ['verdict.schema.json', 'verdict', config.VERDICTS],
   ];
   for (const [file, prop, fromConfig] of pairs) {
     const p = path.join(DIR, file);
@@ -77,6 +78,40 @@ for (const f of files) {
       failures.push(`${file} ${prop} enum ${JSON.stringify(inSchema)} disagrees with config.mjs ${JSON.stringify(fromConfig)}`);
     } else {
       console.log(`  ok   ${file} ${prop} enum matches config.mjs`);
+    }
+  }
+}
+
+// The same rule one level down. `criteria[]` lives in $defs, which the loop
+// above cannot reach, and a closed enum nobody compares is a closed enum that
+// drifts - finding 6's two pairs are exactly the ones that must not collapse:
+// skipped/not_run (a decision vs an absence) and executed/inspected (run vs read).
+{
+  const config = await import(pathToFileURL(path.join(ROOT, 'plugins/mavci-core/scripts/config.mjs')).href);
+  const doc = JSON.parse(fs.readFileSync(path.join(DIR, 'verdict.schema.json'), 'utf8'));
+  const crit = doc.$defs?.criterion;
+  if (!crit) {
+    failures.push('verdict.schema.json: no $defs.criterion, so criteria[] is unconstrained');
+  } else {
+    for (const [prop, fromConfig] of [['status', config.CRITERION_STATUSES], ['mode', config.CRITERION_MODES]]) {
+      const inSchema = crit.properties?.[prop]?.enum;
+      if (JSON.stringify(inSchema) !== JSON.stringify(fromConfig)) {
+        failures.push(`verdict.schema.json criterion.${prop} enum ${JSON.stringify(inSchema)} `
+          + `disagrees with config.mjs ${JSON.stringify(fromConfig)}`);
+      } else {
+        console.log(`  ok   verdict.schema.json criterion.${prop} enum matches config.mjs`);
+      }
+    }
+    // REQUIRED, and it is the assertion that keeps `mode` from being optional in
+    // practice: a result recorded without saying whether it was run or read is
+    // the prose this finding exists to replace.
+    const req = Array.isArray(crit.required) ? crit.required : [];
+    for (const f of ['id', 'status', 'mode']) {
+      if (!req.includes(f)) failures.push(`verdict.schema.json criterion.${f} is not required, so a `
+        + 'result can be recorded without it');
+    }
+    if (['id', 'status', 'mode'].every((f) => req.includes(f))) {
+      console.log('  ok   verdict.schema.json criterion requires id, status and mode');
     }
   }
 }

@@ -171,7 +171,43 @@ export const TASK_STATUS = ['pending', 'in_progress', 'done', 'failed', 'blocked
  */
 export const CHECK_STATUS = ['pass', 'fail', 'waived', 'baselined', 'error', 'not_checked'];
 export const SEVERITIES = ['critical', 'blocker', 'warning', 'info'];
-export const VERDICTS = ['pass', 'fail'];
+/**
+ * `incomplete` joins pass/fail at 0.1.33, and it is a LOCKED-FORMAT change made
+ * deliberately (ROADMAP data-format constraint 4, updated in the same commit).
+ *
+ * cartoonify finding 6. A verdict's `checks[]` are standards-checker findings;
+ * the acceptance criteria - the artefact the operator reads and approves by hash
+ * - had no representation at all. So a verdict was a STRICT SUBSET of what the
+ * task was judged on, and a subset is always MORE OPTIMISTIC than the truth,
+ * never less: every criterion the gate does not cover is a criterion that cannot
+ * fail the verdict. Task 0001 recorded `pass` while criterion 4 was reproducibly
+ * failing, and the router read that and said `document`.
+ *
+ * Two values could not express the state that was actually true - "nobody knows
+ * whether this passed" - so it was recorded as the one that lets work proceed.
+ */
+export const VERDICTS = ['pass', 'fail', 'incomplete'];
+
+/**
+ * Per-criterion result. The two pairs that matter are the ones prose was
+ * carrying, and each distinguishes a thing from its comfortable neighbour:
+ *
+ *   `skipped` vs `not_run` - skipped is a DECISION, recorded before the run: the
+ *   criterion is not applicable, or it is verified elsewhere by someone named.
+ *   `not_run` is an ABSENCE: nothing executed it and nobody decided that. A
+ *   verdict holding one may never be `pass`, because a criterion nobody ran is
+ *   not a criterion that passed.
+ *
+ *   `executed` vs `inspected` - executed means the criterion's own check ran and
+ *   its result was observed. `inspected` means someone read the code and formed
+ *   a view. On gate6 task 0002 "execution evidence exists only from the builder
+ *   agent" survived in prose; on cartoonify criteria 20 and 29 needed a browser
+ *   the verifier does not have and were read instead. Both are legitimate and
+ *   neither is execution, and the difference belonged in the record.
+ */
+export const CRITERION_STATUSES = ['pass', 'fail', 'skipped', 'not_run'];
+export const CRITERION_MODES = ['executed', 'inspected'];
+
 export const RISK_TIERS = ['sandbox', 'standard', 'regulated'];
 
 /** Hook events wired to stamp control/hook-run.json. Mirrors hook-run.schema.json. */

@@ -191,7 +191,7 @@ from the tree, and the check is named beside it.
                   the entry below explains the jump to 28: 0.1.18
                   added four, to selftest.yml only, where no
                   release gate ever ran them. See the 0.1.18 entry.
-    34 scripts    every check script in scripts/ci/                check-ci-gates.mjs
+    36 scripts    every check script in scripts/ci/                check-ci-gates.mjs
                   Larger than the suite above: the suite is what
                   release.yml runs, and check-pretag declares four
                   excluded steps with reasons on every pass.
@@ -1914,6 +1914,212 @@ gate6 finding 25 — with the cheap fix named and refused, because deleting the
 enforcement sentence trades a false claim for no claim and takes it away from the
 agent path, which is the path it was written for and the one that works.
 
+### 0.1.33 — the channel that was designed, believed verified, and never asked anything
+
+**Cut 2026-09-05**, against four items in a fixed order the operator set, each
+the precondition of the next: cartoonify finding 9, cartoonify finding 6,
+carried-forward item 7, then the orchestrator. The order is not negotiable and
+the reasoning is in each section.
+
+#### THE HEADLINE — item 7, and it is not a one-word fix
+
+**`risk-guard.mjs`'s tier-2 confirm emitted `deferToUser` from 0.1.2 to 0.1.32,
+and that string is in no accepted set. So there has never been a working
+tier-2 confirm.** What asked, when anything asked, was Claude Code's own
+permission flow. Tier 3 was unaffected throughout — `deny` was always valid and
+was observed hard-blocking.
+
+The decision-control text loaded on 2026-09-05 and is quoted verbatim in the
+guard's header, from `https://code.claude.com/docs/en/hooks-guide`:
+
+> `"allow"`: skip the interactive permission prompt … `"deny"`: cancel the tool
+> call and send the reason to Claude … `"ask"`: show the permission prompt to the
+> user as normal
+>
+> A fourth value, `"defer"`, is available in non-interactive mode with the `-p`
+> flag. It exits the process with the tool call preserved so an Agent SDK wrapper
+> can collect input and resume.
+
+`deferToUser` appears nowhere in it. **`ask` is the value.** `defer` is the
+adjacent-and-wrong one item 7 predicted before the table was read: it exits the
+process for a wrapper to resume, which in an interactive session is not a
+question but a different failure.
+
+**Why this is the headline rather than a line in the changelog.** The channel was
+DESIGNED — the whole tier-2 tier exists for it. It was BELIEVED VERIFIED —
+`NATIVE-CAPABILITIES` 4.3 recorded `deferToUser` as **verified** and labelled it
+"the tier-2 confirm mechanism", with a source URL. And it was TESTED — eleven
+cases in `check-risk-guard.mjs` asserted the literal string, and all eleven
+passed, for seven releases. Every one of those artefacts was internally
+consistent, and not one of them compared the value against the contract outside
+it. **The check asserted that the guard emits what the guard emits.** That is
+0.1.30's finding — the fake answered the question the caller wished it had
+asked — arriving in the layer that decides whether a control is applied at all.
+
+**So the assertion that changed matters more than the string.** The eleven cases
+were not merely updated to `ask`. A blanket assertion now requires **every**
+`permissionDecision` the guard emits, across all 97 cases, to be a member of the
+documented set, and that set is written down in the check as SOMEBODY ELSE'S,
+with its verbatim quote, its URL and the date it was read. Nothing in CI fetches
+that page — zero dependencies, offline — so the honest limit is stated beside it:
+this is a transcription, only as current as its date, and the blanket assertion
+is what makes a new value a deliberate act rather than a drift.
+
+**Three mutations, and the middle one is the point.** Restoring `deferToUser`
+reddens the set assertion, the tier-2 assertion and the source sweep. `defer`
+leaves **the set assertion green** — it is a valid value — and is caught only by
+the two tier-2 assertions. `allow` is valid and silent and is caught only by the
+tier-2 one. Two tests, two different questions, demonstrated rather than argued.
+
+**What is still NOT established, and it is not what item 7 was about.** The
+documentation does not say what Claude Code does with an INVALID value. This
+file's claim since 0.1.11 — that the validator rejects the whole payload and the
+call falls through to the normal permission flow — is not sourced from the docs
+and was not verified here. It does not affect the fix: a value outside the set
+was not doing what the code intended by any path. **It is also what a search
+hands back from this very file**, which is the circle item 7 existed to break —
+during the investigation an agent asked for the primary source and quoted our own
+CLAUDE.md back. 4.3 is corrected in the same commit so the two documents no
+longer agree by copying each other.
+
+#### Finding 9 — the escalation channel stopped depending on memory
+
+`retro --apply` could not resolve the system repository from a cache install for
+**three consecutive sessions**, and in all three the findings survived because a
+person remembered to copy a file by hand out of a directory that exists to be
+thrown away. Refusing was correct and stayed correct; a refusal that works only
+while somebody is paying attention is not a control.
+
+`escrowDir()` writes to `<config>/mavci-lessons` — **not** under `plugins/`,
+which propagation resets, so the escrow is not gate5's defect with a friendlier
+message. The bytes are written **before the message is composed**, the message
+says NOT APPLIED, names the paths, and forbids `--clear`. `apply()` is exported
+and returns `{ok, written, escrow, message}` instead of exiting: the decision is
+testable, the exit is the CLI's, which is `lib/release-gate.mjs`'s split and
+`cutTag`'s.
+
+Five assertions, and **A9e is the load-bearing placement**: with a repo
+resolvable it must still APPLY and escrow nothing, because a build that escrows
+unconditionally satisfies the other four and has replaced the command. Two
+mutations, one red each: escrow under `<config>/plugins` reddens the location
+assertion alone, unconditional escrow reddens A9e alone.
+
+**Not built:** the finding's fix 4 — `doctor` warning at session start when a
+queue exists AND `--apply` cannot resolve a target. And `main()` calling
+`apply()` is one unasserted line, the same named residual as `cutTag`'s call
+site: a release gate cannot cut a real tag to prove it does, and this check
+cannot run a real `--apply` without writing into `docs/lessons/`.
+
+#### Finding 6 — PARTIAL, AND WHOEVER PROPAGATES THIS MUST EXPECT THE STOP
+
+**LANDED.** `criteria[]` on the verdict, with `$defs.criterion` requiring `id`,
+`status` and `mode` — so a result recorded without saying whether it was **run or
+read** fails the schema rather than reporting inspection as execution. Two closed
+enums in `config.mjs`, asserted against the schema: `status` ∈
+pass|fail|skipped|not_run, `mode` ∈ executed|inspected. `verdict` gains
+`incomplete` — a **locked-format change** (ROADMAP data-format constraint 4,
+updated in the same commit) made on the operator's ruling, because two values
+could not express *"nobody knows whether this passed"* and so that state was
+recorded as the one that lets work proceed. One `not_run` forces `incomplete`.
+A verdict with **no** `criteria[]` reads as `incomplete`. `fail` outranks
+`incomplete`. The `document` action now says `29 of 32 criteria executed, 2
+inspected (READ, not run), 1 skipped by decision`, so `mode` reaches the operator
+instead of dying in a subagent's prose. And `verify.mjs --record --criteria
+<path>` — a path, never inline JSON.
+
+**THE CONSEQUENCE, AND IT IS NOT A REGRESSION.** Every verdict on disk today
+lacks `criteria[]`, and nothing yet produces one automatically. **So after
+propagating, the chain stops at `incomplete` after every verify.** That is the
+intended fail-closed state: the alternative is that every existing verdict
+silently becomes a pass, on exactly the criteria the operator approved by hash.
+The router names three exits — re-verify with a criteria file,
+`/mavci-core:retro`, and the operator's `--task-status <id> --status done`,
+printed **with its cost attached** rather than hidden, because a fail-closed gate
+whose only exit is unwritten is a deadlock.
+
+**DID NOT LAND, recorded as an addendum inside finding 6's own block in
+`docs/lessons/cartoonify-2026-09-05.md`:** the verifier still cannot record its
+own judgement (it holds no `Write` and no `Edit`, so `--criteria` is a flag the
+main session runs — the agent qualified to judge the task remains the one that
+cannot write down what it judged); nothing derives per-criterion results from a
+spec; re-runnability is out of scope by the operator's ruling; and
+`lib/release-gate.mjs` does not read `criteria[]`.
+
+**Why the placement of the `incomplete` arm is load-bearing.** It sits AHEAD of
+`passed`. On the broken build this state WAS `passed` — `verdict.verdict ===
+'pass'` is true of a verdict that examined no criteria — so an arm placed after it
+would be unreachable and would look exactly like a fix. That is 0.1.29's P12 one
+component over.
+
+#### The orchestrator — it runs what is on disk and reads its own outputs
+
+`skills/ship/SKILL.md` gains two sections. **Read your own outputs:** never ask
+the operator to paste something you can run; to see the application running start
+it in the **background** and read from there — a dev server never exits, so a
+foreground call blocks the turn, which is a constraint of the tool and not of the
+risk policy; before a **second** round of diagnosis on one symptom, name the
+cheapest probe that DISCRIMINATES and run that first; ask the operator only for
+what is genuinely out of reach and say which. On 2026-09-05 a 502, a
+`route.ts:104` server log and a probe result were hand-carried into a session
+that could have run all three, and the diagnosis still took two rounds and eight
+candidates, none correct, settled by a probe that answered in **0.58 seconds**.
+
+**Ask in the session:** run the step whose authority is already on disk, hand
+over the one that RECORDS a decision. `--approve-spec` and `--waive` stay
+prose-banned, and the reason is evidence rather than authority: `state.mjs:565`
+writes `by: 'operator'` as a constant, so the file is byte-identical whether the
+operator typed it or the orchestrator did. Lifting the ban before the record can
+carry who was asked and what they answered trades a weak guarantee for none.
+`--reseal` stays banned for a **different** reason, now written down: it is
+mechanics whose legitimacy depends on a decision recorded nowhere — unlike
+`--block` and `--waive` it takes no `--reason`, so there is no question anyone
+could ask whose answer would land in the record.
+
+`check-ship-contract.mjs` is new, eight assertions, and its header says which
+five are prose and what that does and does not prove. **Two are not prose:** the
+guard is run and must not deny to the main session what ship says it may run
+(with the control that it still denies to a subagent, or the grant has widened
+for everyone), and ship's copy of `WORKFLOW_MOVES` must equal
+`risk-guard.mjs`'s — a second list of the exempt set is the shape that had
+check-pretag running 13 of release.yml's 17. Five mutations, one red each; C3 and
+C4 are each other's control, because a contract that bans everything satisfies
+one and a contract that bans nothing satisfies the other.
+
+**`--record-corpus` stayed behind the tier-2 confirm, deliberately.** The
+orchestrator may run it — it records an outcome that is COMPUTED and refuses
+seven ways for a caller to supply the answer — and it will prompt. **That prompt
+fires for the first time in this release**, because until item 7 the confirm was
+inert. Loosening a control is a change that deserves its own pass with assertions
+in both directions, and it was not one of the four items.
+
+#### Two findings about the instruments, not the code
+
+**The mutation harness could not discriminate.** It collected failures by
+matching the substring `FAIL `, and a SUCCESS line reading
+`ok G7 … with a failing criterion is a FAIL - got rework` contains it. So five
+mutations all reported an extra red for the wrong reason, and the tool that
+measures whether assertions discriminate could not discriminate itself. **Sixth
+scale of the pattern this week — comment, fixture, lesson, assertion, placement,
+and now the measuring instrument — and the first inside it.**
+
+**A prose check failed on correct text because a sentence wrapped.**
+`check-ship-contract`'s first run reddened on a rule that was present, two words
+after a line break. A check that depends on where a paragraph was reflowed is
+asserting the line width, not the property. Prose is now matched against a
+whitespace-flattened copy, on READ only.
+
+#### Counts, corrected
+
+**36 check scripts in `scripts/ci/`, not 37.** Two consecutive reports of mine
+said 37 and the operator repeated it twice without checking — which is the shape
+the whole day was spent on, one level out from the code. The line in "Current
+state" above is updated from 34 to 36. 35 of the 36 pass; `check-tags` fails
+because main is ahead of `v0.1.32`, which is what this bump and its tag close.
+
+`check-pretag --selftest` is 46 assertions and derives the suite from
+`release.yml`, so `check-ship-contract.mjs` entered the release gate the moment
+it was wired; `selftest.yml` carries it too, which the subset rule requires.
+
 ### Carried forward — still not built
 
 **Items 1–4 and 5–6 below remain unbuilt; item 7 is held deliberately, for the
@@ -2045,7 +2251,42 @@ nobody will notice, which is also the argument for not deferring it twice.
    pointer names. Cheapest item here, and the one that makes an orphaned task
    self-describing with no tooling at all.
 
-7. **`risk-guard`'s tier-2 confirm emits a value Claude Code rejects.** `confirm()`
+7. **CLOSED in 0.1.33 — the tier-2 confirm now emits `ask`.** The condition this
+   entry set was met before the string was touched: the decision-control text
+   loaded and was quoted verbatim from
+   `https://code.claude.com/docs/en/hooks-guide` on 2026-09-05 —
+   *"`"allow"`: skip the interactive permission prompt … `"deny"`: cancel the
+   tool call and send the reason to Claude … `"ask"`: show the permission prompt
+   to the user as normal"*, plus *"A fourth value, `"defer"`, is available in
+   non-interactive mode with the `-p` flag. It exits the process with the tool
+   call preserved so an Agent SDK wrapper can collect input and resume."*
+   `deferToUser` appears nowhere in it. **`ask` is the value; `defer` is the
+   adjacent-and-wrong one this entry predicted**, and it is now asserted against
+   by name, because it IS in the accepted set and so the set-membership check
+   cannot catch it.
+
+   **The assertion this entry demanded is the one that changed.** The eleven
+   cases that asserted the literal string were not merely updated: a blanket
+   assertion now requires every value the guard emits, across all 97 cases, to
+   be a member of the documented set, and the set is written down as SOMEBODY
+   ELSE'S with its citation and read-date attached. Demonstrated failing three
+   ways: restoring `deferToUser` reddens the set assertion, the tier-2 assertion
+   and the source sweep; `defer` reddens only the two tier-2 assertions, the set
+   assertion staying green *because defer is valid*; `allow` reddens only the
+   tier-2 one.
+
+   **What is still NOT established, and it is not what this entry was about.**
+   The documentation does not say what Claude Code does with an INVALID value.
+   The sentence below — that the validator rejects the whole payload and the
+   call falls through — has been in this file since 0.1.11, is not sourced from
+   the docs, and was not verified here. It does not affect the fix. **It is also
+   the thing a search will hand back to you from this very file, which is the
+   circle this entry exists to break: 4.3 was corrected in the same change, so
+   the two no longer agree by copying each other.**
+
+   The original entry follows, because its reasoning is why it took a release.
+
+   **`risk-guard`'s tier-2 confirm emits a value Claude Code rejects.** `confirm()`
    sends `permissionDecision: "deferToUser"`; the runtime validator accepts
    `"allow"|"deny"|"ask"|"defer"` and rejects the whole payload, so no decision is
    applied and the call falls through to the normal permission flow. Same failure

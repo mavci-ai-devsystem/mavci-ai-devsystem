@@ -11,8 +11,33 @@
  *   - MCP permission rules cannot carry parameters in a settings file (5.9), so
  *     "block prod but allow staging" is only expressible here
  *
- * Decisions: `deny` (tier 3) and `deferToUser` (tier 2). Anything else falls
- * through to the normal permission flow.
+ * Decisions: `deny` (tier 3) and `ask` (tier 2). Anything else falls through to
+ * the normal permission flow.
+ *
+ * `ask` REPLACES `deferToUser` AT 0.1.33, AND THE OLD VALUE WAS NOT IN THE
+ * ACCEPTED SET AT ALL. Quoted verbatim from the decision-control text at
+ * https://code.claude.com/docs/en/hooks-guide (read 2026-09-05):
+ *
+ *   "On `PreToolUse`, Claude Code handles each `permissionDecision` value as
+ *    follows:
+ *      `"allow"`: skip the interactive permission prompt. Deny and ask rules,
+ *        including enterprise managed deny lists, still apply [...]
+ *      `"deny"`: cancel the tool call and send the reason to Claude
+ *      `"ask"`: show the permission prompt to the user as normal
+ *    A fourth value, `"defer"`, is available in non-interactive mode with the
+ *    `-p` flag. It exits the process with the tool call preserved so an Agent
+ *    SDK wrapper can collect input and resume."
+ *
+ * `deferToUser` appears nowhere in that documentation. So tier 2 emitted a value
+ * outside the accepted set for every release from 0.1.2 to 0.1.32, and NO tier-2
+ * confirm was ever applied: what asked, when anything asked, was Claude Code's
+ * own permission flow. Tier 3 was unaffected - `deny` was always valid, and was
+ * observed hard-blocking.
+ *
+ * `defer` IS THE ADJACENT-AND-WRONG VALUE, and the reason is in the quote: it
+ * exits the process for an SDK wrapper to resume, in `-p` mode. In an
+ * interactive session that is not a question, it is a different failure. `ask`
+ * is the one that shows a prompt, which is what tier 2 has always meant.
  */
 
 import fs from 'node:fs';
@@ -267,7 +292,7 @@ function decide(decision, reason) {
 }
 
 const deny = (reason) => decide('deny', `mavci risk policy: ${reason}`);
-const confirm = (reason) => decide('deferToUser', `mavci risk policy (tier 2): ${reason}`);
+const confirm = (reason) => decide('ask', `mavci risk policy (tier 2): ${reason}`);
 
 /** No opinion on the call itself, but still deliver any queued notice. */
 function allow() {

@@ -24,7 +24,7 @@ Scope grew in revision 2 (baseline, waivers, redaction, control plane, fail-clos
 5. `scripts/redact.mjs` — the four pattern classes from ARCHITECTURE 4.4; modes `--sweep` and `--selftest`.
 6. `scripts/verify.mjs` — the 12 Phase 1 rules (below); modes `--gate`, `--advisory`, `--changed`, `--ci`, `--format=github`; per-rule try/catch where an errored rule counts as a blocker.
 7. `scripts/gate.mjs` — the fail-closed wrapper: 25 s internal budget under a 30 s hook timeout, completion sentinel, integrity check, heartbeat stamp, loop counter, baseline and waiver filtering.
-8. `scripts/risk-guard.mjs` — PreToolUse: tier-3 hard blocks, tier-2 `deferToUser`, phase gate, per-agent `edit_scope`, secret scan of tool input, control-plane Bash guard, previous-turn heartbeat check.
+8. `scripts/risk-guard.mjs` — PreToolUse: tier-3 hard blocks, tier-2 `ask`, phase gate, per-agent `edit_scope`, secret scan of tool input, control-plane Bash guard, previous-turn heartbeat check.
 9. `scripts/build-agents.mjs` — definition plus contract to `agents/*.md`; strips `_note` keys.
 10. `scripts/doctor.mjs` — settings drift, plugin/CI version skew, `--sync`, `--preflight`, hook self-test, baseline debt, expiring waivers, pending lessons.
 10b. `scripts/retro.mjs` — the escalation channel (0.1.12): `--record` (agent-reachable), `--list`, `--show`, `--apply` and `--clear` (operator only, enforced by caller in `risk-guard.mjs`).
@@ -258,7 +258,9 @@ Enforced by JSON Schema in Phase 1 and asserted in CI.
 1. **`schema_version` (integer) and a `$schema` URL** on every state file, pointing at a stable raw-GitHub path. Version bumps are additive; a field is never repurposed.
 2. **`project_id` on every state file**, so a verdict is meaningful read in isolation and files aggregate across repos without inferring anything from the directory path.
 3. **ISO-8601 UTC with a `Z` suffix** for every timestamp. No local time, no epoch integers.
-4. **Closed enums, declared in schema:** `phase` ∈ {plan, build, verify, release} · `status` ∈ {pending, in_progress, done, failed, blocked} · check `status` ∈ {pass, fail, **waived**, **baselined**, **error**} · `severity` ∈ {**critical**, blocker, warning, info} · `verdict` ∈ {pass, fail} · `risk_tier` ∈ {sandbox, standard, regulated}.
+4. **Closed enums, declared in schema:** `phase` ∈ {plan, build, verify, release} · `status` ∈ {pending, in_progress, done, failed, blocked} · check `status` ∈ {pass, fail, **waived**, **baselined**, **error**} · `severity` ∈ {**critical**, blocker, warning, info} · `verdict` ∈ {pass, fail, **incomplete**} · criterion `status` ∈ {pass, fail, skipped, not_run} · criterion `mode` ∈ {executed, inspected} · `risk_tier` ∈ {sandbox, standard, regulated}.
+**`incomplete` was added to `verdict` at 0.1.33, deliberately and with the operator's ruling recorded** (cartoonify finding 6). A locked enum is locked against drift, not against a decision: two values could not express *"nobody knows whether this passed"*, so that state was recorded as `pass` - the value that lets work proceed - and the router closed a task whose criterion 4 was reproducibly failing. Widening is additive and every verdict already on disk stays valid; `criteria[]` is optional in the schema and required by the router, which is tighter rather than looser, because a document written before the field existed then decides nothing instead of deciding wrongly.
+
 5. **`check_id` is a stable dotted identifier** (`domain.rule`) that never changes meaning. Renaming requires a `renamed_from` field, not a silent edit — otherwise historical verdicts, baselines, and waivers become unreadable.
 6. **One file per entity. Never append to a file that must be parsed.** Verdicts are immutable and numbered.
 7. **Repo-relative POSIX paths only** — no absolute paths, no drive letters, no backslashes. This is what lets a file written on Windows be read by a dashboard on Linux.

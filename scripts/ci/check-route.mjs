@@ -85,9 +85,16 @@ const task = (over = {}) => ({
   blocked_by: null, verdicts: [], title: 't', spec: '.mavci/tasks/0001.md',
   spec_approved: approvalFor(), ...over,
 });
+/* The fixture carries a COMPLETE criteria set, because that is what a verdict is
+ * after finding 6. Cases that want the pre-0.1.33 shape - which is every verdict
+ * on disk today - pass `criteria: undefined` explicitly, and section G is where
+ * that shape is asserted. Defaulting the other way would have every case here
+ * quietly exercising the incomplete arm. */
 const verdict = (over = {}) => ({
   task_id: '0001', attempt: 1, verdict: 'fail', run_at: '2026-09-03T00:00:00Z',
-  summary: { blockers: 2 }, ...over,
+  summary: { blockers: 2 },
+  criteria: [{ id: '1', status: 'pass', mode: 'executed', evidence: null }],
+  ...over,
 });
 /* The spec text, and an approval helper whose hash MATCHES it. Every case that
  * expects the chain to move past `plan` needs one, because an unapproved spec is
@@ -388,6 +395,7 @@ console.log('\nD. the answer is well formed, and the owners exist:');
     route(base({ tasks: [task({ attempts: 3 })], verdicts: [verdict({ attempt: 3 })] })),
     route(base({ tasks: [task({ attempts: 1 })], verdicts: [verdict({ verdict: 'pass' })] })),
     route(base({ state: { phase: 'release' }, tasks: [task({ attempts: 1, status: 'done' })], verdicts: [verdict({ verdict: 'pass' })] })),
+    route(base({ tasks: [task({ attempts: 1 })], verdicts: [verdict({ verdict: 'pass', criteria: undefined })] })),
     route(base({ unverified: { x: 1 } })),
     route(base({ tasks: [task({ phase: 'plan', attempts: 0, status: 'pending', spec_approved: null })] })),
   ];
@@ -555,7 +563,17 @@ console.log('\nF. the CLI over a real control plane:');
   run(STATE, ['--reset-attempts', '0001']);
   run(STATE, ['--attempt', '0001', '--agent', 'mavci-builder']);
   run(STATE, ['--set-phase', 'verify']);
-  const clean = run(VERIFY, ['--record', '--task', '0001']);
+  /* THE CRITERIA FILE IS SUPPLIED BY THE CALLER, and that is the honest state of
+   * finding 6 today: the schema carries the field, the router requires it, and
+   * the verifier still cannot write it - it holds no Write and no Edit. So the
+   * walk plays the part the main session plays, and what it proves is the chain
+   * from a COMPLETE verdict onward. It does not prove any agent can produce one. */
+  const critFile = path.join(tmp, 'criteria.json');
+  fs.writeFileSync(critFile, JSON.stringify([
+    { id: '1', status: 'pass', mode: 'executed', evidence: null },
+    { id: '2', status: 'pass', mode: 'inspected', evidence: null },
+  ]));
+  const clean = run(VERIFY, ['--record', '--task', '0001', '--criteria', critFile]);
   d = decide();
   check(d.action === 'document' && d.dispatch === 'mavci-scribe',
     `F10 a passing verdict routes to the scribe - got ${d.action} (verify exit ${clean.status})`);
@@ -665,6 +683,117 @@ console.log('\nF. the CLI over a real control plane:');
     `F11 and a closed task ends at the operator's release gate - got ${d.action}/${d._status}`);
 
   fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+/* ============ G. FINDING 6 - the verdict must say what the criteria returned
+ *
+ * cartoonify task 0001, 2026-09-05. The verifier executed 29 of 32 acceptance
+ * criteria, found criterion 4 reproducibly FAILING, and said so in its report:
+ * "my overall verdict on task 0001 is FAIL". The verdict it recorded said
+ * `pass`, with five checks all `legal.pages_present` and NO acceptance-criterion
+ * entries, because the schema had no field for them. The router read that and
+ * answered `document`. A human reading prose is what stopped the close.
+ *
+ * THE SHAPE: a verdict that is a strict subset of the acceptance criteria is
+ * always MORE OPTIMISTIC than the truth, never less - every criterion the gate
+ * does not cover is a criterion that cannot fail the verdict. So the error is
+ * not random, it is biased towards pass, on exactly the criteria the operator
+ * spent their review on.
+ *
+ * G1 and G2 are a PAIR and neither is coverage alone. A build that answers
+ * `incomplete` to everything satisfies G1, G3 and G4 and has stopped closing any
+ * task; a build that never answers `incomplete` satisfies G2 and is the defect.
+ * Same pairing as 0.1.26's E6 and section 9's A9e in check-retro.
+ */
+console.log('\nG. the verdict and the acceptance criteria:');
+
+const CRIT = (over = {}) => ({ id: '1', status: 'pass', mode: 'executed', evidence: null, ...over });
+const passing = (n = 3) => Array.from({ length: n }, (_, i) => CRIT({ id: String(i + 1) }));
+
+{
+  /* G1 - THE LIVE DEFECT. Every verdict on disk today looks like this. */
+  const r = route(base({
+    tasks: [task({ attempts: 1 })],
+    verdicts: [verdict({ verdict: 'pass', criteria: undefined })],
+  }));
+  check(r.action === 'incomplete' && r.dispatch === null,
+    `G1 a verdict with no criteria[] is INCOMPLETE, not a pass - got ${r.action}/${r.dispatch}`);
+  check(/no .criteria/.test(r.why),
+    'G1b and it says the record is empty rather than implying the work failed');
+}
+{
+  /* G2 - THE DISCRIMINATING HALF. Complete and passing still closes. */
+  const r = route(base({
+    tasks: [task({ attempts: 1 })],
+    verdicts: [verdict({ verdict: 'pass', criteria: passing(3) })],
+  }));
+  check(r.action === 'document' && r.dispatch === 'mavci-scribe',
+    `G2 a verdict whose criteria all pass still routes to document - got ${r.action}`);
+}
+{
+  /* G3 - not_run FORCES incomplete. The whole claim of the finding. */
+  const c = passing(4);
+  c[2] = CRIT({ id: '3', status: 'not_run', mode: 'executed' });
+  const r = route(base({
+    tasks: [task({ attempts: 1 })],
+    verdicts: [verdict({ verdict: 'pass', criteria: c })],
+  }));
+  check(r.action === 'incomplete',
+    `G3 one not_run criterion makes a "pass" verdict incomplete - got ${r.action}`);
+  check(/not_run/.test(r.why) && /\b3\b/.test(r.why),
+    'G3b and it names how many and which - a count with no id is not a pointer');
+}
+{
+  /* G4 - a DECIDED skip is not an absence. skipped and not_run are the pair
+   * that must not collapse: one is a decision recorded before the run, the
+   * other is nobody having run it. */
+  const c = passing(3);
+  c[1] = CRIT({ id: '2', status: 'skipped', mode: 'inspected' });
+  const r = route(base({
+    tasks: [task({ attempts: 1 })],
+    verdicts: [verdict({ verdict: 'pass', criteria: c })],
+  }));
+  check(r.action === 'document',
+    `G4 a skipped criterion is a decision, not an absence, and does not block - got ${r.action}`);
+}
+{
+  /* G5 - MODE REACHES THE OPERATOR. Recording `mode` and not reporting it moves
+   * the fact from a subagent's prose into a file nobody opens. */
+  const c = passing(3);
+  c[0] = CRIT({ id: '1', status: 'pass', mode: 'inspected' });
+  const r = route(base({
+    tasks: [task({ attempts: 1 })],
+    verdicts: [verdict({ verdict: 'pass', criteria: c })],
+  }));
+  check(/inspected/.test(r.why) && /READ, not run/.test(r.why),
+    `G5 the pass says how many criteria were READ rather than run - why="${r.why}"`);
+}
+{
+  /* G6 - FAIL BEATS INCOMPLETE. A failing criterion is actionable; incomplete
+   * is a question for a person. A verdict holding both reports the one that can
+   * be worked on, or the rework loop is unreachable whenever anything was
+   * skipped by accident. */
+  const c = passing(3);
+  c[0] = CRIT({ id: '1', status: 'fail', mode: 'executed' });
+  c[1] = CRIT({ id: '2', status: 'not_run', mode: 'executed' });
+  const r = route(base({
+    tasks: [task({ attempts: 1 })],
+    verdicts: [verdict({ verdict: 'pass', criteria: c })],
+  }));
+  check(r.action === 'rework' && r.dispatch === 'mavci-builder',
+    `G6 a failing criterion outranks a not_run one and reaches the builder - got ${r.action}`);
+}
+{
+  /* G7 - AND IT OVERRIDES A TOP-LEVEL PASS. The two halves of a verdict can
+   * disagree, and the criteria are the half the operator approved by hash. */
+  const c = passing(2);
+  c[1] = CRIT({ id: '2', status: 'fail', mode: 'executed' });
+  const r = route(base({
+    tasks: [task({ attempts: 1 })],
+    verdicts: [verdict({ verdict: 'pass', criteria: c })],
+  }));
+  check(r.action === 'rework',
+    `G7 verdict:"pass" with a failing criterion is a FAIL - got ${r.action}. This is task 0001.`);
 }
 
 console.log('');

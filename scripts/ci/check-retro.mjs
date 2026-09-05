@@ -646,6 +646,135 @@ try {
   }
 }
 
+/* --- 9. a finding that cannot reach the system repo is ESCROWED, not refused ---
+ * cartoonify finding 9, 2026-09-05, and it is the COUNT that makes it a finding:
+ * THIRD CONSECUTIVE SESSION in which `--apply` could not resolve a target. The
+ * findings reached durability every time because a person remembered to copy the
+ * file by hand.
+ *
+ * Section 7 above established the half that must NOT change - the marketplace
+ * clone is never a write target, because propagation resets it. This is the
+ * other half of the same question. Refusing correctly and then instructing a
+ * human is a control that works only while somebody is paying attention, and the
+ * directory the queue lives in is the disposable one: delete the project and the
+ * queue goes with it, with no warning, and nothing anywhere else ever knew those
+ * findings existed.
+ *
+ * THE ASSERTION IS A ROUND TRIP AND NOT AN EXIT CODE, which is section 7's rule
+ * one step along. `--apply` already exited non-zero on the broken build, with a
+ * clear message naming the manual step - so asserting the refusal, the status or
+ * the wording all pass on the defect. The property is that THE BYTES ARE
+ * SOMEWHERE DURABLE BEFORE THE OPERATOR READS THE MESSAGE.
+ *
+ * A9e is the pair that keeps the rest honest: a build that escrows ALWAYS
+ * satisfies A9a-A9d and has stopped applying anything. Same shape as 0.1.26's
+ * E6 - a gate that always refuses satisfies the refusal assertion alone.
+ */
+{
+  const tmp = makeProject(); cleanup.push(tmp);
+  fs.writeFileSync(queuedPath(tmp, 'pending-system-change.md'), '# Queued\n\nbody one\n');
+  fs.writeFileSync(queuedPath(tmp, 'pending-system-change-0.1.32.md'), '# Queued\n\nbody two\n');
+
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-home-')); cleanup.push(home);
+
+  let res = null;
+  let threw = null;
+  try {
+    res = retro.apply(tmp, { repo: null, configDir: home });
+  } catch (err) {
+    threw = err;
+  }
+
+  if (threw) {
+    bad('--apply with no resolvable system repo threw instead of escrowing the queue ('
+      + threw.message + '). The bytes have to be durable before the message is printed, so this '
+      + 'branch cannot be a refusal that returns nothing.');
+  } else {
+    /* A9a - THE ROUND TRIP. Both queued files, byte for byte, outside the project. */
+    const written = (res && res.escrow && res.escrow.written) || [];
+    const bodies = written.map((f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return ''; } });
+    const carried = ['body one', 'body two'].every((b) => bodies.some((t) => t.includes(b)));
+    if (written.length === 2 && carried) {
+      ok('--apply escrows every queued file outside the project when no system repo resolves');
+    } else {
+      bad('--apply did not write the queue anywhere durable when the system repo could not be '
+        + `resolved (${written.length} file(s) written). Third consecutive session: the queue lives `
+        + 'in a directory that exists to be thrown away, and the only thing carrying it out was the '
+        + 'operator remembering.');
+    }
+
+    /* A9b - WHERE. Outside the project, and outside the zone propagation resets.
+     * Section 7's property restated one level out: it is not enough that the
+     * bytes are somewhere, they must be somewhere that survives both a project
+     * delete and a `git checkout -B main origin/main` in the clone. */
+    const resetZone = path.join(home, 'plugins');
+    const safe = written.length > 0 && written.every((f) => {
+      const r = path.resolve(f);
+      return !r.startsWith(path.resolve(tmp) + path.sep) && !r.startsWith(resetZone + path.sep);
+    });
+    if (safe) {
+      ok('the escrow is outside the project AND outside <config>/plugins, which propagation resets');
+    } else {
+      bad('the escrow landed inside the project or inside the directory propagation resets ('
+        + written.join(', ') + '). A durable copy in the disposable directory is the defect, and a '
+        + 'durable copy in the clone is gate5 2026-09-03 again.');
+    }
+
+    /* A9c - IT DID NOT APPLY, AND IT SAYS SO. Escrowing is not carrying the
+     * finding into the system repository; reporting it as one would be invariant
+     * 5 through the other door. The message must name the path, because a
+     * durable file nobody can find is the memory dependency with extra steps. */
+    const named = typeof res?.message === 'string' && written.some((f) => res.message.includes(f));
+    if (res && res.ok === false && named) {
+      ok('--apply reports NOT applied and names the escrow path it wrote');
+    } else {
+      bad('--apply either reported success for an escrow or did not name where the bytes went '
+        + `(ok=${res && res.ok}). The finding has not reached the system repository, and a caller `
+        + 'that reads this as an apply will clear the queue next.');
+    }
+
+    /* A9d - EVIDENCE IS NEVER OVERWRITTEN. The repo-side path already checks
+     * every destination before writing any of them, for this reason. A second
+     * escrow on the same day must not silently replace the first. */
+    const before = written.map((f) => fs.readFileSync(f, 'utf8'));
+    fs.writeFileSync(queuedPath(tmp, 'pending-system-change.md'), '# Queued\n\nDIFFERENT body\n');
+    let second = null;
+    try { second = retro.apply(tmp, { repo: null, configDir: home }); } catch { /* reported below */ }
+    const unchanged = written.every((f, i) => {
+      try { return fs.readFileSync(f, 'utf8') === before[i]; } catch { return false; }
+    });
+    if (unchanged) {
+      ok('a second escrow on the same day does not overwrite the first');
+    } else {
+      bad('a second escrow overwrote the first. A lesson is evidence, and the repo-side path '
+        + 'refuses this exact collision - the escrow inherits the rule or it is the weaker copy.');
+    }
+    void second;
+
+    /* A9e - THE DISCRIMINATING HALF. With a repo resolvable it must APPLY, into
+     * docs/lessons/, and escrow nothing. Without this, a build that escrows
+     * unconditionally passes every assertion above while having stopped doing
+     * the thing the command is for. */
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-repo-')); cleanup.push(repo);
+    fs.mkdirSync(path.join(repo, '.claude-plugin'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.claude-plugin', 'marketplace.json'), '{}');
+    const home2 = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-home2-')); cleanup.push(home2);
+    let third = null;
+    try { third = retro.apply(tmp, { repo, configDir: home2 }); } catch (err) { third = { err }; }
+    const dest = path.join(repo, 'docs', 'lessons');
+    const landed = fs.existsSync(dest) ? fs.readdirSync(dest) : [];
+    const escrowDir2 = path.join(home2, 'mavci-lessons');
+    const escrowedAnyway = fs.existsSync(escrowDir2) && fs.readdirSync(escrowDir2).length > 0;
+    if (third && third.ok === true && landed.length === 2 && !escrowedAnyway) {
+      ok('and with a system repo resolvable it APPLIES there and escrows nothing');
+    } else {
+      bad('--apply did not carry the queue into a resolvable system repo ('
+        + `${landed.length} file(s) in docs/lessons, escrow used: ${escrowedAnyway}). An escrow that `
+        + 'fires unconditionally satisfies every assertion above and has replaced the command.');
+    }
+  }
+}
+
 } finally {
   for (const d of cleanup) fs.rmSync(d, { recursive: true, force: true });
 }

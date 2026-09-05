@@ -12,7 +12,8 @@
     "task_id": { "type": ["string", "null"], "pattern": "^[0-9]{4}$" },
     "attempt": { "type": ["integer", "null"], "minimum": 1 },
     "run_at": { "type": "string", "format": "date-time" },
-    "verdict": { "type": "string", "enum": ["pass", "fail"] },
+    "verdict": { "type": "string", "enum": ["pass", "fail", "incomplete"], "description": "`incomplete` is not a soft fail. It is the state where the verdict does not answer the question it was asked - a criterion nobody ran, or no `criteria` at all. Finding 6: two values could not say that, so it was said as `pass`." },
+    "criteria": { "type": "array", "items": { "$ref": "#/$defs/criterion" }, "description": "One entry per numbered acceptance criterion in the approved spec. OPTIONAL in this schema and REQUIRED by the router, which is tighter rather than looser: `required` under additionalProperties:false would invalidate every verdict written before 0.1.33 - the propagation window, in the direction that breaks the live tree - while binding only documents that already carry the field. The router treats absence as `incomplete`, so an old verdict decides nothing rather than deciding wrongly. Same reasoning as `source` on the guardian record (0.1.21)." },
     "plugin_version": { "type": "string" },
     "scope": { "type": "string", "enum": ["full", "changed"] },
     "checks": { "type": "array", "items": { "$ref": "#/$defs/check" } },
@@ -32,6 +33,17 @@
     }
   },
   "$defs": {
+    "criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "mode"],
+      "properties": {
+        "id": { "type": "string", "description": "The criterion's number or identifier as it appears in the approved spec. A string, not an integer, so a spec numbering its criteria 4a and 4b does not have to renumber to be recordable." },
+        "status": { "type": "string", "enum": ["pass", "fail", "skipped", "not_run"], "description": "`skipped` is a decision recorded before the run; `not_run` is an absence nobody decided. One `not_run` makes the verdict `incomplete`." },
+        "mode": { "type": "string", "enum": ["executed", "inspected"], "description": "How the result was obtained. `inspected` means read, not run - legitimate, and not execution. Required, so a build that records results without saying which fails here rather than reporting inspection as execution." },
+        "evidence": { "type": ["string", "null"], "maxLength": 500 }
+      }
+    },
     "check": {
       "type": "object",
       "additionalProperties": false,

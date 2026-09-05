@@ -37,6 +37,57 @@ the only reason it is safe for you to follow it without re-deriving it.
 If you find yourself reasoning about which agent should go next, stop: that is
 the router's job, and a second opinion about it is a second writer for one fact.
 
+## Read your own outputs
+
+**Never ask the operator to paste in something you can run.** Terminal output, a
+server log, the result of a command, the response of an endpoint: if you can
+obtain it, obtain it.
+
+This is not a convenience. On 2026-09-05 an operator hand-carried a 502 and its
+timing, a `route.ts:104` server log and a probe result into the session, and the
+diagnosis still took **two rounds and eight candidate causes, none correct** -
+settled in the end by a probe that answered `429 insufficient_quota` **in 0.58
+seconds** and had been available from the first minute. None of those relays
+required a decision from anybody.
+
+- **To see the application running, start it in the BACKGROUND and read from
+  there.** A dev server never exits, so a foreground call blocks the turn - which
+  is the only reason this was ever the operator's job. It is a constraint of the
+  tool, not of the risk policy: `Bash(npm run *)` is in the project's allow list
+  and no rule in `risk-guard.mjs` touches it.
+- **Before a SECOND round of diagnosis on the same symptom, name the cheapest
+  probe that DISCRIMINATES between your candidates, and run that first.** Two
+  rounds that inherit the first round's frame are one round with more words. A
+  transport error is not evidence of a transport problem.
+- **Ask the operator only for what is genuinely outside your reach** - a browser
+  viewport, a provider's console, a live credential, another repository, the
+  contents of a `.env` - and say which of those it is when you ask, so they can
+  tell a real limit from a missing capability.
+
+## Ask in the session. Hand over only what must be handed over
+
+When the router returns an operator action, **do not print a command and fall
+silent.** Ask the question, in one sentence, with what is needed to answer it -
+then act on the answer:
+
+- **If the next step's authority is already on disk, RUN IT.** That is the whole
+  of `WORKFLOW_MOVES` (`--begin-plan`, `--advance-phase`, `--attempt`,
+  `--task-status`, `--block`), and `risk-guard.mjs` exempts those from the
+  operator confirm precisely because carrying out a recorded decision is not
+  making one.
+- **If the step RECORDS the decision itself, hand the operator the command.**
+  Today that is `--approve-spec` and `--waive`, and the reason is not authority
+  but evidence: `state.mjs` writes `by: 'operator'` as a constant, so the file is
+  byte-identical whether the operator ran it or you did. Until the record can
+  carry who was asked and what they answered, running it for them would replace a
+  weak guarantee with none.
+- **You MAY run `doctor --sync` and `state.mjs --record-corpus`.** Neither
+  records a decision. `--sync` writes the installed plugin version so CI clones
+  the matching tag; `--record-corpus` records an outcome that is COMPUTED, and
+  refuses seven different ways for a caller to supply the answer
+  (`state.mjs:1431-1443`). `--record-corpus` is still tier 2 and will prompt -
+  that prompt is the operator seeing it happen, not the operator deciding it.
+
 ## The loop
 
 Repeat until an action is the operator's, or until **twelve** router
@@ -110,6 +161,18 @@ with no ceiling one level up.
   `--set-phase` or `retro.mjs --apply`.** Those are the operator's, they are gated
   by caller, and the router never names them as a step you take — only as a move
   the operator might make.
+
+  **`--reseal` is on that list for a different reason from the rest, and it is
+  worth knowing which.** The others record or override a decision. `--reseal` is
+  mechanics whose legitimacy depends on a decision recorded NOWHERE: it launders
+  whatever preceded it, and unlike `--block` and `--waive` it takes no `--reason`.
+  There is no question anyone could ask you whose answer would land in the
+  record, so there is nothing here for you to carry out.
+
+- **`doctor --sync` and `state.mjs --record-corpus` are NOT on that list**, and
+  their absence is deliberate rather than an oversight. See "Ask in the session"
+  above. If you find yourself printing either of them for the operator to paste,
+  that is the copy-paste this command exists to remove.
 - **Do not continue past a `blocked`, `release_gate`, `unverified` or `idle`.**
 
 ## Why this is model-invocable when the other commands are not

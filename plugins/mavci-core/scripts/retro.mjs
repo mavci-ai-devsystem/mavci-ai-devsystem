@@ -659,24 +659,50 @@ export function applyPlan(root, { projectId, stamp } = {}) {
   }));
 }
 
-function apply(root) {
+/**
+ * Where a finding goes when the system repository cannot be reached.
+ *
+ * NOT under `plugins/`. That whole subtree is generated state: the marketplace
+ * clone is reset by `git checkout -B main origin/main` on every propagation and
+ * the cache is re-populated per version, which is why `systemRepo()` refuses the
+ * clone at all (gate5 2026-09-03). An escrow inside it would be the same defect
+ * with a friendlier message.
+ */
+export function escrowDir({ configDir } = {}) {
+  const base = configDir ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude');
+  return path.join(base, 'mavci-lessons');
+}
+
+/**
+ * Carry the queue into the system repository, or - when there is none to reach -
+ * put it somewhere that survives the project being deleted.
+ *
+ * THE ESCROW IS NOT A FALLBACK TARGET FOR THE APPLY. It is the answer to a
+ * different question. `--apply` refusing was correct and stayed correct for
+ * three consecutive sessions, and in all three the findings survived because a
+ * person remembered to copy a file out of a directory that exists to be thrown
+ * away. A refusal that depends on the operator paying attention is not a control
+ * over anything; it is the memory dependency this whole apparatus exists to
+ * remove, restated as advice.
+ *
+ * So the bytes are written BEFORE the message is composed, and the message
+ * reports what did NOT happen. Escrowing is not applying: the finding has not
+ * reached the repository that governs every project, `ok` is false, and the CLI
+ * exits non-zero. Reporting it as an apply would be invariant 5 through the far
+ * door - "could not carry" recorded as "carried".
+ *
+ * Returns rather than exits, so the branch the CLI runs is the branch a test can
+ * run. Same split as `lib/release-gate.mjs` and `cutTag`: the decision is
+ * testable, the exit is the CLI's.
+ */
+export function apply(root, { repo = systemRepo(), configDir } = {}) {
   const plan = applyPlan(root);
   if (!plan.length) {
-    die(`nothing to apply: no ${PENDING_STEM}*.md in ${PATHS.lessons}. File a finding first with `
-      + `\`${COMMAND_PREFIX}retro\`.`, 1);
+    return { ok: false, written: [], escrow: { dir: null, written: [] },
+      message: `nothing to apply: no ${PENDING_STEM}*.md in ${PATHS.lessons}. File a finding first `
+        + `with \`${COMMAND_PREFIX}retro\`.` };
   }
-  const repo = systemRepo();
-  if (!repo) {
-    // "Could not check" is never a pass (invariant 5), and neither is "could not
-    // carry". Failing here with the manual step spelled out is strictly better
-    // than writing the file somewhere plausible.
-    die('could not locate the system repository. Looked for .claude-plugin/marketplace.json in:\n'
-      + `  ${path.resolve(HERE, '..', '..', '..')}\n`
-      + `It is NOT written to the marketplace clone, which propagation resets:\n`
-      + `  ${clonePath()}\n`
-      + `Copy ${PENDING} into the system repo's docs/lessons/ by hand instead - that is all this `
-      + 'command does, and doing it by hand loses nothing but the provenance header.', 1);
-  }
+  if (!repo) return escrowQueue(root, plan, { configDir });
 
   const projectId = readJsonOrNull(abs(root, PATHS.manifest))?.project_id ?? 'unknown-project';
   const destDir = path.join(repo, 'docs', 'lessons');
@@ -684,9 +710,10 @@ function apply(root) {
   // Every destination checked before any of them is written.
   const clash = plan.filter((x) => exists(path.join(destDir, x.destName)));
   if (clash.length) {
-    die(`${clash.map((x) => path.join('docs', 'lessons', x.destName)).join(', ')} already exists in `
-      + 'the system repo. A second apply on the same day would overwrite the first, and a lesson is '
-      + 'evidence. Rename or merge it by hand. Nothing was applied.', 1);
+    return { ok: false, written: [], escrow: { dir: null, written: [] },
+      message: `${clash.map((x) => path.join('docs', 'lessons', x.destName)).join(', ')} already `
+        + 'exists in the system repo. A second apply on the same day would overwrite the first, and '
+        + 'a lesson is evidence. Rename or merge it by hand. Nothing was applied.' };
   }
 
   fs.mkdirSync(destDir, { recursive: true });
@@ -711,7 +738,58 @@ function apply(root) {
   for (const x of plan) console.log(`  ${COMMAND_PREFIX}retro --clear ${path.basename(x.src)}`);
   console.log('That deletion is an operator act and the risk guard refuses it to an agent: it is the');
   console.log('record of an unfixed problem, and it must not disappear because a turn went badly.');
-  return plan.map((x) => path.join(destDir, x.destName));
+  return { ok: true, written: plan.map((x) => path.join(destDir, x.destName)),
+    escrow: { dir: null, written: [] }, message: null };
+}
+
+/**
+ * The escrow write. Same collision rule as the repo side, and for the same
+ * reason: a lesson is evidence, so a second run on the same day must not replace
+ * the first. Nothing is written when any destination is taken - the operator is
+ * told, and the queue in the project is left exactly as it was.
+ */
+function escrowQueue(root, plan, { configDir } = {}) {
+  const dir = escrowDir({ configDir });
+  const projectId = readJsonOrNull(abs(root, PATHS.manifest))?.project_id ?? 'unknown-project';
+  const looked = path.resolve(HERE, '..', '..', '..');
+
+  const clash = plan.filter((x) => exists(path.join(dir, x.destName)));
+  if (clash.length) {
+    return { ok: false, written: [], escrow: { dir, written: [] },
+      message: 'could not locate the system repository, and the durable copy already exists:\n'
+        + clash.map((x) => `  ${path.join(dir, x.destName)}`).join('\n')
+        + '\nNothing was written and nothing in the project was touched. A lesson is evidence, so '
+        + 'the escrow is not overwritten. Merge or rename the copy above if this run is different.' };
+  }
+
+  fs.mkdirSync(dir, { recursive: true });
+  const written = [];
+  for (const x of plan) {
+    const dest = path.join(dir, x.destName);
+    const provenance = `<!-- ESCROWED by ${COMMAND_PREFIX}retro --apply on ${nowIso()}\n`
+      + `     from project ${projectId}, plugin ${pluginVersion()}, queued as ${x.src}.\n`
+      + `     THIS IS NOT AN APPLY. The system repository could not be located from this install,\n`
+      + `     so the finding was written here to survive the project directory being deleted.\n`
+      + `     It has NOT reached the repository that governs every project; carrying it there is\n`
+      + `     still owed. Copied verbatim below this line; paths inside are relative to the\n`
+      + `     project it was filed from. -->\n\n`;
+    fs.writeFileSync(dest, provenance + fs.readFileSync(abs(root, x.src), 'utf8'));
+    written.push(dest);
+  }
+
+  return { ok: false, written: [], escrow: { dir, written },
+    message: 'could not locate the system repository. Looked for .claude-plugin/marketplace.json in:'
+      + `\n  ${looked}\n`
+      + 'It is NOT written to the marketplace clone, which propagation resets:\n'
+      + `  ${clonePath()}\n\n`
+      + 'THE FINDINGS ARE SAFE. They were written, before this message, to:\n'
+      + written.map((f) => `  ${f}`).join('\n')
+      + '\n\nThat directory is outside the project and outside <config>/plugins, so it survives both '
+      + 'the project being deleted and the next propagation.\n'
+      + 'NOT APPLIED: the findings have not reached the system repository. Carry them there from a '
+      + 'machine holding the source checkout.\n'
+      + `Do NOT run \`${COMMAND_PREFIX}retro --clear\` yet - the queue in this project is still the `
+      + 'record of an unfixed problem, and clearing it now leaves only the escrow.' };
 }
 
 /* ----------------------------------------------------------------- CLI */
@@ -825,7 +903,14 @@ function main() {
     return;
   }
 
-  if (argv.includes('--apply')) { apply(root); return; }
+  // The decision is `apply`'s; the exit is the CLI's. A non-zero status on the
+  // escrow path is deliberate: the bytes are durable, and the finding has still
+  // not reached the repository that governs every project.
+  if (argv.includes('--apply')) {
+    const r = apply(root);
+    if (r.ok) return;
+    die(r.message, 1);
+  }
 
   // --clear names its target whenever there is more than one thing it could
   // mean. 0.1.12 deleted the canonical file unconditionally, so applying and
