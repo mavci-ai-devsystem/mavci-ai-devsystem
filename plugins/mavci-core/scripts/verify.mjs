@@ -37,13 +37,15 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import {
   PATHS, BLOCKING_SEVERITIES, UNSUPPRESSIBLE_SEVERITIES, DEFAULT_EXCLUDE_DIRS,
-  EVIDENCE_MAX_CHARS, REMEDY_MAX_CHARS, CLAMP_MARKER,
+  EVIDENCE_MAX_CHARS, REMEDY_MAX_CHARS, CLAMP_MARKER, CRITERION_NEEDS,
 } from './config.mjs';
 import {
   abs, exists, readTextOrNull, readJsonOrNull, walk, nowIso, canonicalJson, matchesAny, toPosix,
 } from './lib/fsx.mjs';
 import { rulesFor, ruleById } from './rules/index.mjs';
-import { verdictOutcome } from './lib/route.mjs';
+import { verdictOutcome, approvalCurrent } from './lib/route.mjs';
+import { resolveBash, preflight, describeBash } from './lib/shell.mjs';
+import { parseCriteriaBlock, runCriteria, isShellOnly, CRITERIA_FENCE } from './lib/criteria.mjs';
 import {
   loadContext, validateAll, verifyIntegrity, recordVerdict, readControlTask, attemptsTotal,
   isBaselined, activeWaiver, pluginVersion, projectRoot,
@@ -309,6 +311,160 @@ export async function evaluate(root = projectRoot(), { scope = 'full', task_id =
   return { verdict, checks, findings, ran, ruleErrors, ctx };
 }
 
+/* -------------------------------------------------- the acceptance criteria */
+
+/**
+ * Decide what `criteria[]` this run may record, and - when asked to execute -
+ * produce it by running the approved spec's own commands.
+ *
+ * SEPARATED FROM THE CLI SO IT CAN BE ASSERTED. 0.1.26 found finding 25 sitting
+ * for three releases inside `release-check.mjs`'s `main()`, where no test could
+ * reach it, and 0.1.29 had to extract `cutTag` for the same reason. The exit is
+ * the caller's; the decision is here.
+ */
+export async function resolveCriteria(root, { id, argv = [], execute, supplied = null }) {
+  if (!/^[0-9]{4}$/.test(id ?? '')) {
+    return { ok: false, error: '--run-criteria expects a four-digit task id.' };
+  }
+
+  let control;
+  try {
+    control = readControlTask(root, id);
+  } catch {
+    return { ok: false, error: `task ${id}: no control record at ${PATHS.controlTasks}/${id}.json.` };
+  }
+
+  /* THE AUTHORITY, AND THE ONLY REASON EXECUTING SPEC BYTES IS LEGITIMATE.
+   *
+   * The commands come out of a document an AGENT wrote, and they run as children
+   * of this process - which `risk-guard.mjs` cannot see, because it is a
+   * PreToolUse hook that sees one Bash call and never its descendants. What makes
+   * that acceptable is not that the architect is trusted; it is that the operator
+   * approved these exact bytes, that `--approve-spec` kept a content-addressed
+   * copy of them, and that 0.1.26's class control denies every agent a write to
+   * an approved spec. Take the hash away and this is an execution channel with no
+   * gate on it at all, so it refuses rather than proceeding on a maybe. */
+  const surface = readJsonOrNull(abs(root, `${PATHS.tasks}/${id}.json`));
+  const specPath = surface?.spec ?? control.spec ?? null;
+  const specText = specPath ? readTextOrNull(abs(root, specPath)) : null;
+
+  const approval = control.spec_approved;
+  const approved = approval && approvalCurrent({ ...control, spec: specPath }, specText);
+
+  let declared = null;
+  if (specText) {
+    const parsed = parseCriteriaBlock(specText);
+    if (!parsed.ok) {
+      return {
+        ok: false,
+        error: `task ${id}: the acceptance criteria in ${specPath} could not be read - ${parsed.error}`,
+      };
+    }
+    declared = parsed.criteria;
+  }
+
+  if (!execute) {
+    /* THE SUPPLIED PATH. Where the spec declares nothing, this is 0.1.33's
+     * behaviour unchanged - an agent's attestation, which is what a project with
+     * no block has and all it has. Where the spec DOES declare, the declaration
+     * is what makes the substitution visible, and finding 4's second-order point
+     * is exactly this case: "a precondition the spec does not declare becomes a
+     * precondition the verifier silently substitutes around. It cannot create
+     * the fixture, so it reads the handler instead and records passing." */
+    if (!declared) return { ok: true, criteria: supplied };
+    const index = new Map(declared.map((c) => [c.id, c]));
+    for (const entry of supplied ?? []) {
+      const decl = index.get(entry?.id);
+      if (decl && entry?.mode === 'inspected' && isShellOnly(decl)) {
+        return {
+          ok: false,
+          error: `criterion ${entry.id} may not be recorded \`mode: "inspected"\`. The approved spec `
+            + 'declares it as needing only `shell`, so the runner could have RUN it: '
+            + `\`${decl.run}\`. Reading the code and forming a view where a command was available is `
+            + 'a substitution, and it is recorded in the field the system reserves for the stronger '
+            + `evidence. Run \`verify.mjs --run-criteria ${id}\` instead.`,
+        };
+      }
+    }
+    return { ok: true, criteria: supplied };
+  }
+
+  if (!approval) {
+    return {
+      ok: false,
+      error: `task ${id}: no spec approval is recorded, so there is nothing authorising this to run `
+        + 'the commands in ' + (specPath ?? 'the spec') + '. Those commands were written by an agent '
+        + 'and execute as children of this process, where the risk guard cannot see them; the '
+        + "operator's approval of those exact bytes is the whole of what makes running them "
+        + `legitimate. Run \`state.mjs --approve-spec ${id}\` first.`,
+    };
+  }
+  if (!approved) {
+    return {
+      ok: false,
+      error: `task ${id}: ${specPath} has CHANGED since the approval was recorded, so its commands are `
+        + 'not the ones the operator approved. Recorded hash '
+        + `${String(approval.spec_sha256).slice(0, 12)}. Restore the approved bytes with `
+        + `\`state.mjs --restore-spec ${id}\`, or have the operator re-approve after reading what `
+        + 'changed - and read it as a script, because that is what this will run.',
+    };
+  }
+
+  if (!declared) {
+    return {
+      ok: false,
+      error: `task ${id}: ${specPath} declares no \`${CRITERIA_FENCE}\` block, so there is nothing to `
+        + 'execute. This is not a fault in the task - every spec written before the block existed is '
+        + 'in this state, and retrofitting one changes its bytes and therefore breaks its approval. '
+        + `Record what was observed with \`--criteria <path>\` instead, or have the architect declare `
+        + 'the block on the NEXT task.',
+    };
+  }
+
+  /* THE INTERPRETER IS PROVEN BEFORE ANYTHING IS SCORED, AND NAMED WHETHER OR
+   * NOT IT WORKS. 0.1.22: a harness that trusted PATH scored 18 blocks `ok`
+   * while executing nothing, because it asked "did this run?" by matching
+   * English error strings and the stub answered in Turkish, in UTF-16LE. The fix
+   * is not a longer list of strings. It is to prove the interpreter executes AT
+   * ALL before trusting any per-item verdict from it - invariant 5 applied to
+   * the harness rather than to the thing under test. */
+  const bash = resolveBash();
+  const pre = preflight(bash);
+  if (!pre.ok) {
+    return {
+      ok: false,
+      error: `the interpreter could not be proven to execute, so NO criterion was run and no claim is `
+        + `made about any of them. interpreter ${describeBash(bash)}; the probe answered `
+        + `${JSON.stringify(pre.answer)} (exit ${pre.status}). Pin a working shell with MAVCI_BASH.`,
+    };
+  }
+
+  const have = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] !== '--have') continue;
+    const v = argv[i + 1];
+    if (!v || v.startsWith('--')) {
+      return { ok: false, error: `--have expects a comma-separated capability list (${CRITERION_NEEDS.join(', ')}).` };
+    }
+    for (const cap of v.split(',').map((x) => x.trim()).filter(Boolean)) {
+      if (!CRITERION_NEEDS.includes(cap)) {
+        return { ok: false, error: `--have ${cap}: unrecognised capability. The vocabulary is closed: ${CRITERION_NEEDS.join(', ')}.` };
+      }
+      have.push(cap);
+    }
+  }
+
+  const results = runCriteria(declared, { bash, cwd: root, have });
+  const ranCount = results.filter((r) => r.status === 'pass' || r.status === 'fail').length;
+  return {
+    ok: true,
+    criteria: results,
+    note: `interpreter ${describeBash(bash)}; ran ${ranCount} of ${declared.length} acceptance `
+      + `criteria from ${specPath}`
+      + (have.length ? ` (declared available: ${have.join(', ')})` : ''),
+  };
+}
+
 /* ------------------------------------------------------------ reporting */
 
 export function formatHuman(verdict) {
@@ -410,18 +566,46 @@ async function main() {
     process.exit(ci ? 1 : 0);
   }
 
-  /* --criteria takes a PATH, never inline JSON. An argument goes through the
-   * shell, and 0.1.31 records what that costs: `--record` lost four backticked
-   * words to command substitution, one of them the word the finding was about.
+  /* ---- the acceptance criteria -------------------------------------------
    *
-   * THIS IS THE PLUMBING HALF OF FINDING 6 FIX 3, AND NOT THE AGENT HALF. It
-   * makes `criteria[]` populable at all - without some writer the fail-closed
-   * router is a deadlock with no key. What it does NOT do is give the verifier
-   * a way to produce this file: mavci-verifier holds no Write and no Edit, so
-   * today only the main session can supply it. The agent that is qualified to
-   * judge the task still cannot record its judgement. */
+   * TWO WAYS IN, AND THEY ARE NOT EQUAL.
+   *
+   * `--run-criteria <id>` EXECUTES the criteria declared in the approved spec
+   * and computes each result from what it observed. Nobody supplies an answer.
+   *
+   * `--criteria <path>` ACCEPTS results. It is 0.1.33's plumbing, kept because
+   * every spec written before the block existed has no other way to answer, and
+   * because a criterion needing a browser is legitimately read rather than run.
+   * Where the spec DOES declare a block, this path is checked against it: a
+   * criterion the block says needs only `shell` may not be recorded `inspected`,
+   * because the runner could have run it.
+   *
+   * `--criteria` takes a PATH, never inline JSON. An argument goes through the
+   * shell, and 0.1.31 records what that costs: `--record` lost four backticked
+   * words to command substitution, one of them the word the finding was about. */
+  const runCriteriaIx = argv.indexOf('--run-criteria');
   const critIx = argv.indexOf('--criteria');
+
+  /* REFUSED BY NAME, IN --record-corpus's IDIOM, AND REFUSED RATHER THAN
+   * IGNORED. A flag that is silently ignored is worse than one that is refused:
+   * the caller reads the record afterwards and sees the answer they asked for,
+   * because it happened to match, and never learns the flag did nothing. */
+  if (runCriteriaIx !== -1) {
+    const asserted = ['--status', '--mode', '--evidence', '--result', '--pass', '--fail', '--criteria']
+      .filter((f) => argv.includes(f));
+    if (asserted.length) {
+      console.error(`--run-criteria does not accept ${asserted.join(', ')}. Every field of every `
+        + 'criterion result is COMPUTED here: `status` from the command\'s exit code, `mode` from the '
+        + 'path that was attempted, `evidence` from what the command printed. A writer that accepted '
+        + 'any of them would put the model back in the chair this runner was written to take it out '
+        + 'of - an unverified claim promoted to an artefact that reads as verification, which is the '
+        + 'thing the loop exists to prevent.');
+      process.exit(2);
+    }
+  }
+
   let criteria = null;
+  let suppliedCriteria = null;
   if (critIx !== -1) {
     const cp = argv[critIx + 1];
     if (!cp || cp.startsWith('--')) {
@@ -440,7 +624,21 @@ async function main() {
       console.error(`--criteria ${cp}: expected a JSON array, got ${typeof parsed}.`);
       process.exit(2);
     }
+    suppliedCriteria = parsed;
     criteria = parsed;
+  }
+
+  if (runCriteriaIx !== -1 || suppliedCriteria) {
+    const id = runCriteriaIx === -1 ? task_id : (argv[runCriteriaIx + 1] ?? '');
+    const outcome = await resolveCriteria(root, {
+      id, argv, execute: runCriteriaIx !== -1, supplied: suppliedCriteria,
+    });
+    if (!outcome.ok) {
+      console.error(outcome.error);
+      process.exit(2);
+    }
+    if (outcome.criteria) criteria = outcome.criteria;
+    if (outcome.note) console.log(outcome.note);
   }
 
   const { verdict } = await evaluate(root, { scope, task_id, attempt, criteria });

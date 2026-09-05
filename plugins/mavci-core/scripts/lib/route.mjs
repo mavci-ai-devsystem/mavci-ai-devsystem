@@ -49,6 +49,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { approvalPreconditions } from './criteria.mjs';
 
 /** Every action carries a code, so callers assert on the code and not the prose. */
 export const ACTIONS = [
@@ -148,16 +149,36 @@ export function verdictOutcome(verdict) {
   return verdict.verdict === 'pass' ? 'pass' : 'incomplete';
 }
 
-/** `29 of 32 criteria executed, 2 inspected, 1 skipped` - the sentence the gate can say. */
+/**
+ * `29 of 32 criteria executed, 2 inspected, 1 skipped` - the sentence the gate can say.
+ *
+ * IT COUNTS RESULTS, NOT INTENTIONS, and that is a 0.1.34 correction rather than
+ * a refinement. It filtered on `mode === 'executed'` alone, and `mode` says how a
+ * result was SOUGHT - so a criterion that never produced one was counted as
+ * executed. With the runner live that is not hypothetical: every `not_run` it
+ * writes carries `executed`, because the enum offers no true value for a
+ * criterion that produced no result and the field is defined as the path
+ * attempted (`lib/criteria.mjs`). Left as it was, a run in which six of fifteen
+ * criteria never started would have reported "15 of 15 criteria executed" - which
+ * is reporting non-execution as execution, the exact inversion `mode` was added
+ * to prevent, arriving through the summary instead of through the record.
+ *
+ * So `executed` and `inspected` count only criteria that ANSWERED, and `not_run`
+ * is reported in its own right. A reader who sees no `not_run` clause is entitled
+ * to conclude there were none.
+ */
 export function criteriaSummary(verdict) {
   const c = Array.isArray(verdict?.criteria) ? verdict.criteria : [];
   if (!c.length) return 'no acceptance criteria recorded';
-  const executed = c.filter((x) => x?.mode === 'executed' && x.status !== 'skipped').length;
-  const inspected = c.filter((x) => x?.mode === 'inspected' && x.status !== 'skipped').length;
+  const answered = (x) => x?.status === 'pass' || x?.status === 'fail';
+  const executed = c.filter((x) => answered(x) && x.mode === 'executed').length;
+  const inspected = c.filter((x) => answered(x) && x.mode === 'inspected').length;
   const skipped = c.filter((x) => x?.status === 'skipped').length;
+  const notRun = c.filter((x) => x?.status === 'not_run').length;
   const parts = [`${executed} of ${c.length} criteria executed`];
   if (inspected) parts.push(`${inspected} inspected (READ, not run)`);
   if (skipped) parts.push(`${skipped} skipped by decision`);
+  if (notRun) parts.push(`${notRun} NOT RUN - nobody decided that, and nothing answered`);
   return parts.join(', ');
 }
 
@@ -439,7 +460,24 @@ export function route(input) {
             : 'no recorded operator approval. The orchestrator carries a decision forward; it does '
               + 'not make one, and there is no decision on record yet.')
           + ' Read the acceptance criteria before approving: a wrong spec is the most expensive '
-          + 'thing in this system to discover late.',
+          + 'thing in this system to discover late.'
+          /* FINDING 4, AND IT IS WHY THIS RELEASE IS ONE ITEM LARGER THAN THE RUNNER.
+           *
+           * The gate has always shown what the criteria ASSERT and never what
+           * they REQUIRE, and only one of those is a thing a person reading prose
+           * can evaluate. Task 0001: 32 criteria approved after a careful read,
+           * six of them needing a running server and files outside the
+           * repository, three needing a browser, one needing a live key - with
+           * the spec's text saying so for exactly one. The operator's own words
+           * are the finding: "I read 32 criteria and could not have told you that
+           * six of them needed something the verifier cannot do."
+           *
+           * It matters more now than when it was filed. An approval used to
+           * authorise a document; with the runner live it authorises commands a
+           * program will EXECUTE, so approving a spec whose preconditions are
+           * invisible is approving a script nobody read as one. The runner and
+           * this sentence ship together or neither should. */
+          + ' ' + approvalPreconditions(specText),
         steps: [
           step(`state.mjs --approve-spec ${id}`, 'records YOUR decision, together with the hash of the spec it is about'),
           step(`/mavci-core:ship`, 'then the chain continues from here on its own'),
@@ -539,11 +577,24 @@ export function route(input) {
         + 'A criterion nobody ran is not a criterion that passed, and the spec is what the operator '
         + 'approved by hash. This is NOT a failure of the code: nothing here says the work is wrong, '
         + 'only that the record does not answer.',
+      /* THE FIRST STEP IS A KEY NOW, AND UNTIL 0.1.34 IT WAS NOT.
+       *
+       * This arm shipped naming three exits of which one was unreachable - nothing
+       * produced a criteria file - one changed nothing, and one was the operator's
+       * override. A fail-closed gate whose only working exit is the override is a
+       * gate that has been turned off while still reporting that it is on, and
+       * that is what a real project's task 0002 looks like on disk: `verdict:
+       * "pass"` with no criteria, closed `done`, with no reason recorded anywhere
+       * because `--task-status` takes none. */
       steps: [
+        step(`verify.mjs --run-criteria ${id} --record --task ${id}`,
+          'EXECUTES the acceptance criteria declared in the approved spec and computes each result '
+          + 'from what it observed. It refuses if the spec is unapproved or has changed since, '
+          + 'because those bytes are what authorises running them'),
         step(`/mavci-core:verify ${id}`,
-          're-run it once the verifier can record per-criterion results. Until that lands nothing '
-          + 'populates `criteria[]`, and this arm will keep reporting - which is the intended '
-          + 'fail-closed state, not a malfunction'),
+          'the dispatched form of the same thing. If the spec declares no `mavci-criteria` block - '
+          + 'every spec written before 0.1.34 - there is nothing to execute and this arm will keep '
+          + 'reporting, which is the intended fail-closed state rather than a malfunction'),
         step('/mavci-core:retro',
           'if the verdict is empty because the system cannot record criteria yet, the finding is in '
           + 'the system and not in this project'),

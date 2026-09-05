@@ -69,6 +69,15 @@ jobs:
       - name: The router has every edge, including the rework loop
         run: node scripts/ci/check-route.mjs
 
+      # 0.1.33 gave the verdict a criteria[] and nothing that produces one, so the
+      # only exit that moved from the fail-closed `incomplete` arm was the
+      # operator's override - a gate turned off while still reporting it is on.
+      # The result is computed from an exit code, never supplied: C1 and C2 are
+      # each other's control, and E2/E3 are the pair that stops `needs` from
+      # becoming a way to record a weaker result and move on.
+      - name: The acceptance criteria are executed, and nobody hands the answer in
+        run: node scripts/ci/check-criteria-runner.mjs
+
       # The orchestrator's contract, and the two assertions in it that are not
       # prose: the guard must not deny what ship says it may run, and ship's
       # copy of WORKFLOW_MOVES must be the guard's. A second list of the exempt

@@ -208,6 +208,47 @@ export const VERDICTS = ['pass', 'fail', 'incomplete'];
 export const CRITERION_STATUSES = ['pass', 'fail', 'skipped', 'not_run'];
 export const CRITERION_MODES = ['executed', 'inspected'];
 
+/**
+ * WHAT A CRITERION NEEDS BEFORE IT CAN RUN. cartoonify finding 4, verbatim.
+ *
+ * The approval gate is the one place the chain stops for a human, and it shows
+ * the criteria's CLAIMS while saying nothing about their PRECONDITIONS. Task
+ * 0001: 32 criteria approved after a careful read, of which six needed a running
+ * HTTP server and four fixture files outside the repository, three needed a
+ * browser, and one needed a live key - and the spec's text said so for exactly
+ * one, invented ad hoc in prose because the operator had made that one salient.
+ * The operator's own words are the finding: "I read 32 criteria and could not
+ * have told you that six of them needed something the verifier cannot do."
+ *
+ * IT IS NOT THE ARCHITECT'S MISTAKE. There was no field to declare a
+ * precondition in and no convention asking for one.
+ *
+ * THE VOCABULARY IS CLOSED, AND THAT IS THE POINT. An unrecognised capability is
+ * indistinguishable from a satisfied one to every reader downstream, so a
+ * criterion could declare its way out of running. `shell` is the default and
+ * needs no declaration; everything else must be declared, and a criterion
+ * declaring only `shell` may therefore never be recorded `inspected` - the
+ * runner could have run it, so reading it instead is a substitution.
+ *
+ * FINDING 17'S INVERSION APPLIES HERE AND EVERY READER WILL ASSUME THE OPPOSITE.
+ * A declared value normally NARROWS what runs. This one does not: declaring a
+ * capability the runner does not have is a request for MORE scrutiny, not
+ * permission to record a weaker result and move on. It yields `not_run`, and one
+ * `not_run` makes the whole verdict `incomplete`.
+ */
+export const CRITERION_NEEDS = [
+  'shell',               // a command in the repo working tree - the default
+  'server',              // a running application server
+  'browser',             // a real viewport / DOM
+  'network',             // an outbound call to a third party
+  'live-key',            // a credential the project does not have in CI
+  'write-outside-tree',  // creates state outside the repository
+];
+
+/** Per-criterion wall clock. A criterion may raise its own up to the ceiling and no further. */
+export const CRITERION_TIMEOUT_MS = 120_000;
+export const CRITERION_TIMEOUT_CEILING_MS = 600_000;
+
 export const RISK_TIERS = ['sandbox', 'standard', 'regulated'];
 
 /** Hook events wired to stamp control/hook-run.json. Mirrors hook-run.schema.json. */

@@ -29,6 +29,44 @@ Always decide these three things explicitly, because getting them wrong is expen
 
 Write acceptance criteria as a numbered list where every item names either a check_id from the standards packs or a concrete observable outcome. If you cannot make a criterion checkable, that is a sign the requirement is not yet understood - escalate rather than writing something vague.
 
+**Every criterion you write must also appear in a `mavci-criteria` block, in the
+spec file itself.** The numbered prose is what the operator reads; the block is
+what a program runs. One fenced block per spec, holding a JSON array:
+
+    ```mavci-criteria
+    [
+      { "id": "1", "run": "npx tsc --noEmit" },
+      { "id": "2", "needs": ["shell"], "run": "grep -q \"force-dynamic\" app/api/x/route.ts" },
+      { "id": "3", "needs": ["server"], "run": "curl -sf localhost:3000/api/x", "expect_exit": 0 }
+    ]
+    ```
+
+`id` matches the number in your prose. `run` is a shell command executed at the
+repository root. `needs` defaults to `["shell"]` and is otherwise a subset of
+`shell, server, browser, network, live-key, write-outside-tree`. `expect_exit`
+defaults to 0; `timeout_ms` defaults to two minutes.
+
+**IT GOES IN THE `.md`, NEVER THE `.json` SIDECAR.** The operator's approval
+hashes the `.md` and nothing else, and that hash is the only thing authorising a
+program to execute these commands. A block in the sidecar could be rewritten
+after approval by any agent that can write there, which is most of them.
+
+**DECLARE `needs` HONESTLY, AND EXPECT IT TO COST YOU RATHER THAN SAVE YOU.**
+Declaring a capability does not excuse a criterion from running; it makes it
+`not_run` unless whoever verifies has actually set that capability up, and one
+`not_run` makes the whole verdict `incomplete`. A criterion needing a running
+server is more expensive to satisfy than one that greps a file - so prefer the
+grep where it asserts the same property, and never declare `shell` for something
+that genuinely needs a browser in order to make it look cheap. A criterion the
+operator approved and nobody could run is the failure this whole mechanism was
+built out of.
+
+**And write the command so it can fail.** The rule above - state what a violating
+repo looks like, and confirm the criterion reports it - now has a mechanical
+form: the command's exit code IS the verdict. `grep x file || true` is a
+criterion that cannot fail. So is any command whose non-zero path you have not
+thought about.
+
 **A criterion must be able to fail.** Checkable is not enough on its own: before you write a criterion down, state what a violating repo would look like, and confirm the criterion would actually report that repo as failing. A criterion nothing can fail is not a weak criterion, it is not a criterion at all, and it is more dangerous than an absent one because it reports a pass.
 
 This bites hardest when a criterion is phrased against tooling whose output depends on repository state rather than on the work. Observed on gate4c, 2026-08-29: three criteria were written as `git status --porcelain lists exactly three added paths` and `git diff --name-only lists neither X nor Y`, in a repo with zero tracked files. `git diff` was empty no matter what changed, and git collapses untracked directories, so adding files inside app/ and lib/ did not alter `git status` output at all. All three read as rigorously objective and none of them could discriminate. Check the state your criterion actually runs against - an assertion over `git` in a repo with no commits, a grep over a file the task never creates, a test command absent from package.json.

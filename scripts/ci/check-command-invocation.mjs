@@ -87,6 +87,8 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { resolveBash } from '../../plugins/mavci-core/scripts/lib/shell.mjs';
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PLUGIN = path.join(ROOT, 'plugins', 'mavci-core');
 const SKILLS = path.join(PLUGIN, 'skills');
@@ -120,60 +122,14 @@ function substitute(cmd, { pluginRoot, skillDir, projectDir, sessionId, args }) 
     .replace(/\$ARGUMENTS/g, () => args);
 }
 
-/**
- * WHICH `bash`. This is not a detail - it decided the answer once already.
+/* resolveBash lives in the plugin's lib now, not here.
  *
- * This check used to spawn a bare "bash" and trust PATH. On Windows, PATH
- * resolution
- * depends on WHICH SHELL LAUNCHED THIS CHECK: from Git Bash, `bash` is Git
- * Bash and everything below is real; from PowerShell, `bash` is
- * `%LOCALAPPDATA%\Microsoft\WindowsApps\bash.exe`, the WSL app-execution alias,
- * which on a machine with no distribution installed prints an error and exits 1
- * WITHOUT RUNNING ANYTHING. Same tree, same commit, two different verdicts.
- *
- * A check whose result depends on the operator's shell is not a check. So the
- * interpreter is resolved deliberately, reported on every run, and - this is the
- * half that matters - PROVEN to execute before one block is scored. See the
- * preflight below and the note on `neverRan`.
- */
-function resolveBash() {
-  const tried = [];
-  const usable = (p, how) => {
-    tried.push(`${how}: ${p}`);
-    try {
-      const out = execFileSync(p, ['-c', 'echo mavci-bash-probe'],
-        { encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'] });
-      return out.includes('mavci-bash-probe') ? { path: p, how, tried } : null;
-    } catch { return null; }
-  };
-
-  if (process.env.MAVCI_BASH) {
-    // An explicit pin is honoured even if it does not work: a pin that silently
-    // fell back to something else would hide exactly the substitution this
-    // function exists to prevent. It is preflighted like any other choice.
-    return { path: process.env.MAVCI_BASH, how: 'MAVCI_BASH', tried: ['MAVCI_BASH'] };
-  }
-
-  if (process.platform === 'win32') {
-    // Git Bash is the interpreter Claude Code's Bash tool uses on Windows, so it
-    // is the one this check must model. The WindowsApps alias is never a
-    // candidate - it is a launcher for a different operating system.
-    const candidates = [
-      path.join(process.env.ProgramFiles ?? 'C:\\Program Files', 'Git', 'bin', 'bash.exe'),
-      path.join(process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)', 'Git', 'bin', 'bash.exe'),
-      path.join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Git', 'bin', 'bash.exe'),
-    ];
-    for (const c of candidates) {
-      if (c && fs.existsSync(c)) {
-        const hit = usable(c, 'Git Bash');
-        if (hit) return hit;
-      }
-    }
-  }
-
-  return usable('bash', 'PATH') ?? { path: 'bash', how: 'PATH (unproven)', tried };
-}
-
+ * 0.1.34 gave the acceptance-criteria runner the same question - which
+ * interpreter runs a shell command - on the same machine. Two answers to that is
+ * the shape that had `check-pretag` running 13 of `release.yml`'s 17: a second
+ * list of the same thing, edited once. The reasoning that produced this
+ * resolver, and the 0.1.22 incident behind it, moved with it and is in
+ * `lib/shell.mjs`. */
 const BASH = resolveBash();
 
 /** Run a command the way the Bash tool would. Never throws. */

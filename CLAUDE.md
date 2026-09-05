@@ -191,7 +191,7 @@ from the tree, and the check is named beside it.
                   the entry below explains the jump to 28: 0.1.18
                   added four, to selftest.yml only, where no
                   release gate ever ran them. See the 0.1.18 entry.
-    36 scripts    every check script in scripts/ci/                check-ci-gates.mjs
+    37 scripts    every check script in scripts/ci/                check-ci-gates.mjs
                   Larger than the suite above: the suite is what
                   release.yml runs, and check-pretag declares four
                   excluded steps with reasons on every pass.
@@ -2119,6 +2119,220 @@ because main is ahead of `v0.1.32`, which is what this bump and its tag close.
 `check-pretag --selftest` is 46 assertions and derives the suite from
 `release.yml`, so `check-ship-contract.mjs` entered the release gate the moment
 it was wired; `selftest.yml` carries it too, which the subset rule requires.
+
+### 0.1.34 — the gate had no key, so the override was the only exit
+
+**Cut 2026-09-05**, against cartoonify finding 6's other half. 0.1.33 gave the
+verdict a `criteria[]`, made `not_run` force `incomplete`, and made the router
+fail closed on a verdict carrying no criteria at all. It gave the system nothing
+that PRODUCES the field. The `incomplete` arm named three exits: re-verify with a
+criteria file, which nothing could write; `/mavci-core:retro`, which changes
+nothing; and the operator's `--task-status <id> --status done`.
+
+**A fail-closed gate whose only working exit is the override is a gate that has
+been turned off while still reporting that it is on.** It was already in that
+state on disk. cartoonify task 0002: `verdict: "pass"`, no `criteria`, control
+task `status: "done"` — and `--task-status` takes no `--reason` (unlike
+`--block`), so the closure records nothing about why. 0.1.33 moved the untruth
+out of the verdict, which was right, and into the control task, where the two
+artefacts no longer contradict each other in one file.
+
+#### 1. The question that decides the shape, and it is not "who may write"
+
+Finding 6's fix 3 reads as *give the verifier a way to record its judgement*, and
+taken literally that is a criteria file written by an agent out of its own prose:
+an unverified claim promoted to an artefact that reads as verification, which is
+the thing the loop exists to prevent. Closing it by permitting the write reopens
+it.
+
+**The architecture had already answered this once, in the component whose output
+the release gate reads.** `state.mjs`'s `--record-corpus` refuses `--result`,
+`--version` and `--fingerprint` by name because *"a writer that accepted any of
+the three would put the model back in the chair corpus-score.mjs was written to
+take it out of."* Guardian emits; `corpus-score.mjs` decides what becomes a
+record. `criteria[]` is that problem one component over and it gets that answer.
+
+**And the write framing was a category error anyway.** `verify.mjs --record`
+already writes the verdict and the verifier already invokes it — through Bash,
+into a path its Write scope denies, which is finding 7. The verifier never needed
+`Write`. It needed the program to compute the field rather than accept it.
+
+#### 2. The measurement, and it is stronger than the hypothesis it tested
+
+Across the 47 acceptance criteria written on two real projects — cartoonify task
+0001's 32 and task 0002's 15 — the number requiring an agent's **judgement is
+zero.** Task 0002 by its own `[how it is checked]` tags: 9 need nothing but the
+repository, 6 need a running dev server, and §6.1–6.3 already script the fixture,
+a fault-injection sink, a four-mode matrix and a run order. Task 0001 per finding
+4: 22 shell, 6 server + write-outside-tree, 3 browser, 1 live-key.
+
+**So the axis is not judgement versus exit code. It is CAPABILITY** — and that is
+finding 4's vocabulary, written down at 0.1.32 and unbuilt. Where judgement is
+genuinely present the architecture already spends it at authoring time and
+freezes it with the hash: task 0002's criterion 12 compiles *"the message is
+right"* into an encoding-exact `indexOf` plus banned substrings.
+
+#### 3. Why executing an agent-authored document is legitimate, and what it costs
+
+The commands come out of a spec an **agent** wrote and run as children of
+`verify.mjs`, where `risk-guard` cannot see them — it is a PreToolUse hook that
+sees one Bash call and never its descendants. What makes that acceptable is not
+that the architect is trusted. It is `spec_approved`: the operator approved those
+exact bytes, `--approve-spec` kept a content-addressed copy, `--advance-phase`
+refuses on drift, and 0.1.26's class control denies **every** agent a write to an
+approved spec. The runner refuses rather than proceeding when it cannot establish
+that, both ways, and each refusal names which of the two it is.
+
+Finding 6's addendum says the system is *"rigorous about consent and silent about
+outcome."* Running the criteria is what makes the existing rigour pay for
+something rather than adding new rigour.
+
+**AND IT RAISES WHAT AN APPROVAL MEANS, from "I read these claims" to "I
+authorised this."** So finding 4 is a **prerequisite** here rather than a
+companion — approving a spec whose preconditions are invisible is approving a
+script nobody read as one. The `awaiting_approval` arm now prints the aggregate
+before the decision: *"32 criteria — 22 shell, 6 server + write-outside-tree, 3
+browser, 1 live-key. 10 of them need something beyond a shell in this repository;
+each is `not_run` unless that capability is declared available at verify time…
+Approving this authorises a program to EXECUTE those commands, so read them as a
+script."* That is a sentence an operator can act on. *"Read the acceptance
+criteria before approving"* is not, when the thing that matters is not in them.
+
+#### 4. The four held decisions
+
+1. **The block is in the hashed `.md`, never `.mavci/tasks/<id>.json`.** The
+   sidecar is in the architect's write scope and OUTSIDE
+   `spec_approved.spec_sha256`, so criteria there could be rewritten after
+   approval — and the hash is the entire authority under which any of this runs.
+2. **Supplied answers refused by name**, in `--record-corpus`'s idiom:
+   `--status`, `--mode`, `--evidence`, `--result`, `--pass`, `--fail`,
+   `--criteria`. Refused rather than ignored, because a flag silently ignored
+   lets the caller read the record afterwards, see the answer they asked for
+   because it happened to match, and never learn the flag did nothing.
+3. **`not_run`, never `skipped`,** for anything whose `needs` are unmet. Skipped
+   is a decision recorded in advance; nothing here decided anything.
+4. **`mode: "inspected"` refused on a criterion the block declares as needing
+   only `shell`** — the runner could have run it, so reading it instead is a
+   substitution, recorded in the field reserved for the stronger evidence. That
+   is finding 17's inversion made mechanical: *a declaration of weaker
+   enforcement is a request for more scrutiny, not a smaller ruleset.* Without
+   it `needs` becomes the escape hatch, and finding 4's own second-order point is
+   this case exactly — *"it cannot create the fixture, so it reads the handler
+   instead and records passing."*
+
+#### 5. The negative control, which is not optional
+
+Finding 15: verifying one direction of a dependency is not verifying the
+dependency. A runner demonstrated only on passing criteria has established that
+it can say yes. Task 0002 hands the other direction over at authoring time — two
+of its criteria say outright *"fails against the current build"* — so C1 and C2
+assert a known-red and a known-green criterion **in the same run**, and each is
+the other's control: a runner hardcoding either verdict passes exactly one. Same
+pairing at D1/D2 (nothing ever runs vs. a capability lets it) and E2/E3 (every
+inspection refused vs. none).
+
+Demonstrated on the real shape, not only on `process.exit(3)`: a route violating
+task 0002's criterion 6 gives **`10 passing, 0 blocking` from the standards
+checker and `verdict: fail`** — finding 6's scenario inverted, with the summary
+reading `2 of 3 criteria executed, 1 NOT RUN`.
+
+#### 6. Three defects found on the way, none of them the one being fixed
+
+**`criteriaSummary` counted intentions, not results.** It filtered on `mode ===
+'executed'` alone, and `mode` says how a result was SOUGHT. With the runner live
+that is not hypothetical: every `not_run` it writes carries `executed`, because
+the enum offers no true value for a criterion that produced no result. Left
+alone, a run in which six of fifteen criteria never started would have reported
+`15 of 15 criteria executed` — reporting non-execution as execution, the exact
+inversion `mode` was added to prevent, arriving through the summary instead of
+through the record.
+
+**And `mode` on a `not_run` is DEFINED rather than chosen, which is worth saying
+out loud because the alternative was to guess.** Neither enum value is a true
+answer to "how was the result obtained" when there is no result. Both exits were
+worse: a third enum member is a locked-format change, and a
+conditionally-optional field cannot be expressed at all — `lib/schema.mjs` has no
+conditional construct (finding 1). So `mode` means the path ATTEMPTED, it says so
+in the schema, and the definition is only safe because its one reader was
+corrected in the same change.
+
+**`incomplete` had no row in ship's action table.** 0.1.33 added the action to
+`ACTIONS` and never added the row, so for a whole release the orchestrator's only
+instruction for the action it would hit after EVERY verify was the table's
+silence — and an action with no row is not a stop and not a step, it is a model
+deciding what to do next. 0.1.14's shape for the third time.
+`check-ship-contract` now IMPORTS `ACTIONS` and asserts a row per action; a
+transcribed copy would have been the same defect wearing the fix's clothes.
+
+#### 7. One `resolveBash`, because the runner asks 0.1.22's question again
+
+The runner executes shell commands on the same machine that produced 0.1.22 —
+where the same tree gave two different verdicts depending on which shell launched
+the check, and 18 of 22 blocks were scored `ok` while executing nothing. So
+`resolveBash` and its preflight moved to
+`plugins/mavci-core/scripts/lib/shell.mjs` and `check-command-invocation.mjs`
+imports it. Two answers to "which shell" is a second list of the same thing. The
+interpreter is **named on every run**, and it is **proven to execute before one
+criterion is scored**: on a preflight failure the run refuses having scored
+nothing and says so, which is invariant 5 applied to the harness rather than to
+the thing under test.
+
+#### 8. Verification
+
+The check was written and run FIRST, against a tree with no runner in it: 21
+failures — **and five of them were green, which was the finding.** B1, B3, B2, F2
+and F2b passed against a build with no feature, because `--run-criteria` was an
+unknown flag and `verify.mjs` exited non-zero for that reason alone. That is
+0.1.23's M5 (*decision and reason are two facts and only the reason
+discriminates*) and 0.1.31's sharper form (*run before the fix, such an assertion
+reports the fix as unnecessary*). Each now asserts the REASON, and every one of
+the 27 assertions is red against the pre-fix tree.
+
+| Mutation | Restores | What goes red |
+|---|---|---|
+| M1 | a hardcoded `pass` | C1, C4 — the negative control |
+| M2 | `skipped` for an unmet precondition | D1, D3 |
+| M3 | no approval check | B1, B3 — refused by the CHANGED arm, with the wrong message |
+| M4 | a stale approval accepted | B2 only |
+| M5 | a timeout scored as `fail` | G1 only |
+| M6 | 0.1.22's unproven interpreter | F2 only |
+| M7 | supplied answers accepted | all 5 E1 cases |
+| M7b | refused but not named | all 5 E1 cases |
+| M8 / M9 | inspected allowed everywhere / refused everywhere | E2 only / E3 only |
+| M10 | `--have` ignored | D2 only |
+| M11 / M12 | a second block wins / an open `needs` vocabulary | A2 only / A5 only |
+| M13 / M14 / M15 | no evidence / interpreter unnamed / a private `resolveBash` | C5 / F1 / F3, one each |
+
+**Two things were discarded rather than counted, and both are the method
+working.** The first M7 landed as a syntax error — 19 red, proving nothing about
+E1 — which is 0.1.31's *a mutation that lands somewhere other than where you
+aimed reports the same green as a fix that was unnecessary*, in its other
+direction. The mutation harness now runs `node --check` and says so.
+
+**And E1's fixture was wrong in a way only a mutation could show.** Five
+`--record` runs against one attempt meant the second and later were refused by
+the WRITE-ONCE guard, not by the arm under test — baseline-green either way. A
+project per flag now. The same fault appeared in E3 on the first run, from the
+same cause.
+
+37 CI checks, one of them new. `check-pretag --selftest` is 46 and derives the
+suite from `release.yml`, so the new check entered the release gate the moment it
+was wired; `selftest.yml` carries it too, which the subset rule requires.
+
+#### What this does NOT close, said where it will be read
+
+- **`lib/release-gate.mjs` still does not read `criteria[]`.** Named as not
+  landed at 0.1.33 and still true.
+- **An acceptance criterion still cannot be waived.** `--waive` speaks only the
+  15 standards check ids; finding 6's fixes 5-8 are untouched.
+- **Finding 7's containment gap is untouched, and NOT made worse** — the runner
+  spawns children under the same Bash the verifier already holds.
+- **This lands for the NEXT task, not retroactively.** Adding a block to an
+  approved spec changes its bytes and breaks its approval, so cartoonify task
+  0002 stays as it is; re-approving an old spec to retrofit it would be the wrong
+  trade. A spec with no block gets a refusal that says exactly this, and
+  `--criteria <path>` keeps 0.1.33's agent-attested behaviour there unchanged —
+  the enforcement in decision 4 arrives with the declaration.
 
 ### Carried forward — still not built
 

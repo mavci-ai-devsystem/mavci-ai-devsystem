@@ -36,7 +36,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SHIP = path.join(ROOT, 'plugins/mavci-core/skills/ship/SKILL.md');
@@ -46,6 +46,9 @@ const FIXTURE = path.join(ROOT, 'plugins/mavci-core/templates/fixtures/selftest-
 const failures = [];
 const ok = (m) => console.log(`  ok   ${m}`);
 const bad = (m) => { failures.push(m); console.log(`  FAIL ${m}`); };
+
+const { ACTIONS } = await import(pathToFileURL(
+  path.join(ROOT, 'plugins/mavci-core/scripts/lib/route.mjs')).href);
 
 const shipRaw = fs.readFileSync(SHIP, 'utf8');
 const guardSrc = fs.readFileSync(GUARD, 'utf8');
@@ -211,6 +214,28 @@ const banBlock = (shipRaw.match(/\*\*Do not run `--reset-attempts`[\s\S]*?\n\n/)
         + 'the shape that produced check-pretag running 13 of 17 checks.');
     }
   }
+}
+
+/* ============================= EVERY ACTION THE ROUTER CAN RETURN HAS A ROW ==
+ *
+ * NOT PROSE, AND IT FOUND ITS INSTANCE ON THE FIRST RUN. 0.1.33 added the
+ * `incomplete` action to `ACTIONS` and never added a row to ship's table - so for
+ * a whole release the orchestrator's only instruction for the action it would hit
+ * after EVERY verify was the table's silence. An action with no row is not a stop
+ * and not a step; it is a model deciding what to do next, which is the one thing
+ * this contract exists to remove.
+ *
+ * 0.1.14's shape - two lists of the same set, edited once - for the third time.
+ * The list that governs is the router's, so it is IMPORTED rather than
+ * transcribed: a copy here would be the same defect wearing the fix's clothes.
+ */
+{
+  const missing = ACTIONS.filter((a) => !shipRaw.includes(`| \`${a}\` |`));
+  if (missing.length) {
+    bad(`ship's action table has no row for ${missing.join(', ')}. The router can return every one `
+      + 'of those, and an action with no row leaves the orchestrator to invent a response to the '
+      + 'state the router stopped it in.');
+  } else ok(`C9 every one of the router's ${ACTIONS.length} actions has a row in ship's table`);
 }
 
 if (failures.length) {

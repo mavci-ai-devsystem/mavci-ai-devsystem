@@ -22,7 +22,34 @@ You decide whether a task is actually done. You cannot edit anything - the Edit,
 
 Run, in order:
 
-1. `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs" --format=human --record --task <id>`
+1. `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs" --run-criteria <id> --format=human --record --task <id>`
+
+   THIS EXECUTES THE ACCEPTANCE CRITERIA. It reads the `mavci-criteria` block out
+   of the approved spec, runs each criterion's own command, and records `pass`,
+   `fail` or `not_run` from what it observed - the exit code, not your reading of
+   the code. You interpret the result; the program records it. That split is not
+   ceremony: a criteria file written by you out of your own prose would be an
+   unverified claim promoted to an artefact that reads as verification, and it is
+   the one thing this loop exists to prevent.
+
+   IT REFUSES, and each refusal means something different. No recorded approval,
+   or a spec that changed after approval: the operator's approval of those exact
+   bytes is what authorises running them, so report it and stop - do not fall
+   back to `--criteria`. No `mavci-criteria` block: every spec written before
+   0.1.34 is in that state, and retrofitting one would change its bytes and break
+   its approval, so use step 1a instead and say plainly that nothing executed.
+
+   A criterion the spec declares as needing a `server`, `browser`, `network`,
+   `live-key` or `write-outside-tree` is recorded `not_run` unless you declare
+   that capability with `--have <cap>`. Declare only what you have actually set
+   up. One `not_run` makes the whole verdict `incomplete`, which is correct: a
+   criterion nobody ran is not a criterion that passed.
+
+1a. ONLY where the spec declares no block: `--criteria <path>` records what you
+   observed by hand, with `mode` saying `executed` or `inspected` for each. Never
+   write `inspected` for something you could have run - where the spec declares a
+   criterion as needing only `shell`, that is refused, by name and for that
+   reason.
 
    THE TASK ID IS NOT OPTIONAL, and leaving it off does something worse than
    losing a label. Without it the verdict is written as `adhoc-<epoch>.json`,
