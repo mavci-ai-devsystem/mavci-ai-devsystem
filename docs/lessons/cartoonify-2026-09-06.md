@@ -1,4 +1,4 @@
-<!-- ESCROWED by /mavci-core:retro --apply on 2026-09-06T12:25:50Z
+<!-- ESCROWED by /mavci-core:retro --apply on 2026-09-06T14:15:57Z
      from project cartoonify, plugin 0.1.34, queued as .mavci/lessons/pending-system-change.md.
      THIS IS NOT AN APPLY. The system repository could not be located from this install,
      so the finding was written here to survive the project directory being deleted.
@@ -150,6 +150,46 @@ finding untouched. Whoever applies either should read both.
 
 Recorded here rather than only on 15 because a reader who arrives at this finding first
 would otherwise fix half of it and see nothing to suggest the other half exists.
+
+No superseded text quoted: this amendment ADDS to the finding rather than correcting it.
+
+### Addendum to finding 1 - The stamp on this finding's addendum is false: main-session is not an agent and nothing enforced it
+
+Amended 2026-09-06T13:28:56Z, plugin 0.1.34. Amended by: not recorded. Either the main session, or an agent that did not declare itself - the queue cannot tell. Treat it as unattributed.
+
+ONE FALSELY STAMPED ADDENDUM IN THIS FINDING. It is:
+
+  "Finding 15 is this finding from the other direction - the entry gap and the
+   exit gap", Amended 2026-09-05T14:41:49Z, plugin 0.1.33,
+   stamped: Amended by: **main-session** (agent).
+
+WHY THE STAMP IS FALSE. It reads "Provenance enforced at the risk guard, not
+self-declared." Nothing enforced it. The guard's comparison lives in
+risk-guard.mjs and is gated on `agent_type`, which is present for a subagent and
+ABSENT for the main session; a main-session caller therefore passes any value it
+likes and the comparison never runs. Worse, `main-session` IS NOT AN AGENT:
+agents/agent-scopes.json declares exactly five - mavci-architect, mavci-builder,
+mavci-guardian, mavci-scribe, mavci-verifier. Had a subagent declared
+`--agent main-session`, the guard would have DENIED it as "not itself". It was
+not denied because there was no caller identity to compare against.
+
+HOW TO READ THESE BLOCKS. Treat them exactly as if they said "Amended by: not
+recorded ... Treat it as unattributed", which is what the other thirteen addenda
+in this queue say and what these should have said. Specifically, the stamp is
+NOT evidence that an agent authored the block, and NOT evidence that anything
+verified who did. It is a string that was typed and echoed.
+
+THE STAMPS ARE NOT EDITED, AND MUST NOT BE. This queue is append-only -
+"no path here edits a filed byte" - and rewriting a stamp would erase the fact
+that it was ever wrong, which is the same objection the queue raises against
+replacing a filed sentence. This addendum is the correction; the bytes stay.
+
+IDENTIFIED BY TITLE AND TIMESTAMP, NOT BY LINE NUMBER. Finding 24's addendum
+cited line numbers, and they are already stale: amending finding 9 inserted text
+inside an earlier block and shifted every line after it. In a file that appends
+inside blocks, a line number is not an identifier.
+
+Full analysis, both holes and the driven reproductions: finding 24.
 
 No superseded text quoted: this amendment ADDS to the finding rather than correcting it.
 
@@ -1471,6 +1511,57 @@ half that is missing is never exercised by it.
 
 No superseded text quoted: this amendment ADDS to the finding rather than correcting it.
 
+### Addendum to finding 7 - Two addenda here carry a false provenance stamp; read both as unattributed
+
+Amended 2026-09-06T13:28:56Z, plugin 0.1.34. Amended by: not recorded. Either the main session, or an agent that did not declare itself - the queue cannot tell. Treat it as unattributed.
+
+TWO FALSELY STAMPED ADDENDA IN THIS FINDING. They are:
+
+  1. "The criteria path: the agent qualified to judge is the one denied the tool
+     to record - the plumbing half shipped and the agent half did not",
+     Amended 2026-09-05T14:31:35Z, plugin 0.1.33.
+  2. "The assertion for the criteria path, and the broken build it must catch",
+     Amended 2026-09-05T14:31:42Z, plugin 0.1.33.
+
+Both stamped: Amended by: **main-session** (agent). The finding's other two
+addenda (2026-09-05T10:34:02Z and 10:38:54Z) are correctly unattributed and are
+not affected.
+
+NOTE THE SECOND ONE PARTICULARLY. It supplies an ASSERTION - the thing an
+applier acts on - and it is the block whose apparent provenance most invites
+trust. Its content stands or falls on its own; the attribution beneath it
+attests to nothing.
+
+WHY THE STAMP IS FALSE. It reads "Provenance enforced at the risk guard, not
+self-declared." Nothing enforced it. The guard's comparison lives in
+risk-guard.mjs and is gated on `agent_type`, which is present for a subagent and
+ABSENT for the main session; a main-session caller therefore passes any value it
+likes and the comparison never runs. Worse, `main-session` IS NOT AN AGENT:
+agents/agent-scopes.json declares exactly five - mavci-architect, mavci-builder,
+mavci-guardian, mavci-scribe, mavci-verifier. Had a subagent declared
+`--agent main-session`, the guard would have DENIED it as "not itself". It was
+not denied because there was no caller identity to compare against.
+
+HOW TO READ THESE BLOCKS. Treat them exactly as if they said "Amended by: not
+recorded ... Treat it as unattributed", which is what the other thirteen addenda
+in this queue say and what these should have said. Specifically, the stamp is
+NOT evidence that an agent authored the block, and NOT evidence that anything
+verified who did. It is a string that was typed and echoed.
+
+THE STAMPS ARE NOT EDITED, AND MUST NOT BE. This queue is append-only -
+"no path here edits a filed byte" - and rewriting a stamp would erase the fact
+that it was ever wrong, which is the same objection the queue raises against
+replacing a filed sentence. This addendum is the correction; the bytes stay.
+
+IDENTIFIED BY TITLE AND TIMESTAMP, NOT BY LINE NUMBER. Finding 24's addendum
+cited line numbers, and they are already stale: amending finding 9 inserted text
+inside an earlier block and shifted every line after it. In a file that appends
+inside blocks, a line number is not an identifier.
+
+Full analysis, both holes and the driven reproductions: finding 24.
+
+No superseded text quoted: this amendment ADDS to the finding rather than correcting it.
+
 # Finding 8 - Release gate is a plugin-release gate wearing the name of a project-release gate
 
 Filed: 2026-09-05T10:49:02Z, plugin 0.1.32.
@@ -1648,6 +1739,165 @@ for the third time.
 NOT SUPPLIED. Whoever applies this must write one before building the fix: name the broken build the assertion catches, and confirm the assertion FAILS against it first. A check that passes on its first run against the broken build is matching the wrong thing.
 
 ---
+
+### Addendum to finding 9 - Fix 3 shipped as escrow and the loss half is closed on evidence; the resolution half is untouched and is now quieter, not gone
+
+Amended 2026-09-06T12:28:27Z, plugin 0.1.34. Amended by: not recorded. Either the main session, or an agent that did not declare itself - the queue cannot tell. Treat it as unattributed.
+
+FOURTH CONSECUTIVE SESSION, AND THE COUNT IS STILL THE FINDING - BUT IT NOW COUNTS
+A DIFFERENT THING. Fix 3 has shipped. Fixes 1 and 2 have not. The half that was
+losing work is closed on evidence; the half the command is named after is
+untouched.
+
+WHAT SHIPPED, AND IT IS EXACTLY FIX 3. The main text ranked four fixes and said of
+the third - write the queue somewhere outside the disposable project when no repo
+can be found - "THIS IS THE ONE THAT ACTUALLY FIXES THE THREE-SESSION PROBLEM,
+because it does not depend on the operator doing anything." That is the escrow,
+and it behaved to specification on 2026-09-06:
+  - the file was written BEFORE the message, so the copy exists whether or not
+    anyone reads the output;
+  - the refusal reads as a NOTIFICATION rather than a failure;
+  - `--clear` is explicitly forbidden in that state, so the documented
+    apply-then-clear workflow cannot destroy the only durable copy;
+  - 219 KB, 27 findings, intact.
+THE LOSS HALF OF THIS FINDING IS CLOSED ON EVIDENCE, and closed in the manner fix
+3 required: it did not depend on the operator doing anything.
+
+WHAT DID NOT SHIP. Re-verified 2026-09-06 against plugin 0.1.34, unchanged from
+the 0.1.32 reproduction in the main text. `systemRepo()` still has one candidate,
+`path.resolve(here,'..','..','..')`. From this cache install that resolves to
+`~/.claude/plugins/cache/mavci`, which holds no `.claude-plugin/marketplace.json`,
+so it returns null and refuses. The only tree on this machine carrying that marker
+is the marketplace clone, which remains deliberately and CORRECTLY excluded (gate5
+2026-09-03). Nothing about the topology changed. Neither fix 1 (an operator-declared
+path) nor fix 2 (naming the cache case in the message) is present.
+
+THE RESULTING STATE, STATED PRECISELY BECAUSE IT IS EASY TO MISREAD AS DONE. The
+command whose entire purpose is carrying findings into the system repository still
+cannot reach it, and now says so honestly instead of failing silently. That is
+strictly better and is NOT the intended end state. Escrow made the failure SAFE.
+It did not make it ABSENT.
+
+THE NEW RISK, AND IT IS THE REASON THIS ADDENDUM EXISTS: SAFETY RETIRES URGENCY.
+The main text's central claim was that the self-improvement loop is closed by
+human memory - "the single dependency the whole apparatus exists to remove". Escrow
+removes the LOSS. It does not remove the MEMORY. On 2026-09-06 the operator again
+carried the queue into the system repo by hand and pushed; that is the fourth time.
+The dependency has changed shape rather than gone:
+  before - remember to copy it, or the findings are DESTROYED
+  after  - remember to copy it, or the findings never ARRIVE
+The second is quieter. A destroyed queue is a visible catastrophe that forces a
+fix; a queue sitting safely in escrow on one machine, arriving in the system repo
+only when a person carries it, produces no pressure at all. THIS FINDING IS MORE
+LIKELY TO BE FORGOTTEN NOW THAN IT WAS WHEN IT WAS DANGEROUS.
+
+THREE COPIES, ONE DURABLE. The queue currently exists in the project, in the
+escrow, and in the source repository. Only the last survives all three failure
+modes - the project is disposable by design, and the escrow is on this machine.
+The escrow's existence must not be read as the queue being safe in general; it is
+safe against ONE failure mode, the one that was destroying work.
+
+STATUS: this finding is NOT closed. Its loss half is discharged and should be
+recorded as such when it is applied; its resolution half - fixes 1, 2 and 4 - is
+open, and the assertion below is supplied against that half, the main text's
+assertion section having been left NOT SUPPLIED.
+
+No superseded text quoted: this amendment ADDS to the finding rather than correcting it.
+
+### Addendum to finding 9 - The assertion finding 9 was filed without, supplied against the resolution half
+
+Amended 2026-09-06T12:28:55Z, plugin 0.1.34. Amended by: not recorded. Either the main session, or an agent that did not declare itself - the queue cannot tell. Treat it as unattributed.
+
+The main text's assertion section reads NOT SUPPLIED. It is supplied here, against
+the RESOLUTION half, because no sanctioned route writes into a finding's own body
+(finding 25). A reader who stops at the assertion section will see the placeholder
+and not this. That is the defect finding 25 records, and this block is an instance
+of it rather than a workaround for it.
+
+FOUR ASSERTIONS. The first is the fix; the rest exist so it cannot be satisfied
+carelessly, and one of them protects what already works.
+
+FIRST, AND RED TODAY: `--apply` must resolve a target from a CACHE INSTALL. Drive
+`systemRepo()` with `here` set to a path of the shipping shape -
+`<...>/plugins/cache/<marketplace>/<plugin>/<version>/scripts` - and require a
+non-null result once an operator has declared the repo path (fix 1).
+  THE BROKEN BUILD: 0.1.34 as it stands. Run it there FIRST and require null.
+  An implementation that returns non-null on 0.1.34 is resolving something else.
+
+SECOND, SO THE OBVIOUS WRONG FIX IS EXCLUDED: it must NOT resolve to the
+marketplace clone. Assert that a build which restores the clone as a candidate
+FAILS. That build makes assertion one pass and re-creates the gate5 2026-09-03
+regression exactly - a write that reports success and is erased by the next
+propagation, under a documented apply-then-clear workflow that would then destroy
+the only durable copy. Demonstrate that failure before accepting any fix. If
+assertions one and two cannot both hold, KEEP REFUSING: a refusal plus escrow is
+recoverable, and a silent write into a tree that gets reset is not.
+
+THIRD, SO THE FIX DOES NOT REGRESS WHAT NOW WORKS: the escrow write must survive
+the resolution change. Assert that the escrow copy is written BEFORE the queue is
+read for transfer, on BOTH paths - when a repo resolves and when it does not - so
+an apply that dies midway cannot leave the queue neither escrowed nor applied.
+  THE BROKEN BUILD THIS CATCHES: the natural refactor that treats escrow as the
+  else-branch of resolution and writes it only when no repo is found. That build
+  passes assertions one and two and silently removes the guarantee that closed
+  this finding's loss half.
+
+FOURTH, FIX 4, AND IT IS THE ONE THAT KEEPS THE FINDING VISIBLE: `doctor` must
+report, at session start, that queued findings exist AND that no apply target
+resolves - as one statement, not two. Red today: doctor reports the queued file
+and says nothing about reachability, so the unreachability is discovered at the
+end of a session rather than the start.
+
+GREEN DIRECTION, so these are proven both ways rather than merely shown capable of
+failing: on a corrected copy carrying a declared repo path, assertion one passes,
+two still refuses the clone, three still writes escrow first, and four reports
+nothing because a target resolves. A check only ever demonstrated red proves it
+can fail, not that it discriminates.
+
+WHAT NO ASSERTION HERE COVERS, stated so it is not mistaken for covered: none of
+these detects whether a queue that reached escrow ever reached the system
+repository. That transfer is currently a person, and a check cannot assert a
+person remembered. It is the residue of this finding and the reason it stays open.
+
+No superseded text quoted: this amendment ADDS to the finding rather than correcting it.
+
+### Addendum to finding 9 - First real use: what one clean exercise proves about the mechanism, and what it does not
+
+Amended 2026-09-06T13:46:40Z, plugin 0.1.34. Amended by: not recorded. Either the main session, or an agent that did not declare itself - the queue cannot tell. Treat it as unattributed.
+
+FIRST USE, AND THE DISTINCTION IS THE POINT. The escrow write on 2026-09-06 was
+its FIRST REAL EXERCISE. That is evidence about the MECHANISM rather than about
+the incident, and it supports a narrower claim than a track record does: a
+mechanism that worked on its first real use is not a mechanism that has worked.
+
+WHAT IS ACTUALLY PROVEN. One path, once: no system repository resolved, the
+escrow file was written BEFORE the message, the message read as a notification
+rather than a failure, `--clear` was refused in the same breath, and 219 KB of
+queue with 27 findings came through intact. For a mechanism whose entire purpose
+is to hold when nobody is watching, a clean first exercise is strong evidence -
+the failure mode it replaces used to require the operator to notice, and this one
+did not.
+
+WHAT IS NOT PROVEN, LISTED SO A LATER READER DOES NOT READ ONE SUCCESS AS A
+GUARANTEE:
+  - the path where a repository DOES resolve. The escrow-write-first ordering has
+    never been exercised on the success path, and that ordering is exactly what
+    assertion three in this finding's supplied assertion protects. The natural
+    refactor - escrow as the else-branch of resolution - would pass every other
+    check and silently remove the guarantee, and nothing has yet demonstrated it
+    holds when a target exists.
+  - repeat runs against an existing escrow file: overwrite, append, or refuse is
+    unobserved.
+  - a queue materially larger than 219 KB, a full or read-only destination, and
+    an interrupted write.
+
+SO THE HONEST STATEMENT FOR AN APPLIER: fix 3 worked on the one path that has
+ever been taken, on its first real use, and that is the basis for calling this
+finding's loss half discharged. It is a first data point, not a history. The
+resolution half remains untouched, and the operator carried the queue into the
+system repository by hand again on 2026-09-06 - the fourth time.
+
+No superseded text quoted: this amendment ADDS to the finding rather than correcting it.
 
 # Finding 10 - Upload allow-list and upstream model are independent constants that align by coincidence
 
@@ -1874,6 +2124,75 @@ WHAT SURVIVED AND WHAT DID NOT, which is the part worth carrying:
 
 No superseded text quoted: this amendment ADDS to the finding rather than correcting it.
 
+### Addendum to finding 10 - Outcome: fix parts 1 and 4 shipped and were verified both directions; part 2 is blocked by a sealed spec and part 3 is a contract decision
+
+Amended 2026-09-06T13:48:28Z, plugin 0.1.34. Amended by: not recorded. Either the main session, or an agent that did not declare itself - the queue cannot tell. Treat it as unattributed.
+
+FIX PARTS 1 AND 4 SHIPPED IN THIS PROJECT, 2026-09-06. Parts 2 and 3 did not, for
+reasons that are not "not yet".
+
+PART 1, DONE. `lib/image-constraints.ts` now exports `IMAGE_MODEL` and holds a
+per-model capability map:
+
+    const MODEL_ACCEPTS = {
+      'gpt-image-1': ['image/png', 'image/jpeg', 'image/webp'],
+      'dall-e-2':    ['image/png'],
+    } as const
+    export const ALLOWED_MIME_TYPES = MODEL_ACCEPTS[IMAGE_MODEL]
+
+`route.ts` imports `IMAGE_MODEL` instead of carrying the literal `'gpt-image-1'`
+at the call site. The sniffer's return type was widened to a separate
+`DetectableMimeType`, because what magic bytes can RECOGNISE is a property of the
+sniffer and not of the model: under a narrower model a JPEG is still identified
+as a JPEG and then refused by the allow-list, rather than becoming unrecognisable.
+
+VERIFIED IN BOTH DIRECTIONS, not merely typechecked. Setting `IMAGE_MODEL` to
+`'dall-e-2'` narrows `ALLOWED_MIME_TYPES` to `['image/png']` automatically - the
+client's `accept` attribute, the server's allow-list check and the upstream call
+all move together - and the tree still typechecks. Restored to `'gpt-image-1'`,
+allow-list confirmed back to all three. Under the previous code the allow-list
+would have stayed at three types and every JPEG upload would have been accepted
+and then rejected upstream, presenting as an intermittent outage. The drift this
+finding describes can no longer be expressed.
+
+PART 4, DONE. The multipart filename is now derived from the sniffed type -
+`upload.png`, `upload.jpg`, `upload.webp` - replacing the extensionless
+`'upload'`. This finding deliberately withheld that change pending the cause of
+the 2026-09-05 failure; finding 12 established it (the account had no credits and
+the connection was cut mid-upload), so the condition this finding set is met.
+
+`npm run typecheck` and `npm run build` exit 0; the standards checker reports
+0 blockers. The five reported failures are the pre-existing legal REVIEW REQUIRED
+warnings, untouched.
+
+PART 2, BLOCKED, NOT DEFERRED. It asks for a `live-key` acceptance criterion on
+task 0002. All three task specs are approved by content hash and are immutable to
+an agent, and task 0002 is closed - so the criterion has nowhere to go. It also
+depends on the `live-key` precondition finding 4 asks for, which does not exist.
+This part cannot be discharged from the project at all.
+
+PART 3, NOT DONE BY CHOICE. Splitting a 400 from a 5xx in the `code` field
+changes the response contract, and task 0002 §5.2 settled the neighbouring
+question deliberately - "502 for both, deliberately. The status is not the
+discriminator; `code` is." Reopening it is a decision with its own approval, not
+a drive-by edit while nearby.
+
+WHY THIS FINDING STAYS QUEUED: part 2 needs a system capability that does not
+exist, and the general shape - a declaration nothing tests against the thing it
+describes - is the system lesson.
+
+NO TASK, NO CRITERION, NO VERDICT. This work was directed by the operator and
+done outside the task pipeline, so nothing states what it was meant to achieve
+and no recorded verdict covers it. That absence is deliberate - manufacturing a
+spec afterwards would be a reconstruction reading as contemporaneous - and it is
+itself filed as finding 28. This addendum is the durable statement that exists
+instead, which is exactly the substitute finding 28 says the system should not
+have to rely on prose for.
+
+THIS FINDING IS NOT CLOSED.
+
+No superseded text quoted: this amendment ADDS to the finding rather than correcting it.
+
 # Finding 11 - No transport timeout, and could-not-reach is indistinguishable from refused
 
 Filed: 2026-09-05T11:29:29Z, plugin 0.1.32.
@@ -2014,6 +2333,64 @@ alone rather than from two rounds of hypotheses.
 
 No superseded text quoted: this amendment ADDS to the finding rather than correcting it.
 
+### Addendum to finding 11 - Outcome: discharged in this project by task 0002, including the addendum's revised message and all three consequent changes
+
+Amended 2026-09-06T13:49:05Z, plugin 0.1.34. Amended by: not recorded. Either the main session, or an agent that did not declare itself - the queue cannot tell. Treat it as unattributed.
+
+DISCHARGED IN THIS PROJECT, INCLUDING THIS FINDING'S OWN CORRECTION. Confirmed
+2026-09-06 against `app/api/cartoonify/route.ts` at plugin 0.1.34. Task 0002
+built it.
+
+PART 1 - THE TIMEOUT. Present and derived, not a second literal:
+
+    export const maxDuration = 60
+    const UPSTREAM_TIMEOUT_MS = Math.floor(maxDuration * 1000 * 0.75)   // 45 s
+    const UPSTREAM_MAX_RETRIES = 0
+
+and the client is constructed with both. The SDK now gives up at 45 s, inside the
+60 s platform ceiling, so the designed catch block is what a user meets rather
+than a platform error page - which was this finding's sharpest point, that the
+entire error path was bypassed in the one environment that matters. The comment
+in the source names this finding as the reason.
+
+PART 2 - THE DISCRIMINATION. `UPSTREAM_UNREACHABLE` exists as its own code with
+its own fixed Turkish constant, selected in the catch block by
+`unknownError instanceof OpenAI.APIConnectionError`, with `UPSTREAM_ERROR`
+retained for a provider that answered and refused or failed.
+
+THE ADDENDUM'S CORRECTION WAS HONOURED, AND THIS IS THE PART WORTH CHECKING
+RATHER THAN ASSUMING. The shipped message is the REVISED wording from this
+finding's amendment - "Karikatur servisine ulasilamadi. Sorun gecici olabilir;
+bir sure sonra tekrar deneyebilirsiniz." (accents stripped here only to keep this
+block encoding-safe) - and NOT the original draft, which said "Baglantinizi
+kontrol edip tekrar deneyin." and which the amendment retracted for claiming both
+that the failure was transient and that it was the user's network. The shipped
+text says "may be" rather than "is" and instructs the user to check nothing,
+which is exactly what the amendment asked for.
+
+The amendment's two other consequent changes also shipped: `maxRetries` is 0
+rather than the SDK default of 2, and the retry budget is bounded by wall clock
+through `UPSTREAM_TIMEOUT_MS` rather than by attempt count. The diagnostic
+addition it called "worth more than either" shipped as well - see finding 12.
+
+WHAT REMAINS, AND IT IS THE SYSTEM HALF: nothing in the standards requires a
+transport budget bounded by the route's own ceiling on any other project. This
+was found by a live incident, fixed here, and the next project starts with the
+same SDK defaults - ten minutes per attempt, two retries - inside whatever
+ceiling it declares.
+
+HOW THIS WAS ESTABLISHED, STATED SO IT IS NOT MISTAKEN FOR A VERDICT. By reading
+the tree on 2026-09-06, not by running a criterion. No acceptance criterion
+asserts any of the above, and no recorded verdict covers it - this is an
+inspection result written down, which is the substitute finding 28 says the
+system should not have to rely on.
+
+THIS FINDING IS NOT CLOSED. Its project half is discharged; the system half is
+not, and that half is the reason it was filed with the system findings rather
+than fixed and forgotten.
+
+No superseded text quoted: this amendment ADDS to the finding rather than correcting it.
+
 # Finding 12 - Provider error surface degrades with request size: same rejection, clean 429 small-body, TCP reset large-body
 
 Filed: 2026-09-05T11:46:50Z, plugin 0.1.32.
@@ -2120,6 +2497,59 @@ DO NOT re-open this as a task, and do not count it against finding 12 when findi
 cleared.
 
 ---
+
+### Addendum to finding 12 - Outcome: consequences 1-3 discharged in this project; consequence 4 stays dispositioned; the client-facing lessons remain unheld by the standards
+
+Amended 2026-09-06T13:49:05Z, plugin 0.1.34. Amended by: not recorded. Either the main session, or an agent that did not declare itself - the queue cannot tell. Treat it as unattributed.
+
+CONSEQUENCES 1-3 DISCHARGED IN THIS PROJECT; CONSEQUENCE 4 WAS DISPOSITIONED BY
+THE OPERATOR. Confirmed 2026-09-06 against `app/api/cartoonify/route.ts`.
+
+CONSEQUENCE 1 - an `APIConnectionError` on a large-body endpoint must not be
+treated as transient. Honoured: the `UPSTREAM_UNREACHABLE` message claims only
+that the problem "may be" temporary, instructs the user to check nothing, and the
+same branch fires the probe rather than a retry. See the outcome addendum on
+finding 11 for the exact wording and why it is the revised one.
+
+CONSEQUENCE 2 - a probe should use the smallest-body endpoint available, not the
+one the feature uses. Shipped as `logSmallBodyProbe()`, and it matches this
+consequence precisely: its own client, `models.list()` (GET /v1/models, not the
+edits endpoint the feature calls), `PROBE_TIMEOUT_MS` of 6 s derived from
+`maxDuration`, `maxRetries: 0`. It treats ANY HTTP response - including 401,
+429 and 400 - as `result=reached`, which is the whole diagnostic point: the
+question it answers is whether a response arrived at all, which the large request
+structurally cannot answer. It swallows every error and returns void, so a probe
+failure can never replace the designed 502, and it writes only to the server-side
+log; nothing about it reaches the response body.
+
+CONSEQUENCE 3 - retry budgets bounded by wall clock, not attempt count, on
+multipart uploads. Shipped: `UPSTREAM_TIMEOUT_MS` is 0.75 of `maxDuration` and
+`UPSTREAM_MAX_RETRIES` is 0, so the two-retries-of-a-34-second-reset case this
+consequence describes cannot occur.
+
+CONSEQUENCE 4 - report upstream. Closed permanently as out of scope for this
+project by operator disposition, recorded 2026-09-05 in this finding's own block.
+Not unactioned; dispositioned. It is not to be re-opened as a task and not to be
+counted against this finding.
+
+WHAT REMAINS, AND IT IS THE SYSTEM HALF: the header of these four says
+"CONSEQUENCES FOR ANY CLIENT OF THIS API, NOT ONLY THIS PROJECT". They are
+standards guidance and the standards do not carry them. Consequence 2 in
+particular - diagnose with the smallest-body endpoint, never the feature's -
+identified the real cause in 0.58 seconds after two rounds of wrong hypotheses,
+and there is nowhere in the system that a future project would learn it.
+
+HOW THIS WAS ESTABLISHED, STATED SO IT IS NOT MISTAKEN FOR A VERDICT. By reading
+the tree on 2026-09-06, not by running a criterion. No acceptance criterion
+asserts any of the above, and no recorded verdict covers it - this is an
+inspection result written down, which is the substitute finding 28 says the
+system should not have to rely on.
+
+THIS FINDING IS NOT CLOSED. Its project half is discharged; the system half is
+not, and that half is the reason it was filed with the system findings rather
+than fixed and forgotten.
+
+No superseded text quoted: this amendment ADDS to the finding rather than correcting it.
 
 # Finding 13 - Router gained the incomplete action at 0.1.33 and the ship skill's action table did not
 
@@ -2345,6 +2775,55 @@ multi-tenant SaaS shape the plugin was built around, so the corpus requirement a
 tenancy fields agreed with reality by coincidence rather than by design. The defect is not
 new; today is the first time anything stood in a position to observe it. Expect the same for
 the other architectural fields the moment a project declines the next assumption.
+
+No superseded text quoted: this amendment ADDS to the finding rather than correcting it.
+
+### Addendum to finding 15 - Two addenda here carry a false provenance stamp, including the one that supplies this finding's body
+
+Amended 2026-09-06T13:28:56Z, plugin 0.1.34. Amended by: not recorded. Either the main session, or an agent that did not declare itself - the queue cannot tell. Treat it as unattributed.
+
+TWO FALSELY STAMPED ADDENDA IN THIS FINDING. They are:
+
+  1. "The finding text, supplied - the body as filed was a path, not the
+     observation", Amended 2026-09-05T14:35:01Z, plugin 0.1.33.
+  2. "Stated at full width: a check that cannot pass honestly creates pressure to
+     pass it dishonestly, and finding 1 is this finding's entry gap",
+     Amended 2026-09-05T14:41:35Z, plugin 0.1.33.
+
+Both stamped: Amended by: **main-session** (agent).
+
+NOTE THE FIRST ONE PARTICULARLY. It exists to SUPPLY THE FINDING'S BODY, which
+had been filed as a path rather than the observation (finding 16). So the block
+carrying this finding's actual evidence is one of the blocks whose attribution is
+false. The evidence is unaffected; only the claim about who recorded it is wrong.
+
+WHY THE STAMP IS FALSE. It reads "Provenance enforced at the risk guard, not
+self-declared." Nothing enforced it. The guard's comparison lives in
+risk-guard.mjs and is gated on `agent_type`, which is present for a subagent and
+ABSENT for the main session; a main-session caller therefore passes any value it
+likes and the comparison never runs. Worse, `main-session` IS NOT AN AGENT:
+agents/agent-scopes.json declares exactly five - mavci-architect, mavci-builder,
+mavci-guardian, mavci-scribe, mavci-verifier. Had a subagent declared
+`--agent main-session`, the guard would have DENIED it as "not itself". It was
+not denied because there was no caller identity to compare against.
+
+HOW TO READ THESE BLOCKS. Treat them exactly as if they said "Amended by: not
+recorded ... Treat it as unattributed", which is what the other thirteen addenda
+in this queue say and what these should have said. Specifically, the stamp is
+NOT evidence that an agent authored the block, and NOT evidence that anything
+verified who did. It is a string that was typed and echoed.
+
+THE STAMPS ARE NOT EDITED, AND MUST NOT BE. This queue is append-only -
+"no path here edits a filed byte" - and rewriting a stamp would erase the fact
+that it was ever wrong, which is the same objection the queue raises against
+replacing a filed sentence. This addendum is the correction; the bytes stay.
+
+IDENTIFIED BY TITLE AND TIMESTAMP, NOT BY LINE NUMBER. Finding 24's addendum
+cited line numbers, and they are already stale: amending finding 9 inserted text
+inside an earlier block and shifted every line after it. In a file that appends
+inside blocks, a line number is not an identifier.
+
+Full analysis, both holes and the driven reproductions: finding 24.
 
 No superseded text quoted: this amendment ADDS to the finding rather than correcting it.
 
@@ -2669,6 +3148,57 @@ a reason to retro-stamp the thirteen. Their absent stamp is accurate.
 No superseded text quoted: this amendment ADDS to the finding rather than correcting it.
 
 ---
+
+### Addendum to finding 24 - Line numbers are not identifiers in this file: the first addendum's citations were stale within hours, and title-plus-timestamp is the only stable reference
+
+Amended 2026-09-06T13:46:39Z, plugin 0.1.34. Amended by: not recorded. Either the main session, or an agent that did not declare itself - the queue cannot tell. Treat it as unattributed.
+
+CORRECTION TO THIS FINDING'S FIRST ADDENDUM, AND IT IS A CORRECTION AN APPLIER
+NEEDS BEFORE THEY GO LOOKING. That addendum located the five false stamps by LINE
+NUMBER - "lines 120, 1359, 1429, 2164, 2291". Two of those were wrong within
+hours. The stamps are now at 2285 and 2412.
+
+WHAT MOVED THEM. Nothing was edited. `--amend` inserts an addendum AT THE END OF
+ITS TARGET'S BLOCK, not at the end of the file - a deliberate design choice, and
+the right one, since tail-appending is what left the addenda to findings 17, 20
+and 22 buried hundreds of lines from what they amend. But it means every
+amendment to finding N displaces every line in findings N+1 onward. Two addenda
+were added to finding 9 later the same session, and everything after finding 9
+shifted by about 121 lines.
+
+SO IN THIS FILE A LINE NUMBER IS NOT AN IDENTIFIER. It is a coordinate valid only
+until the next amendment to any EARLIER finding, and it decays silently - the
+number still resolves, it just resolves to different text. Note the asymmetry
+that makes this easy to get wrong: filing a NEW finding appends at the end of the
+file and shifts nothing, so line numbers can appear stable across several
+operations and then move all at once.
+
+THE STABLE REFERENCE IS TITLE AND TIMESTAMP. Every addendum carries a
+`### Addendum to finding N - <title>` heading and an `Amended <ISO 8601>, plugin
+<version>.` line. Both are written once, never rewritten, and travel with the
+content they name. The corrections filed on findings 1, 7 and 15 use exactly that
+form, and an applier should read those rather than the line numbers above.
+
+The five stamps, addressed properly:
+  finding 1  - "Finding 15 is this finding from the other direction - the entry
+                gap and the exit gap", Amended 2026-09-05T14:41:49Z
+  finding 7  - "The criteria path: the agent qualified to judge is the one denied
+                the tool to record - the plumbing half shipped and the agent half
+                did not", Amended 2026-09-05T14:31:35Z
+  finding 7  - "The assertion for the criteria path, and the broken build it must
+                catch", Amended 2026-09-05T14:31:42Z
+  finding 15 - "The finding text, supplied - the body as filed was a path, not
+                the observation", Amended 2026-09-05T14:35:01Z
+  finding 15 - "Stated at full width: a check that cannot pass honestly creates
+                pressure to pass it dishonestly, and finding 1 is this finding's
+                entry gap", Amended 2026-09-05T14:41:35Z
+
+GENERAL, NOT SPECIFIC TO THIS FINDING: any block anywhere in this queue that
+cites a line number into this queue has the same defect, and so does any tooling
+that would. If the applier-facing surface of finding 25 is ever built, whatever
+it emits must address blocks by finding number plus timestamp, never by offset.
+
+No superseded text quoted: this amendment ADDS to the finding rather than correcting it.
 
 # Finding 25 - The queue has a place for what was observed and none for what the applier must read first; the missing surface has already been hand-carved once
 
@@ -3023,3 +3553,314 @@ retro.mjs's nextFindingNumber() scans the queue. Assert that allocating a number
 while a record exists only in the non-canonical directory returns max+1 across
 both, not max+1 of the canonical one - the broken build being one that scans
 `PATHS.decisions` only and reissues a number already used in docs/adr/.
+
+---
+
+### Addendum to finding 27 - Outcome: an index shipped in both directories; the allocator, the dual authorisation and the unread canonical path are untouched
+
+Amended 2026-09-06T13:48:28Z, plugin 0.1.34. Amended by: not recorded. Either the main session, or an agent that did not declare itself - the queue cannot tell. Treat it as unattributed.
+
+AN INDEX SHIPPED IN THIS PROJECT, 2026-09-06. It is the navigability half only.
+
+WHAT WAS WRITTEN. Identical `README.md` files in BOTH authorised directories -
+`docs/adr/` and `.mavci/decisions/` - each carrying the full table of 0001
+through 0005 with real titles and actual locations, both naming conventions
+("ADR NNNN" and "Decision NNNN") called out, and an explicit warning that a gap
+in one directory does NOT mean the number was never allocated. A reader who lands
+in either directory now learns the other exists without having to already know.
+
+NO FILES WERE MOVED, which was this finding's own stipulation. Every literal
+`docs/adr/...` citation in the tree still resolves; all ten paths named by the
+index were checked to exist after writing it.
+
+WHAT THIS DOES NOT FIX, AND IT IS MOST OF THE FINDING. The index is a DOCUMENT,
+not a check. Nothing enumerates the sequence, so this finding's first assertion
+would still be RED against the tooling: no code reads the canonical path
+(`PATHS.decisions` is still referenced exactly once, an `mkdir` at connect, and
+never read), two locations are still authorised for one artefact class, and there
+is still no allocator - the next number is still whatever a person remembers.
+
+THE DUPLICATION IS ITSELF A SYMPTOM. Two hand-maintained copies of one table can
+drift, and nothing detects it if they do. That is a worse property than the
+system half would have, and it is accepted only because the alternative - a
+single index in one directory - leaves the reader in the other exactly as
+stranded as before. Both copies say so in the file.
+
+NO TASK, NO CRITERION, NO VERDICT. This work was directed by the operator and
+done outside the task pipeline, so nothing states what it was meant to achieve
+and no recorded verdict covers it. That absence is deliberate - manufacturing a
+spec afterwards would be a reconstruction reading as contemporaneous - and it is
+itself filed as finding 28. This addendum is the durable statement that exists
+instead, which is exactly the substitute finding 28 says the system should not
+have to rely on prose for.
+
+THIS FINDING IS NOT CLOSED.
+
+No superseded text quoted: this amendment ADDS to the finding rather than correcting it.
+
+# Finding 28 - Work that never becomes a task carries no statement of what it was for, and a bare standards pass is the only artefact it leaves
+
+Filed: 2026-09-06T13:47:39Z, plugin 0.1.34.
+
+Filed by: not recorded. Either the main session, or an agent that did not declare itself - the queue cannot tell. Treat it as unattributed.
+
+Target: `scripts/verify.mjs --changed and the verdict it writes; the absence of any non-task route for recording intent`
+
+WORK THAT NEVER BECOMES A TASK HAS NO DURABLE STATEMENT OF WHAT IT WAS FOR, AND
+NOTHING ANYWHERE NOTICES. The checker passing the tree is not that statement and
+does not claim to be, but it is the only artefact produced, so it becomes the
+record by default.
+
+OBSERVED 2026-09-06, project cartoonify, plugin 0.1.34. Two substantive changes
+landed in the working tree:
+  - `lib/image-constraints.ts` and `app/api/cartoonify/route.ts` - the upload
+    allow-list is now derived from an exported model constant through a
+    per-model capability map, and the multipart filename now carries an
+    extension (system finding 10, fix parts 1 and 4).
+  - `docs/adr/README.md` and `.mavci/decisions/README.md` - a decision-record
+    index in both authorised locations (system finding 27).
+Both were deliberate, both were directed by the operator, both discharge parts
+of queued findings. NEITHER IS A TASK. There is no spec, no acceptance criterion,
+and no recorded verdict about them.
+
+WHAT THE SYSTEM SAID ABOUT THEM. `verify.mjs --changed` returned:
+
+    "scope": "changed", "task_id": null, "verdict": "pass",
+    "summary": { "blockers": 0, "pass": 11, "fail": 5, ... }
+
+That verdict is TRUE and it is about standards compliance in the changed files.
+It says nothing about whether the changes achieved anything, because nothing ever
+stated what they were meant to achieve. A reader six months from now sees `pass`
+against a diff and CANNOT DISTINGUISH "nothing was being attempted here" from
+"something specific was attempted and nobody wrote down what". Those are very
+different states and the artefact renders them identically.
+
+THIS IS NOT FINDING 6, AND NOT FINDING 22. Both describe this gap one step
+later, and both PRESUPPOSE A TASK EXISTS. Finding 6: the recorded verdict cannot
+express acceptance-criteria results, so the router closes tasks whose spec is not
+satisfied. Finding 22: a criterion result with no tree sha and no superseded_by
+is a claim with no subject. Each is about a criterion that exists and is
+mis-recorded. HERE THERE IS NO CRITERION TO MIS-RECORD. The pipeline has no entry
+point at all for "a change was made on purpose, to achieve X, and here is what
+would show it did" unless that change is first promoted to a task.
+
+AND THE QUEUE IS WHERE THIS CONCENTRATES, STRUCTURALLY. A finding's fix is small,
+well understood, and already justified in writing by the finding itself - which
+is precisely the profile of work nobody opens a task for. Opening one feels like
+ceremony when the finding already explains the problem and names the remedy. So
+THE SYSTEM'S OWN IMPROVEMENT LOOP IS THE WORK LEAST LIKELY TO BE SPECIFIED, and
+the more disciplined the queue gets, the more true that becomes: a well-written
+finding makes its fix feel too obvious to spec.
+
+THE ASYMMETRY THAT MAKES THIS SHARP. `retro.mjs` will not let a finding be filed
+quietly without an assertion. It does not refuse - it writes the absence into the
+document in the words the next reader needs: "NOT SUPPLIED. Whoever applies this
+must write one before building the fix: name the broken build the assertion
+catches, and confirm the assertion FAILS against it first." The queue therefore
+has a DESIGNED SLOT for "the check this needs", and marks it when empty. THE FIX
+HAS NO SLOT AT ALL. The report is held to a standard the remedy is not, and it is
+the remedy that changes how the software behaves.
+
+CONSEQUENCES, BOTH DIRECTIONS.
+  1. A fix that shipped and does not say so gets implemented twice. The queue is
+     carried into the system repository and applied by someone who was not
+     present when the fix landed; nothing in the finding records that its project
+     half is already done.
+  2. WORSE, AND LESS OBVIOUS: a fix that did NOT achieve its aim leaves no
+     statement to check it against. Reimplementation is recoverable. A change
+     that was supposed to close a gap, did not, and passed the checker anyway is
+     recorded as a success with no way back to the intent it failed.
+
+NOT AN ARGUMENT FOR RETRO-SPECCING, AND THIS MATTERS. Writing a spec after the
+change is manufacturing a record that reads as contemporaneous when it is a
+reconstruction from the diff - the same laundering that was refused on 2026-09-06
+for task 0002's missing summary, and refusing it there while doing it here would
+be incoherent. What is missing is not a task. It is a LIGHTWEIGHT STATEMENT OF
+INTENT, recorded AT THE TIME the change is made, naming what the change is for
+and what would show it worked. A task is one way to carry that. It should not be
+the only way, because the cost of the only way is that most of this work carries
+nothing.
+
+### The assertion, and the broken build it must catch
+
+FOUR ASSERTIONS. The first is the defect; the next two stop it being "fixed" by
+closing the escape hatch or by laundering; the fourth is the green direction.
+
+FIRST, AND RED TODAY: a standards run over changed files with no task in scope
+must not report an UNQUALIFIED `"verdict": "pass"`. It must be distinguishable -
+a distinct verdict value, or an explicit field - meaning "standards pass; no
+statement of intent exists for these changes".
+  THE BROKEN BUILD: 0.1.34 as it stands. Reproduce today's run - a working tree
+  with substantive source changes and no task - and require the output to be
+  bare `"verdict": "pass", "task_id": null`. Confirm that FIRST. An
+  implementation that already reports something else is reading a different tree.
+
+SECOND, SO THE FIX IS NOT "REFUSE UNTASKED WORK": an untasked change must still
+be ALLOWED. Assert that the run completes and does not block. The ability to make
+a small fix without opening a task is the same escape hatch the reporting channel
+depends on, and closing it would reproduce finding 20's shape - a control that
+protects the record by making the work unreachable. If the two cannot both hold,
+KEEP ALLOWING and report the gap loudly; an unrecorded change is recoverable and
+a blocked fix is not.
+
+THIRD, SO THE FIX IS NOT RETRO-SPECCING: the statement of intent must be
+recordable WITHOUT creating a task or a spec, and no code path may DERIVE its
+text from the diff.
+  THE BROKEN BUILD THIS MUST CATCH: a command that generates the intent note by
+  summarising the change. That build satisfies assertions one and two, produces a
+  document that reads as a contemporaneous statement of purpose, and is a
+  reconstruction - exactly the artefact refused for task 0002's summary. Assert
+  the intent text originates from the author at change time and is never
+  synthesised from the tree.
+
+FOURTH, GREEN DIRECTION, so this is proven both ways rather than merely shown
+capable of failing: on a corrected copy where the change carries a statement of
+intent, the run must report a clean qualified pass, name the statement, and not
+warn. A check only ever demonstrated red proves it can fail, not that it
+discriminates.
+
+SCOPE NOTE: none of these asserts the intent statement is TRUE, or that the
+change achieved it. That is the same boundary finding 26's reference check draws
+- existence, not sufficiency. The narrow version is what was missing today.
+
+---
+
+# Finding 29 - Durable copies of the queue are correct only at the instant they are written, nothing detects the drift, and the refresh is refused by a message that opens exactly like the one meaning success
+
+Filed: 2026-09-06T14:00:43Z, plugin 0.1.34.
+
+Filed by: not recorded. Either the main session, or an agent that did not declare itself - the queue cannot tell. Treat it as unattributed.
+
+Target: `scripts/retro.mjs - escrowQueue() collision branch, applyPlan() destination naming, and the escrow provenance header`
+
+THE DURABLE COPIES ARE CORRECT AT A MOMENT AND DRIFT FROM THEN ON, NOTHING
+DETECTS IT, AND THE REFRESH PATH REFUSES IN A MESSAGE THAT READS LIKE THE ONE
+MEANING SUCCESS.
+
+Finding 9 made the queue SURVIVABLE. Survivable and current are different
+properties, and only the first was delivered.
+
+THE RATES DO NOT MATCH, WHICH IS THE WHOLE DEFECT. The project queue moves
+continuously - every --record and every --amend. The escrow is written once per
+--apply. The system-repository copy is written once per hand carry. Two snapshots
+against a continuously moving source, with no comparison between them.
+
+MEASURED 2026-09-06, AND THE MEASUREMENT ITSELF WILL BE STALE, WHICH IS THE POINT:
+  project queue                          28 findings, 30 addenda
+  escrow copy cartoonify-2026-09-06.md   27 findings, 19 addenda, no finding 28
+  escrow provenance header stamped       2026-09-06T12:25:50Z
+Eleven addenda and one finding behind, roughly ninety minutes after it was
+written. Nothing in either artefact reports the difference.
+
+IT RECURRED INSIDE THE HOUR, AND THE SECOND TIME IS THE INSTRUCTIVE ONE. After the
+divergence was noticed, the escrow was re-run to refresh it. IT DID NOT REFRESH.
+applyPlan() names the destination <project_id>-<YYYY-MM-DD>.md, so a second run on
+the same day targets the file the first run created, and escrowQueue() takes its
+clash branch: "Nothing was written and nothing in the project was touched." The
+escrow on disk is still the 12:25:50Z copy.
+
+AND THE REFUSAL IS MISREADABLE AS THE SUCCESS. Compare the two messages the same
+command produces, at their openings:
+
+  fresh:  "could not locate the system repository. Looked for ... THE FINDINGS
+           ARE SAFE. They were written, before this message, to: ..."
+  clash:  "could not locate the system repository, and the durable copy already
+           exists: ... Nothing was written and nothing in the project was
+           touched."
+
+Both open with the identical clause. The operator has by now been trained -
+correctly, by finding 9's fix - that this clause introduces a NOTIFICATION and
+that the findings are safe. In the clash case the same opening introduces a
+refusal, and the load-bearing words are "Nothing was written", unemphasised, after
+a subordinate clause that reads as reassurance ("the durable copy already
+exists"). One means your work is preserved and the other means your newest work is
+not, and they are distinguished by a clause arriving after the part that looks
+like the answer.
+
+THE COLLISION RULE IS NOT WRONG AND MUST NOT BE WEAKENED. Its reason is stated in
+the source: "a lesson is evidence, so a second run on the same day must not
+replace the first." That is correct. Overwriting an escrow would destroy evidence,
+which is the failure mode this whole mechanism exists to prevent. The defect is
+that PRESERVING THE OLD COPY AND TRACKING A GROWING QUEUE were treated as one
+operation, so choosing the first silently forfeited the second.
+
+THE PROVENANCE HEADER IS THE NATURAL HOME FOR THE MISSING FACT AND DOES NOT CARRY
+IT. Each escrow copy is written with a header naming the command, the ISO
+timestamp, the project, the plugin version and the source path. It records WHEN it
+was taken and WHERE it came from. It records nothing about WHAT it contains - no
+digest of the source, no finding count, no addendum count. A reader who opens
+cartoonify-2026-09-06.md in the system repository can see the date and cannot
+determine that eleven addenda were added to the source after it. The header
+already tells that reader the copy is "NOT APPLIED" and that carrying it is "still
+owed"; it cannot tell them it is also not current.
+
+THIS IS FINDING 2'S SHAPE ON THE SYSTEM'S OWN RECORD. Finding 2's addendum states
+it: "Write-once generation is the defect." An artefact generated once from a
+source that keeps moving is correct at creation and wrong forever after, with
+nothing to notice. The difference is what is drifting. .env.example describes one
+project's configuration; THIS FILE IS THE RECORD OF THE SYSTEM'S OWN DEFECTS, and
+it is the artefact carried into the repository that governs how every downstream
+project is built. A stale .env.example misconfigures one project. A stale lessons
+copy means the fixes applied to the system are chosen from a list missing its
+newest entries - and the missing entries are systematically the CORRECTIONS,
+because amendments are how this queue records that an earlier claim was wrong.
+Finding 24's five stamp corrections and finding 9's own first-use qualification
+are both among the eleven that did not travel.
+
+WHAT THE FIX IS NOT. Re-running --apply after every amendment is a PROCEDURE, and
+finding 9 is four consecutive sessions of evidence that procedures do not hold -
+the whole argument for fix 3 was that it "does not depend on the operator doing
+anything". A currency requirement that depends on the operator remembering
+reintroduces exactly the dependency fix 3 removed. It is worse than that here: the
+procedure does not merely go unperformed, it is REFUSED by the collision rule, on
+the same-day timescale amendments actually happen.
+
+THE TWO SHAPES THAT WOULD WORK. Either the durable write is TRIGGERED BY THE
+AMENDMENT rather than by --apply, so the copy cannot lag by construction; or the
+copies CARRY A DIGEST OF THEIR SOURCE and something compares them and reports the
+divergence - --list, doctor, or the header itself. The first removes the gap; the
+second makes it visible and dated. Either satisfies the constraint a procedure
+cannot.
+
+### The assertion, and the broken build it must catch
+
+FIVE ASSERTIONS. The first is the defect, three are guards on the obvious wrong
+fixes, and the last is the green direction.
+
+FIRST, AND RED TODAY: the staleness of a durable copy must be DETECTABLE without
+opening both files and counting. Something - --list, doctor, or the copy's own
+header - must report that the escrow does not match the queue it was taken from.
+  THE BROKEN BUILD: the current tree. Reproduce it exactly - an escrow written,
+  then any --amend - and require that NOTHING anywhere reports a divergence.
+  Confirm that FIRST. Today's instance: escrow at 27 findings / 19 addenda,
+  project at 28 / 30, and no command reports it.
+
+SECOND, SO IT IS NOT FIXED BY OVERWRITING: a refresh must not destroy the earlier
+copy. Assert that after a refresh the previous escrow content is still
+retrievable. The collision rule's reason - "a lesson is evidence, so a second run
+on the same day must not replace the first" - is correct, and must not be traded
+away to buy currency. The broken build here is the one-line change that drops the
+clash check.
+
+THIRD, SO IT IS NOT A PROCEDURE: the currency signal must not depend on anyone
+running a command after an amendment. Assert that --amend ALONE is sufficient to
+make the divergence detectable - either it updates the durable copy or it marks it
+stale. A build in which the operator must run --apply to learn that --apply is
+owed satisfies assertion one and fails this, and it is the fix most likely to be
+written.
+
+FOURTH, THE MESSAGE, AND IT IS SEPARABLE FROM THE REST: an operator reading only
+the first line must be able to tell a completed escrow from a refused one.
+  RED TODAY: both messages open with the identical clause "could not locate the
+  system repository". Assert the clash path LEADS with what did not happen.
+
+FIFTH, GREEN DIRECTION, so this is proven both ways rather than merely shown
+capable of failing: on a corrected copy, escrow then amend, and require the
+divergence to be REPORTED, the earlier copy to still exist, and no command to have
+been run in between. Then refresh, and require the report to clear. A check only
+ever demonstrated red proves it can fail, not that it discriminates.
+
+SCOPE NOTE: none of this asserts the system-repository copy is current - that one
+is written by a person on another machine and no check here can see it. What a
+digest in the header WOULD give that reader is the ability to compare it against a
+queue when they next hold both, which is the most available across a manual carry.
