@@ -9,7 +9,37 @@ allowed-tools: Read, Grep, Glob, Bash(node *)
 
 Request: `$ARGUMENTS`
 
-Next step: !`node "${CLAUDE_PLUGIN_ROOT}/scripts/route.mjs" --request "$ARGUMENTS" 2>&1`
+Control plane as it stands: !`node "${CLAUDE_PLUGIN_ROOT}/scripts/route.mjs" 2>&1`
+
+## The block above does NOT carry your request, and that is deliberate
+
+It is the router's answer for the control plane **as it stands** — an open task,
+a failing verdict, a spec waiting on approval. If a task is already open that is
+the whole answer, because the router ignores a request while one is (see "The
+loop"). If none is, it will say `idle`, and `idle` is **not** your answer when
+the operator has just told you what they want. Do this instead:
+
+1. Write the request **verbatim** to a file with the **Write tool** — any path
+   you can write outside `.mavci/control/`; `request.txt` in the project root is
+   fine, it is scratch and not state. Do **not** write it with `echo`, `printf`
+   or a heredoc: that puts the text back through a shell, which is the whole of
+   the defect below.
+2. Consult the router with the path:
+
+       node "${CLAUDE_PLUGIN_ROOT}/scripts/route.mjs" --json --request-file request.txt
+
+**Why the request never rides inside a command.** On 2026-09-09 `/mavci-core:ship`
+was called with a request describing a code change — identifiers in backticks,
+the way prose about code is ordinarily written — and it died with
+`unexpected EOF while looking for matching '"'`, taking the preflight with it. It
+is not a quoting problem, and no amount of quoting fixes it: the loader
+substitutes `$ARGUMENTS` into this document **before** it extracts the inline
+shell block (NATIVE-CAPABILITIES 2.10), so a backtick in the request ends the
+block early and the shell receives half a command. A file has no shell in it.
+`check-skill-arguments.mjs` PART 2 holds this, and `check-ship-contract.mjs`
+C10–C12 hold that the request still reaches the router by the route above —
+because an argument that goes nowhere is the 0.1.24 defect, and dropping it on
+purpose is not different from dropping it by accident.
 
 ## If the block above did not run
 
@@ -93,15 +123,20 @@ then act on the answer:
 Repeat until an action is the operator's, or until **twelve** router
 consultations in one invocation — whichever comes first.
 
-    node "${CLAUDE_PLUGIN_ROOT}/scripts/route.mjs" --json --request "$ARGUMENTS"
+    node "${CLAUDE_PLUGIN_ROOT}/scripts/route.mjs" --json
 
-Pass `--request` only while no task is open; once one is, drop it — a request
-given to a router that already has a task is noise, and the router ignores it.
-The preflight above passes it unconditionally, which is the same statement from
-the other side: every request-sensitive branch sits in the no-task-open arm, so
-the router discards `--request` exactly when this paragraph says to. Bare
-`/mavci-core:ship` expands to `--request ""`, which is falsy and routes as no
-request at all.
+Pass `--request-file <path>` only on the FIRST consultation, and only while no
+task is open; once one is, drop it — a request given to a router that already has
+a task is noise, and the router ignores it. Every request-sensitive branch sits in
+the no-task-open arm, which is the same statement from the other side: the router
+discards the request exactly when this paragraph says to. Bare `/mavci-core:ship`
+has no request at all, and needs no file.
+
+**Never `--request "<text>"` from here.** The flag exists for a person at a
+terminal who can quote their own sentence. You are writing a command into a
+shell, the request is the operator's prose, and one backtick or one apostrophe in
+it truncates the command — see the section above. `--request-file` is not a
+convenience; it is the only form that cannot lose the request.
 
 The answer has `action`, `dispatch`, `task_id`, `why` and `steps[]`. Run every
 command in `steps[]`, in order, then dispatch the agent in `dispatch` if there is
@@ -120,7 +155,7 @@ omission.
 | `blocked` | **stop.** Print `why` and every step verbatim. Do not retry, do not reset attempts, do not waive. |
 | `release_gate` | **stop.** Print `why` and the steps. The release gate and the deploy behind it are the operator's. |
 | `unverified` | **stop.** Enforcement did not run. Print `why`. Nothing may be built on unchecked code. |
-| `idle` | **stop.** Ask what to build. |
+| `idle` | **not a stop if the operator gave you a request** — the preflight carries no request, so this is the answer for an empty control plane and not an answer about what they asked for. Write the request to a file and consult again with `--request-file <path>`. Stop and ask what to build only if there was no request. |
 | `not_connected` | **stop.** Point at `/mavci-core:connect`. |
 
 **One of those six stopping actions is new, and it is the point of the chain**

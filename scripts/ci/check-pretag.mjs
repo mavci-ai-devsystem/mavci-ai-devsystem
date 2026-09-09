@@ -864,6 +864,23 @@ export function cutTag({ tag, head, git, checkTags, watch }) {
 // reported NO failures at all. Nothing static could have found that. The
 // --selftest dispatch is above the refusal now, with the reason at the line.
 //
+// v0.1.35 added a sixth, an AXIS, and it is the only one where every case was
+// already correct. `watermarkBanner` in route.mjs asks two questions at once -
+// does the marker OPEN the line, and is it UNQUOTED - and every case written for
+// it answered both the same way: a mention was mid-line AND quoted, a banner
+// line-leading AND bare. So M4, which made a quote count as banner punctuation,
+// reddened NOTHING. The form half was load-bearing in the code and asserted
+// nowhere, and the suite was green for the whole time it was. W13 - a marker
+// quoted at the head of a bullet - is where the two come apart, and M4 reddens
+// it alone.
+//   The five scales above are a case in the wrong place: something written to
+// catch a defect, sitting where the defect could not reach it. This one is a
+// case SET that is complete on every case it contains and silent on an axis none
+// of them separates. Counting the cases does not find it. Reading them does not
+// find it, because each one is right. Breaking one half at a time is the only
+// instrument that can, and that is the whole reason the rule at the top of this
+// block is stated as ALWAYS.
+//
 // check-ci-gates.mjs proves every assertion in here CAN fail. It says outright
 // that it cannot prove any of them DISCRIMINATES. That gap is closed by hand,
 // per assertion, by mutation, or it is not closed.

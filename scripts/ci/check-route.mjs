@@ -64,7 +64,7 @@ const VERIFY = path.join(SCRIPTS, 'verify.mjs');
 const ROUTE_CLI = path.join(SCRIPTS, 'route.mjs');
 const AGENTS = path.join(ROOT, 'plugins', 'mavci-core', 'agents');
 
-const { route, ACTIONS, OWNER, verdictForAttempt, selectTask, hasSpec } =
+const { route, ACTIONS, OWNER, verdictForAttempt, selectTask, hasSpec, specState } =
   await import(pathToFileURL(path.join(SCRIPTS, 'lib', 'route.mjs')).href);
 const state = await import(pathToFileURL(STATE).href);
 const { PATHS } = await import(pathToFileURL(path.join(SCRIPTS, 'config.mjs')).href);
@@ -454,6 +454,115 @@ check(selectTask([task({ id: '0003', status: 'pending' }), task({ id: '0009', st
 check(selectTask([task({ id: '0001', status: 'done' })]).task === null,
   'E10 and a done task is not open');
 
+/* ============================ W. THE WATERMARK, BANNER VERSUS MENTION */
+/*
+ * cartoonify finding 3, filed twice. `hasSpec` tested `specText.includes('REVIEW
+ * REQUIRED')` over the whole document, so a spec that DISCUSSED the watermark was
+ * classified as one that CARRIED it, and the router answered `plan` - "task 0004
+ * has no spec at ..." - about a 56575-byte file written eleven minutes earlier.
+ *
+ * THE SECOND INSTANCE IS WHY THIS IS NOT AN UNLUCKY CHOICE OF PHRASE. A spec that
+ * pins the standards gate at "0 blocking, 5 warnings" has to say what the five
+ * warnings ARE, or the number is a magic constant nobody can check - and what
+ * they are is the scaffolded-legal-page REVIEW REQUIRED marker. So a correct
+ * spec, doing a necessary thing, could not be seen. Every project this plugin
+ * governs carries five of those warnings.
+ *
+ * THE PAIRING IS THE WHOLE OF IT, and one half alone passes on a build that has
+ * gone the other way entirely: W1-W5 are the mentions, which must be ACCEPTED,
+ * and W6-W9 are the banners, which must still be REJECTED. A `hasSpec` that
+ * dropped the marker test satisfies the first five and none of the last four; the
+ * shipped `includes()` satisfies the last four and none of the first five.
+ */
+
+console.log('\nW. a spec that DISCUSSES the watermark is not a spec that CARRIES it:');
+
+const SPEC = '.mavci/tasks/0004.md';
+const planTask = (spec = SPEC) => task({ phase: 'plan', attempts: 0, status: 'pending', spec });
+
+/* The real line, from cartoonify's task 0004 spec at line 488. */
+const MENTION_QUOTED = [
+  '# 0004 - style library groups and the picker',
+  '',
+  '## Acceptance criteria',
+  '',
+  '1. **[gate]** *pin.* The Mavci standards gate reports **0 blocking findings and',
+  '   exactly 5 warnings**, all five the scaffolded-legal-page `REVIEW REQUIRED`',
+  '   marker. Observed today: `11 passing, 0 blocking, 5 warning(s)`.',
+].join('\n');
+
+{
+  const r = route(base({
+    state: { phase: 'plan' },
+    tasks: [planTask()],
+    specText: MENTION_QUOTED,
+  }));
+  check(r.action !== 'plan',
+    'W1 THE LIVE DEFECT: a spec quoting the marker as a code span routes PAST plan '
+    + `- got ${r.action}. The architect was redispatched against a complete spec, twice, `
+    + 'and the answer said the file did not exist.');
+}
+check(hasSpec({ spec: SPEC }, MENTION_QUOTED),
+  'W2 and the helper says the same thing on its own');
+check(hasSpec({ spec: SPEC }, ['# 0004', '', 'The five warnings are REVIEW REQUIRED markers on the legal pages.'].join('\n')),
+  'W3 an unquoted mention mid-sentence is prose about the marker, not a banner');
+check(hasSpec({ spec: SPEC }, ['# 0004', '', 'The scaffold writes this into every legal page:', '',
+  '```tsx', '{/* REVIEW REQUIRED - draft text. A lawyer must review this. */}', '```', '',
+  'All five must survive.'].join('\n')),
+  'W4 and a fenced block quoting the scaffold\'s own banner is a quotation, not a banner');
+check(hasSpec({ spec: SPEC }, ['# 0004', '', 'Observed:', '',
+  '    REVIEW REQUIRED - "privacy" page is still marked, no lawyer has reviewed this text', '',
+  'That is the state to preserve.'].join('\n')),
+  'W5 and an indented code block, which is the other way markdown quotes one');
+check(hasSpec({ spec: SPEC }, ['# 0004', '', '- `REVIEW REQUIRED` markers stay on all five legal pages'].join('\n')),
+  'W13 a quoted marker OPENING a bullet is still a mention - position alone does not decide it');
+
+/* ---- the other half. A build that simply deleted the test passes W1-W5. ---- */
+check(!hasSpec({ spec: SPEC }, 'REVIEW REQUIRED - this is a placeholder'),
+  'W6 a bare banner is still an unwritten spec');
+check(!hasSpec({ spec: SPEC }, '# REVIEW REQUIRED\n\nThe architect has not written this yet.\n'),
+  'W7 and one written as a heading');
+check(!hasSpec({ spec: SPEC }, '<!-- REVIEW REQUIRED -->\n\n# 0004\n\ndraft\n'),
+  'W8 and one written as an HTML comment above real-looking content');
+check(!hasSpec({ spec: SPEC }, '> **REVIEW REQUIRED** - draft, do not build from this\n\n# 0004\n'),
+  'W9 and one written as a bold blockquote');
+
+/* ---- and the router SAYS which of the two it decided ---------------------- */
+/*
+ * The finding's other half: the failure was silent and read as someone else's
+ * fault. `why` said the spec did not exist and named the architect as the fix, so
+ * an orchestrator following the skill redispatches until the twelve-consultation
+ * ceiling ends it - by exhaustion, not by diagnosis. Nothing in the answer pointed
+ * at the marker. Whatever this heuristic still gets wrong must cost a minute, and
+ * that is only true if the answer names the line it objected to.
+ */
+{
+  const r = route(base({
+    state: { phase: 'plan' },
+    tasks: [planTask()],
+    specText: '# REVIEW REQUIRED\n\nnot written yet\n',
+  }));
+  check(r.action === 'plan' && /REVIEW REQUIRED/.test(r.why) && /line 1\b/.test(r.why),
+    'W10 a spec rejected for the watermark says so, and names the line '
+    + `- got ${r.action}: ${JSON.stringify(r.why).slice(0, 160)}`);
+}
+{
+  const r = route(base({ state: { phase: 'plan' }, tasks: [planTask()], specText: null }));
+  check(r.action === 'plan' && !/REVIEW REQUIRED/.test(r.why),
+    'W11 and a spec that genuinely is not there does NOT blame the watermark '
+    + `- got ${JSON.stringify(r.why).slice(0, 120)}`);
+}
+{
+  /* CALLED THROUGH A GUARD, not destructured into a bare call. An absent export
+   * would throw here, and a check that CRASHES reports nothing about which arm
+   * broke - check-pretag's P11, one file over. */
+  const call = (text) => (typeof specState === 'function' ? specState({ spec: SPEC }, text) : null);
+  const s = call(MENTION_QUOTED);
+  const b = call('# REVIEW REQUIRED\n\nx\n');
+  check(s?.code === 'written' && b?.code === 'watermarked' && b?.line === 1,
+    `W12 specState reports which of the four states it is - got ${s?.code}/${b?.code}:${b?.line}`);
+}
+
 /* ============================================= F. THE CLI, END TO END */
 
 console.log('\nF. the CLI over a real control plane:');
@@ -492,6 +601,39 @@ console.log('\nF. the CLI over a real control plane:');
   d = decide(['--request', 'add a health endpoint']);
   check(d.action === 'plan' && d.dispatch === 'mavci-architect' && d._status === 0,
     `F2 with a request it routes to the architect and exits 0 - got ${d.action}/${d._status}`);
+
+  /* ---- cartoonify finding 32: the request never goes through a shell ------
+   *
+   * `--request-file` exists so `skills/ship/` can stop interpolating operator
+   * prose into a command. The hostile string below is the ordinary shape of a
+   * sentence about code - a backtick around an identifier, an English
+   * possessive, a quoted string - and every one of those three characters broke
+   * the shipped path. It is passed here as a FILE, which is the only form that
+   * has no shell in it at all. */
+  const HOSTILE = 'fix `parseAll()` so it doesn\'t drop the "id" column';
+  const reqFile = path.join(tmp, 'request.txt');
+  fs.writeFileSync(reqFile, HOSTILE, 'utf8');
+  d = decide(['--request-file', reqFile]);
+  check(d.action === 'plan' && d._status === 0,
+    `F2b a request carrying a backtick, an apostrophe and a double quote reaches the `
+    + `router as a FILE - got ${d.action}/${d._status}`);
+
+  const emptyFile = path.join(tmp, 'empty.txt');
+  fs.writeFileSync(emptyFile, '   \n', 'utf8');
+  check(decide(['--request-file', emptyFile]).action === 'idle',
+    'F2c and a blank file is no request, not an empty one - the same answer as passing nothing');
+
+  {
+    const r = run(ROUTE_CLI, ['--json', '--request', 'a', '--request-file', reqFile]);
+    check(r.status === 2 && /--request/.test(r.err + r.out),
+      `F2d giving it BOTH forms is refused rather than one silently winning - exit ${r.status}`);
+  }
+  {
+    const r = run(ROUTE_CLI, ['--json', '--request-file', path.join(tmp, 'nope.txt')]);
+    check(r.status === 2 && /nope\.txt/.test(r.err + r.out),
+      `F2e and a path that is not there is refused BY NAME, never routed over as no request `
+      + `- exit ${r.status}`);
+  }
 
   run(STATE, ['--begin-plan', 'add a health endpoint', '--spec', '.mavci/tasks/0001.md']);
   d = decide();

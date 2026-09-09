@@ -11,6 +11,7 @@
  *   node route.mjs                     what happens next, for a human
  *   node route.mjs --json              the same answer, for /mavci-core:ship
  *   node route.mjs --request "<text>"  route as if this request had just arrived
+ *   node route.mjs --request-file <p>  the same, read from a file - no shell in the path
  *
  * EXIT STATUS IS PART OF THE ANSWER, because the caller is a model reading a
  * transcript and an exit code is the one channel it cannot mis-summarise:
@@ -86,11 +87,67 @@ function gather(root) {
   };
 }
 
+/**
+ * The operator's request, from argv or from a FILE - and the file is the one the
+ * plugin's own skill uses.
+ *
+ * cartoonify finding 32. `skills/ship/` interpolated `$ARGUMENTS` into an inline
+ * `!` block, and a request describing code - an identifier in backticks, an
+ * English possessive - killed both the invocation and the skill's preflight. The
+ * finding read that as shell quoting. It is one layer lower than that:
+ * NATIVE-CAPABILITIES 2.10 records the loader's order as `$ARGUMENTS` first and
+ * inline-shell extraction LAST, so the request is already in the document when
+ * the block is cut out of it, and a backtick ends the block early. What bash
+ * received was half a command with a dangling quote, which is exactly the error
+ * reported. Every fix that keeps the text inside the block - a heredoc, a quoted
+ * argument, a path as an argument - is cut in half before any shell runs.
+ *
+ * So the text never goes through a shell at all. `skills/ship/` writes it to a
+ * file with the Write tool and passes the PATH, which is `retro.mjs --amend`'s
+ * remedy arrived at from the other direction.
+ *
+ * IT REFUSES RATHER THAN PREFERRING. Both forms given is a caller who believes
+ * two different things about where the request is, and silently picking one
+ * makes the other one's content vanish. An unreadable path is refused BY NAME
+ * and never routed over as "no request", because routing with no request is a
+ * legitimate answer that would look exactly like this one - invariant 5.
+ */
+function readRequest(argv, root) {
+  const ri = argv.indexOf('--request');
+  const fi = argv.indexOf('--request-file');
+
+  if (ri !== -1 && fi !== -1) {
+    console.error('--request and --request-file were both given, and they are two different claims '
+      + 'about where the request is. Refusing rather than picking one: whichever lost '
+      + 'would have vanished with no message. Pass one.');
+    process.exit(2);
+  }
+  if (ri !== -1) return argv[ri + 1] ?? null;
+  if (fi === -1) return null;
+
+  const file = argv[fi + 1];
+  if (!file) {
+    console.error('--request-file needs a path. It takes a FILE and never the request text itself: '
+      + 'an argument goes through a shell, and prose about code does not survive one.');
+    process.exit(2);
+  }
+  const full = path.isAbsolute(file) ? file : path.resolve(root, file);
+  let text;
+  try {
+    text = fs.readFileSync(full, 'utf8');
+  } catch (err) {
+    console.error(`could not read the request file at ${full}: ${err.message}`);
+    console.error('Refusing to route as if no request had been given: that is a real answer for a real '
+      + 'state, and it would look exactly like this one.');
+    process.exit(2);
+  }
+  return text.trim() ? text.trim() : null;
+}
+
 function main() {
   const root = process.env.CLAUDE_PROJECT_DIR || projectRoot();
   const argv = process.argv.slice(2);
-  const ri = argv.indexOf('--request');
-  const request = ri === -1 ? null : (argv[ri + 1] ?? null);
+  const request = readRequest(argv, root);
 
   const input = gather(root);
 

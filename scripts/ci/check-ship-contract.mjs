@@ -238,6 +238,73 @@ const banBlock = (shipRaw.match(/\*\*Do not run `--reset-attempts`[\s\S]*?\n\n/)
   } else ok(`C9 every one of the router's ${ACTIONS.length} actions has a row in ship's table`);
 }
 
+
+/* --- C10. the request reaches the router, and not through a shell ------ */
+/*
+ * cartoonify finding 32, and the pairing that keeps it from re-opening 0.1.24.
+ *
+ * 0.1.24's defect was that ship's preflight dropped the request entirely and the
+ * answer - `release_gate`, or `idle` - looked like a legitimate verdict.
+ * `check-skill-arguments.mjs` PART 1 caught that and still does. Its fix put
+ * `--request "$ARGUMENTS"` in the inline block, and PART 2 of that same file now
+ * establishes why that form cannot work: the loader substitutes the request into
+ * the document BEFORE it extracts the block, so a backtick in ordinary prose
+ * about code cuts the command in half (NATIVE-CAPABILITIES 2.10).
+ *
+ * So ship is exempt from PART 1 - and an exemption alone would be 0.1.24 again,
+ * with a reason attached. THESE THREE ASSERTIONS ARE WHAT THE EXEMPTION IS PAID
+ * FOR: the request still reaches the router, by a route with no shell in it, and
+ * the answer the preflight gives without it is not mistaken for an answer about
+ * it. C10 and C12 are each other's control - a document that never mentions the
+ * request satisfies neither, and one that only mentions it in prose satisfies
+ * C12 and fails C10.
+ */
+{
+  const named = /--request-file/.test(ship);
+  const noShell = /never interpolate|not through a shell|has no shell in it/i.test(ship);
+  if (named && noShell) {
+    ok('C10 ship hands the request to the router as --request-file, and says why it is not an argument');
+  } else {
+    bad(`C10 ship does not name a shell-free way to pass the request (--request-file=${named}, `
+      + `reason-stated=${noShell}). A request describing code - an identifier in backticks, an English `
+      + 'possessive - truncates any block it is interpolated into, and what the operator gets back is an '
+      + 'error string sitting where a routing decision should be.');
+  }
+}
+
+/* --- C11. and no block of ship's carries it ---------------------------- */
+{
+  const INLINE = /!`([^`]+)`/g;
+  const guilty = [...shipRaw.matchAll(INLINE)].map((m) => m[1]).filter((c) => /\$ARGUMENTS/.test(c));
+  if (!guilty.length) {
+    ok('C11 and no inline block of ship interpolates it, which is the form that cannot be made safe');
+  } else {
+    bad(`C11 ship interpolates $ARGUMENTS into ${guilty.length} inline block(s): ${guilty[0].slice(0, 80)}. `
+      + 'Substitution precedes extraction, so this is not a quoting problem and no amount of quoting, '
+      + 'escaping or heredoc-ing inside the block fixes it.');
+  }
+}
+
+/* --- C12. and the answer given WITHOUT the request says so ------------- */
+/*
+ * The preflight now routes on the control plane alone. On a fresh chain that is
+ * `idle`, whose row says stop - and stopping is exactly wrong when the operator
+ * has just said what they want. The row has to send the orchestrator back to the
+ * router WITH the request, or this fix reintroduces 0.1.24 through the one door
+ * 0.1.24's own check can no longer watch.
+ */
+{
+  const idleRow = (shipRaw.match(/\|\s*`idle`\s*\|[^\n]*/) ?? [''])[0];
+  if (/--request-file/.test(idleRow)) {
+    ok('C12 the idle row sends the orchestrator back to the router with the request, rather than stopping on '
+      + 'an answer that was never about it');
+  } else {
+    bad('C12 ship\'s `idle` row does not name the request-bearing consultation. The preflight carries no '
+      + 'request, so on a fresh chain it answers `idle` - and a row that just says stop turns a dropped '
+      + `argument into a plausible verdict, which is 0.1.24 exactly. Row: ${idleRow.slice(0, 120)}`);
+  }
+}
+
 if (failures.length) {
   console.error(`\nship contract check FAILED (${failures.length}):`);
   for (const f of failures) console.error('  - ' + f);

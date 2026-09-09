@@ -87,6 +87,17 @@ const CLOSED = new Set(['done', 'failed']);
 const STUB_SPEC = '.mavci/tasks/pending.md';
 export const REVIEW_MARKER = 'REVIEW REQUIRED';
 
+/**
+ * What a banner may open with, and what it may NOT.
+ *
+ * Heading, bold, blockquote, bullet, rule, HTML and JSX comment openers - the
+ * punctuation a document uses to announce something about itself. A QUOTE
+ * CHARACTER IS ABSENT ON PURPOSE: a backtick, an apostrophe or a double quote
+ * ahead of the marker is the author QUOTING it, and that single omission is what
+ * separates a draft from a spec that discusses one. See `watermarkBanner`.
+ */
+const BANNER_LEAD = /^[>#*+\-=|/<!{}~_\s]*/;
+
 const step = (run, why) => ({ run, why });
 
 /**
@@ -192,10 +203,99 @@ export function verdictForAttempt(verdicts, taskId, attempt) {
 
 /** Is this task's spec a real one, or the placeholder `createTask` writes? */
 export function hasSpec(task, specText) {
-  if (!task?.spec || task.spec === STUB_SPEC) return false;
-  if (specText === null || specText === undefined) return false;   // pointer to nothing
-  if (String(specText).includes(REVIEW_MARKER)) return false;      // watermarked, not written
-  return String(specText).trim().length > 0;
+  return specState(task, specText).code === 'written';
+}
+
+/**
+ * WHICH of the five states it is, because the router has to SAY.
+ *
+ * cartoonify finding 3, filed twice, and the second filing is what settled the
+ * shape of this. `hasSpec` was `specText.includes('REVIEW REQUIRED')` over the
+ * whole document, so a 56575-byte spec with 18 executable criteria was reported
+ * as `plan` - "task 0004 has no spec at ..." - because line 488 of it named the
+ * marker. The architect was redispatched against a spec it had already written.
+ *
+ * THE SECOND INSTANCE IS WHY THE SUBSTRING TEST HAD TO GO RATHER THAN BE
+ * NARROWED BY LUCK. A spec that pins the standards gate at "0 blocking, 5
+ * warnings" has to say what the five warnings ARE, or the count is a magic
+ * constant nobody can check - and what they are is the scaffolded-legal-page
+ * REVIEW REQUIRED marker. Every project this plugin governs carries five of
+ * them, so every one of them had a correct spec it could not write.
+ *
+ * ------------------------------------------------ WHAT THE TEST NOW ASKS
+ *
+ * A watermark is a BANNER: the document announcing what it is. A spec that
+ * discusses the watermark carries it as a QUOTED TOKEN - in a code span, in a
+ * fence, in an indented block - or mid-sentence inside prose. Those are
+ * different facts about the document, and this asks which one it is:
+ *
+ *   the marker opens the line, after banner punctuation only, outside a fenced
+ *   block and outside an indented one.
+ *
+ * A quote character is deliberately NOT banner punctuation, which is what makes
+ * the discrimination one rule rather than two: a line reading `` `REVIEW
+ * REQUIRED` markers stay `` does not START with the marker, it starts with the
+ * backtick. The line the second instance died on - `all five the
+ * scaffolded-legal-page ` + '`REVIEW REQUIRED`' + ` marker` - fails on both
+ * counts, and the plain-prose form of the same sentence fails on position.
+ *
+ * ---------------------------------------------------- WHAT IT DOES NOT ASK
+ *
+ * Two candidates were declined and the reasons are here so they are not tried
+ * again as improvements.
+ *
+ * A SECOND, MACHINE-ONLY SENTINEL (the finding's own first preference) would be
+ * a marker nothing writes. `createTask` does not stamp a spec stub - that is
+ * carried-forward item 6, still unbuilt - and the convention item 6 settles on
+ * is explicitly this one: "a watermark first line in the REVIEW REQUIRED shape
+ * the legal pages already use - one convention rather than two". A sentinel with
+ * no writer is a mechanism that is present, correct-looking, and never reached,
+ * which is the shape this repository has paid for more than any other.
+ *
+ * POSITION ALONE - the first N lines, a heading only - fails on the instance
+ * that produced the finding: line 488 is ordinary prose in an acceptance-criteria
+ * section, which is exactly where a spec legitimately explains what it pins.
+ *
+ * ------------------------------------------------------- THE RESIDUAL, NAMED
+ *
+ * A heuristic over prose is a heuristic. An unquoted marker opening a bullet -
+ * `- REVIEW REQUIRED markers must survive` - still reads as a banner, and the
+ * author's fix is to quote it, which is what they would write anyway. That
+ * residual is affordable ONLY because the router now names the marker and the
+ * line it objected to: the cost is a minute, not a chain that redispatches an
+ * agent until its ceiling and then reports the wrong cause.
+ */
+export function specState(task, specText) {
+  if (!task?.spec) return { code: 'no_pointer' };
+  if (task.spec === STUB_SPEC) return { code: 'stub' };
+  if (specText === null || specText === undefined) return { code: 'missing' };
+  if (!String(specText).trim()) return { code: 'empty' };
+  const found = watermarkBanner(String(specText));
+  if (found) return { code: 'watermarked', ...found };
+  return { code: 'written' };
+}
+
+/**
+ * The banner, if there is one: `{ line, text }`, one-based, else null.
+ *
+ * Pure, and it reads no files. The two exclusions are markdown's own two ways of
+ * quoting a block - a fence and a four-space indent - because a spec explaining
+ * what the scaffold writes into a legal page quotes the page.
+ */
+export function watermarkBanner(text) {
+  const lines = String(text).split(/\r?\n/);
+  let fenced = false;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (/^\s{0,3}(?:```|~~~)/.test(line)) { fenced = !fenced; continue; }
+    if (fenced) continue;
+    if (/^\s{4,}/.test(line)) continue;
+    const rest = line.replace(BANNER_LEAD, '');
+    if (rest.slice(0, REVIEW_MARKER.length).toUpperCase() === REVIEW_MARKER) {
+      return { line: i + 1, text: line.trim().slice(0, 120) };
+    }
+  }
+  return null;
 }
 
 /**
@@ -418,7 +518,8 @@ export function route(input) {
 
   /* ---- plan ------------------------------------------------------------- */
   if (task.phase === 'plan') {
-    if (!hasSpec(task, specText)) {
+    const spec = specState(task, specText);
+    if (spec.code !== 'written') {
       /* NEVER NAME THE STUB AS THE DESTINATION. `createTask` writes
        * `.mavci/tasks/pending.md` as the spec pointer when it has nothing better,
        * and it is one shared path: telling the architect to write there would have
@@ -429,9 +530,25 @@ export function route(input) {
       const dest = (!task.spec || task.spec === STUB_SPEC) ? `.mavci/tasks/${id}.md` : task.spec;
       return out('plan', {
         task_id: id,
-        why: `task ${id} has no spec${task.spec === STUB_SPEC ? ` (it still points at the shared ${STUB_SPEC} stub)` : ` at ${task.spec ?? '(no pointer)'}`}. `
-          + 'The builder cannot start from a title, and a spec with no checkable criteria is what '
-          + 'makes a verdict arguable.',
+        why: spec.code === 'watermarked'
+          /* THE ROUTER SAYS WHICH OF THE TWO IT DECIDED - cartoonify finding 3's
+           * other half, and the half that makes the heuristic above affordable.
+           * It used to report a watermarked spec as an ABSENT one and name the
+           * architect as the fix, so an orchestrator redispatched against a spec
+           * that already existed until the twelve-consultation ceiling ended it -
+           * by exhaustion, and naming the wrong cause. Whatever this still gets
+           * wrong must cost a minute, and that is only true if the answer names
+           * the line it objected to. */
+          ? `task ${id}'s spec at ${task.spec} is on disk and reads as a DRAFT: line ${spec.line} `
+            + `carries the ${REVIEW_MARKER} watermark as a banner - ${JSON.stringify(spec.text)}. `
+            + 'A document that announces itself that way is not a spec anyone may build from. '
+            + `IF THAT LINE MEANT TO DISCUSS THE MARKER rather than carry it - a criterion pinning `
+            + `the standards gate's warning count has to name it - quote it (\`${REVIEW_MARKER}\`), `
+            + 'indent it, or put it in a fenced block, and this stops firing. Nothing else in the '
+            + 'spec needs to change.'
+          : `task ${id} has no spec${task.spec === STUB_SPEC ? ` (it still points at the shared ${STUB_SPEC} stub)` : ` at ${task.spec ?? '(no pointer)'}`}. `
+            + 'The builder cannot start from a title, and a spec with no checkable criteria is what '
+            + 'makes a verdict arguable.',
         steps: [
           step('dispatch mavci-architect', `it writes ${dest}`),
           ...(task.spec === STUB_SPEC

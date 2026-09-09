@@ -2334,6 +2334,255 @@ was wired; `selftest.yml` carries it too, which the subset rule requires.
   `--criteria <path>` keeps 0.1.33's agent-attested behaviour there unchanged —
   the enforcement in decision 4 arrives with the declaration.
 
+### 0.1.35 — the sentinel that could not occur in real content occurred in the only spec that had to be written, and the request was cut before the shell saw it
+
+**Cut 2026-09-09**, against cartoonify findings 3 and 32. Both were found on the
+same first real use of the chain, both are on the entry path, and neither is a
+failure of a control — each is a control answering a question adjacent to the one
+it was asked.
+
+#### 1. Finding 3 — a correct spec, doing a necessary thing, could not be seen
+
+`hasSpec` was `specText.includes('REVIEW REQUIRED')` over the whole document. A
+spec that DISCUSSED the watermark was therefore classified as one that CARRIED
+it, and the router answered `plan` — *"task 0004 has no spec at
+`.mavci/tasks/0004-style-library-groups-and-the-picker.md`"* — about a
+56,575-byte file with 18 executable criteria written eleven minutes earlier.
+
+**The second instance is why this stopped being an unlucky choice of phrase.**
+The first, against task 0001, had the marker appear incidentally. Here it
+appeared *necessarily*: criterion 1 pins the standards gate at "0 blocking, 5
+warnings", and a spec that pins a warning COUNT has to say what the warnings ARE
+or the number is a magic constant nobody can check — and what they are is the
+scaffolded-legal-page `REVIEW REQUIRED` marker. Every project this plugin governs
+carries five of them. **So every one of them had a correct spec it could not
+write.** Cost on the day: two architect turn-budgets, roughly 268k subagent
+tokens, and a spec that could not be approved.
+
+**The two uses of that string were in direct conflict and shared nothing else.**
+One says *this legal page has not been reviewed*; the other says *this spec has
+not been written*.
+
+**What the test asks now.** A watermark is a BANNER — the document announcing
+what it is. A spec that discusses one carries it as a QUOTED TOKEN, or mid-
+sentence in prose, or inside the two things markdown uses to quote a block. So
+the marker must OPEN the line, after banner punctuation only, outside a fence and
+outside an indent. **A quote character is deliberately absent from the
+punctuation set**, and that single omission is what makes the discrimination one
+rule rather than two: a line reading `` `REVIEW REQUIRED` markers stay `` does
+not start with the marker, it starts with the backtick.
+
+**Two candidates were declined and the reasons are recorded beside the code, so
+they are not tried again as improvements.**
+
+- **A second, machine-only sentinel** — the finding's own first preference — would
+  be a marker nothing writes. `createTask` does not stamp a spec stub; that is
+  carried-forward item 6, still unbuilt, and the convention item 6 settles on is
+  explicitly this one: *"a watermark first line in the `REVIEW REQUIRED` shape the
+  legal pages already use — one convention rather than two"*. A sentinel with no
+  writer is a mechanism present, correct-looking and never reached, which is the
+  shape this repository has paid for more often than any other.
+- **Position alone** — the first N lines, a heading only — fails on the instance
+  that produced the finding. Line 488 is ordinary prose in an acceptance-criteria
+  section, which is exactly where a spec legitimately explains what it is pinning.
+
+**And the half that makes a prose heuristic affordable at all: the router now
+says which of the two it decided.** The old answer reported a watermarked spec as
+an ABSENT one and named the architect as the fix, so an orchestrator redispatches
+against a spec that already exists until the twelve-consultation ceiling ends it
+— by exhaustion, and naming the wrong cause. The rejection now names the marker,
+the line number, the line, and the one edit that clears it. Whatever the
+heuristic still gets wrong costs a minute rather than a chain.
+
+#### 2. Finding 32 — and the finding's own diagnosis was one layer off
+
+`/mavci-core:ship` interpolated `$ARGUMENTS` into its inline `!` block. A request
+describing a code change — identifiers in backticks, the way prose about code is
+ordinarily written — killed the invocation AND the skill's own preflight:
+
+    /usr/bin/bash: eval: line 2: unexpected EOF while looking for matching '"'
+
+The finding read that as shell quoting and named three fixes: stdin via a
+heredoc, a path passed as an argument, single-quoting with escaping. **All three
+would have failed**, and the reason is in this repository's own documentation.
+NATIVE-CAPABILITIES 2.10 records the loader's order from the binary: `$ARGUMENTS`
+→ `k4` → … → `Y4` (inline shell), **last**. The request is already in the
+document when the block boundaries are found, so a backtick ENDS THE BLOCK EARLY
+and what bash receives is half a command with a dangling quote — which is exactly
+the error observed, and is not what a backtick reaching bash intact produces
+(that is command substitution, not an unmatched quote). Every one of the three
+fixes keeps the text inside the block.
+
+**The clue was in the output from the very first failure, and the finding quoted
+it while naming the other layer.**
+`unexpected EOF while looking for matching '"'` is a report about a TRUNCATED
+DOCUMENT: bash was handed half a command and reached the end of it still looking
+for the closing quote. A backtick that reaches bash INTACT does not produce that
+error — it opens command substitution, and fails or succeeds as a command. The two
+layers print different things, and the finding quoted the one that ruled its own
+diagnosis out. Its three fix directions were derived from the mechanism the author
+expected rather than from the error the shell actually returned, which is why all
+three land inside a block that is cut before any shell runs. **Name the layer from
+the error, not from the mechanism you expect to find there.** This diagnosis did
+not need more evidence; it needed the evidence that was already on the screen.
+
+Reproduced, not argued: `check-skill-arguments.mjs` PART 2 substitutes a hostile
+value the way `k4` does and extracts afterwards, and prints the truncation —
+`--request "fix ` — beside the block it came from.
+
+**So the text leaves the block entirely.** `route.mjs` gains `--request-file
+<path>`; `skills/ship/` writes the request with the **Write tool** and passes the
+path. That is `retro.mjs --amend`'s remedy — *"takes a PATH or `-`, never prose;
+an argument goes through the shell"* — arrived at from the other direction, and
+it is the same lesson the plugin had already learned in a sibling script.
+
+**`--request-file` REFUSES rather than preferring.** Both forms given is a caller
+who believes two different things about where the request is, and silently
+picking one makes the other's content vanish. An unreadable path is refused BY
+NAME and never routed over as "no request", because routing with no request is a
+legitimate answer that would look exactly like this one — invariant 5.
+
+#### 3. The exemption that pays for itself, because otherwise this is 0.1.24 again
+
+Removing `$ARGUMENTS` from ship's block makes `check-skill-arguments.mjs` PART 1
+report the exact defect 0.1.24 existed to catch: the preflight receives nothing.
+**An exemption alone would be 0.1.24 with a reason attached** — at the router, an
+argument dropped on purpose is not different from one dropped by accident. So the
+entry is paired with three assertions in `check-ship-contract.mjs`: the request
+still reaches the router (`--request-file` is named, with the reason), no block of
+ship's carries it, and — C12 — ship's `idle` row sends the orchestrator BACK to
+the router with the request instead of stopping. That last one matters because the
+preflight now routes on the control plane alone, so on a fresh chain it answers
+`idle`, and a row that just says *stop* would turn a deliberately dropped argument
+into a plausible verdict, which is 0.1.24 exactly.
+
+PART 1's negative control moved off `ship` for the same reason and says so where
+it moved: asking about a skill that now has an entry in `EXEMPT` would assert the
+exemption rather than the rule, and go green for a reason with nothing to do with
+detection.
+
+**One skill still interpolates and is declared rather than quietly excluded.**
+`doctor`'s `$ARGUMENTS` is a closed flag vocabulary and its block is the report
+itself rather than the entry point to a chain. The residual is stated where the
+declaration is: an operator who types prose after `/mavci-core:doctor` gets the
+same truncation, and loses one report they can re-run rather than a chain that
+redispatches an agent against an answer built from nothing.
+
+#### 4. And the vector this does NOT close, said where it will be read
+
+The substitution reaches the whole document, not only the blocks, so a request
+that literally contains an inline-block opener creates one. Nothing a skill can
+write prevents that — it is a property of the loader. Removing `$ARGUMENTS` from
+the plugin's own blocks removes the failure that HAPPENS, a sentence about code;
+it does not remove the one that would have to be typed on purpose. Recorded in
+2.10's addendum and in the check's header, unasserted, because there is nothing
+here to assert against.
+
+**It was not hypothetical for the length of one edit.** The paragraph written to
+explain this defect contained the words *"the inline `` !` `` block"*, and
+`check-skill-arguments.mjs` PART 1 reported ship as having a second inline block
+reading `` block (NATIVE-CAPABILITIES 2.10), so a backtick in the request ends t ``.
+The prose describing the hazard had created one, in the file the hazard is about,
+and the check caught it on the run it was written for.
+
+**Which is to say: the check found its first real instance in the change that
+introduced it, and the instance was documentation about the thing it checks.**
+PART 2 and C10–C12 were written in this commit, and the first thing they caught
+was the paragraph written in this commit to explain why they exist. That is not a
+coincidence to enjoy; it is the measure of how ordinary the hazard is. It does not
+take a hostile operator or a crafted request. It takes someone writing carefully
+about an inline block, and the loader supplies the rest.
+
+#### 5. Verification
+
+Every assertion was watched failing against the pre-fix tree first: seven red in
+`check-route`'s new section, three in the CLI walk, ship red in PART 2 with the
+truncation printed, and C10–C12 red. Then thirteen mutations, each reddening a
+named set.
+
+| Mutation | Restores | What goes red |
+|---|---|---|
+| M1 | the shipped `includes()` test | W1-W5, W13, W10, W12 — the live defect reproduced |
+| M2 | no marker test at all | E5, W6-W9, W10, W12 — **M1's control, and the sets are disjoint** |
+| M3 | no fence and no indent exclusion | W4, W5 |
+| M4 | a quote counts as banner punctuation | W13 only |
+| M11 | no banner punctuation at all | W7, W8, W9 |
+| M5 | the generic message for a watermarked spec | W10 only |
+| M6 | `--request` wins silently over `--request-file` | F2d only |
+| M7 | an unreadable request file read as no request | F2e only |
+| M8 | an extraction check comparing counts only | PART 2's negative control |
+| M9 | ship interpolates the request again | the stale exemption, PART 2, C11 |
+| M10 | ship's `idle` row back to a bare stop | C12 only |
+
+**M1 and M2 are each other's control and that is the whole shape of finding 3's
+fix.** A build that simply deleted the marker test satisfies every mention
+assertion and no banner assertion; the shipped `includes()` satisfies every
+banner assertion and no mention assertion. Asserting one half would have passed a
+build that had gone the other way entirely.
+
+**M4 went green, and that was a finding about the assertion.** `watermarkBanner`
+asks two things at once — does the marker OPEN the line, and is it UNQUOTED — and
+every case written before the mutation answered both the same way: a mention was
+mid-line AND quoted, a banner line-leading AND bare. So making a quote count as
+banner punctuation reddened NOTHING, and the form half was load-bearing in the
+code and asserted nowhere. W13 is where the two come apart — a marker quoted at
+the head of a bullet — and M4 now reddens it alone.
+
+**That is a SIXTH SCALE, and it is written into the list above
+`check-pretag.mjs`'s `selftest()` where the other five live** — comment, fixture,
+lesson, assertion, placement, and now AXIS. The five before it are a case in the
+wrong place: something written to catch a defect, sitting where the defect could
+not reach it. This one is different in kind, because every case in section W was
+correct and the set was complete on every case it contained. What it had no case
+for was the axis. `watermarkBanner` asks two questions and no case separated them,
+so one of the two was asserted nowhere while the suite reported green — and a
+green suite cannot report the axis its own cases never split. Counting the cases
+does not find it; reading them does not find it, because each one is right. Only
+breaking one half at a time can, which is the rule the list exists to carry: *a
+green mutation is a finding about the assertion, always, and never evidence that
+the fix was unnecessary.*
+
+**And this is the rate, not an instance.** A green mutation produced a finding
+rather than confirming one in six of the ten releases cut in the six days from
+2026-09-04 to 2026-09-09. **0.1.26** (E6, the assertion scale), **0.1.29** (P12,
+the placement scale — the mutation reported no failures at all, because the
+defect took its own detector offline first), **0.1.30** (a fifth mutation green, recorded as a finding
+about the mutation), **0.1.31** (the inheritance mutation landed on the wrong
+`clean(String(agent))`, and three further green mutations produced A2b, the
+`--list` count and A5c), **0.1.32** (two assertions green first, both recorded as
+findings about the assertion) and **0.1.35** (M4). 0.1.34's five green-on-absence
+assertions are the same class reached by the other instrument — running the check
+against the tree before the fix. **The releases are named rather than counted**,
+because the number moves depending on whether mutations or releases are the unit,
+and a bare count is a claim nobody can check.
+
+What the rate means for the practice, stated so it is planned for rather than
+rediscovered: **the mutation pass is not the formality that confirms a release.
+It is the pass that finds what the release does not yet know about itself**, and
+on the evidence of the last seven days it does so more often than not. Budget it
+as work, not as the last box ticked before a tag.
+
+**And the harness earned its `node --check` twice more.** Two mutations reported
+`MUTATION DID NOT APPLY`, which is the only honest thing to print about a
+mutation that landed nowhere — 0.1.34's lesson, and the reason the harness says
+it rather than reporting a green.
+
+37 CI check scripts, none new: finding 3's assertions belong to the walk that owns
+the router, finding 32's to the file that owns `$ARGUMENTS` and to the one that
+owns ship's contract. A fourth file asserting the same three components would be a
+second list.
+
+#### What this does NOT close
+
+- **`createTask` still writes a spec pointer to a file it never creates**
+  (carried-forward item 6). This release makes the watermark convention that item
+  depends on actually usable; it does not build the stub.
+- **The residual in the heuristic is real.** An unquoted marker opening a bullet —
+  `- REVIEW REQUIRED markers must survive` — still reads as a banner. The author's
+  fix is to quote it, which is what they would write anyway, and the router now
+  says so by name. That trade is affordable only because of the message, and if
+  the message is ever weakened the heuristic must be revisited with it.
+
 ### Carried forward — still not built
 
 **Items 1–4 and 5–6 below remain unbuilt; item 7 is held deliberately, for the
