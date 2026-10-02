@@ -715,11 +715,21 @@ export function route(input) {
         step('/mavci-core:retro',
           'if the verdict is empty because the system cannot record criteria yet, the finding is in '
           + 'the system and not in this project'),
-        step(`state.mjs --task-status ${id} --status done`,
-          'THE OPERATOR\'S OVERRIDE, and it is named rather than hidden because leaving the only '
-          + 'exit unwritten is how a fail-closed gate becomes a deadlock. It closes the task on '
-          + 'evidence the control plane does not hold, and the verdict on disk will still say the '
-          + 'criteria were never examined'),
+        /* Since 0.1.36 `--task-status done` reads the current attempt's verdict
+         * and refuses anything but "pass" with 0 blockers (finding 61), so it is
+         * named here only where it would be accepted - a pre-0.1.33 verdict that
+         * says pass and records no criteria. Otherwise the exit that records WHY
+         * is `--block`; naming a step the gate refuses is a deadlock with a map. */
+        verdict.verdict === 'pass' && verdict.summary?.blockers === 0
+          ? step(`state.mjs --task-status ${id} --status done`,
+            'THE OPERATOR\'S OVERRIDE, and it is named rather than hidden because leaving the only '
+            + 'exit unwritten is how a fail-closed gate becomes a deadlock. It closes the task on '
+            + 'evidence the control plane does not hold, and the verdict on disk will still say the '
+            + 'criteria were never examined')
+          : step(`state.mjs --block ${id} --reason "<why the criteria cannot be answered>"`,
+            'THE OPERATOR\'S EXIT. `--task-status done` refuses a verdict that is not "pass" with 0 '
+            + 'blockers, so a task whose criteria cannot be answered is stopped with the reason '
+            + 'recorded rather than closed as if they had been'),
       ],
     });
   }

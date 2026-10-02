@@ -82,7 +82,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -499,6 +499,79 @@ console.log('\nG. a criterion that did not finish is not a criterion that passed
     bad('G1 the timed-out criterion does not say so in its evidence');
   } else ok('G1 a criterion that timed out is not_run, and says so');
   rm(p);
+}
+
+/* ================================= H. ANOTHER PROCESS MUST NOT WRITE THE BUILD
+ *
+ * cartoonify finding 62, 2026-09-30. Task 0015 attempt 1: criterion 3 built
+ * .next, and mid-run a forgotten `next dev` in the same repository wrote its
+ * development output over it - .next/BUILD_ID gone. Criterion 50 then measured
+ * an unstyled page and the attempt was recorded as a failure of the code; the
+ * same code passed 51 of 51 once the dev server was stopped. Nothing checked
+ * for the server before the run, or for the build changing under it. */
+
+console.log('\nH. a running next server refuses the run, and a build that changes mid-run fails it:');
+
+{
+  const p = makeProject(spec(block([{ id: '1', needs: ['shell'], run: PASSES }])));
+  const bin = path.join(p, 'node_modules', 'next', 'dist', 'bin', 'next');
+  fs.mkdirSync(path.dirname(bin), { recursive: true });
+  fs.writeFileSync(bin, 'setInterval(() => {}, 1000);\n');
+  const server = spawn(process.execPath, [bin, 'dev'], { cwd: p, stdio: 'ignore' });
+  try {
+    await new Promise((r) => setTimeout(r, 1500));
+    const attemptsBefore = JSON.parse(fs.readFileSync(path.join(p, PATHS.controlTasks, '0001.json'), 'utf8')).attempts_total;
+    const r = run(p, VERIFY, ['--run-criteria', '0001', '--record', '--task', '0001']);
+    const attemptsAfter = JSON.parse(fs.readFileSync(path.join(p, PATHS.controlTasks, '0001.json'), 'utf8')).attempts_total;
+    if (r.status === 0) {
+      bad(`H1 --run-criteria RAN and recorded while \`next dev\` (pid ${server.pid}) was alive in the `
+        + 'project - finding 62 reproduced: an outside process can write .next under the criteria.');
+    } else if (!/next dev/i.test(all(r)) || !all(r).includes(String(server.pid))) {
+      bad(`H1 the run was refused without naming the next dev process (pid ${server.pid}), so it `
+        + `was refused by another arm: ${all(r).trim().slice(0, 240)}`);
+    } else ok(`H1 a live \`next dev\` in the project refuses the run, naming it (pid ${server.pid})`);
+    if (verdictOf(p)) bad('H2 the refused run still recorded a verdict');
+    else if (attemptsAfter !== attemptsBefore) bad(`H2 the refused run moved attempts_total ${attemptsBefore} -> ${attemptsAfter}`);
+    else ok('H2 and records no verdict and consumes no attempt');
+  } finally {
+    server.kill();
+    await new Promise((r) => setTimeout(r, 300));
+    rm(p);
+  }
+}
+
+/* The other half, and the operator's rule: once the build criterion has run,
+ * .next/BUILD_ID must not change for the rest of verify. A criterion that
+ * changes it (here, standing in for the outside writer) is the criterion whose
+ * result cannot be trusted, and the verdict is FAIL. H4 is the control: the
+ * same shape with nothing touching the build must still pass, or H3 is green
+ * for a runner that fails everything after a build. */
+{
+  const BUILD = 'node -e "require(\'fs\').mkdirSync(\'.next\',{recursive:true});require(\'fs\').writeFileSync(\'.next/BUILD_ID\',\'aaa\')"';
+  const CLOBBER = 'node -e "require(\'fs\').rmSync(\'.next/BUILD_ID\')"';
+  for (const [label, second] of [['H3', CLOBBER], ['H4', PASSES]]) {
+    const p = makeProject(spec(block([
+      { id: '1', needs: ['shell'], run: BUILD },
+      { id: '2', needs: ['shell'], run: second },
+      { id: '3', needs: ['shell'], run: PASSES },
+    ])));
+    const r = run(p, VERIFY, ['--run-criteria', '0001', '--record', '--task', '0001']);
+    const v = verdictOf(p);
+    const c2 = byId(v, '2');
+    if (label === 'H3') {
+      if (!v) bad(`H3 no verdict was recorded: ${all(r).trim().slice(0, 200)}`);
+      else if (v.verdict !== 'fail' || c2?.status !== 'fail') {
+        bad(`H3 .next/BUILD_ID disappeared after the build criterion and the verdict is `
+          + `"${v.verdict}" (criterion 2: ${c2?.status}) - the run never noticed the build changed under it`);
+      } else if (!/BUILD_ID/.test(c2.evidence ?? '')) {
+        bad(`H3 criterion 2 failed without saying the build changed: ${c2.evidence}`);
+      } else ok('H3 a BUILD_ID changed after the build criterion fails the verdict, and says why');
+    } else if (!v || v.verdict !== 'pass') {
+      bad(`H4 the same run with nothing touching .next did not pass (${v?.verdict}): the BUILD_ID `
+        + 'check fails runs it should not');
+    } else ok('H4 control: a build left alone passes');
+    rm(p);
+  }
 }
 
 if (failures.length) {

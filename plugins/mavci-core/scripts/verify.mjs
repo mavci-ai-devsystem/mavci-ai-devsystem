@@ -45,6 +45,7 @@ import {
 import { rulesFor, ruleById } from './rules/index.mjs';
 import { verdictOutcome, approvalCurrent } from './lib/route.mjs';
 import { resolveBash, preflight, describeBash } from './lib/shell.mjs';
+import { findNextServers } from './lib/procs.mjs';
 import { parseCriteriaBlock, runCriteria, isShellOnly, CRITERIA_FENCE } from './lib/criteria.mjs';
 import {
   loadContext, validateAll, verifyIntegrity, recordVerdict, readControlTask, attemptsTotal,
@@ -322,7 +323,7 @@ export async function evaluate(root = projectRoot(), { scope = 'full', task_id =
  * reach it, and 0.1.29 had to extract `cutTag` for the same reason. The exit is
  * the caller's; the decision is here.
  */
-export async function resolveCriteria(root, { id, argv = [], execute, supplied = null }) {
+export async function resolveCriteria(root, { id, argv = [], execute, supplied = null, listProcesses = null }) {
   if (!/^[0-9]{4}$/.test(id ?? '')) {
     return { ok: false, error: '--run-criteria expects a four-digit task id.' };
   }
@@ -436,6 +437,32 @@ export async function resolveCriteria(root, { id, argv = [], execute, supplied =
       error: `the interpreter could not be proven to execute, so NO criterion was run and no claim is `
         + `made about any of them. interpreter ${describeBash(bash)}; the probe answered `
         + `${JSON.stringify(pre.answer)} (exit ${pre.status}). Pin a working shell with MAVCI_BASH.`,
+    };
+  }
+
+  /* NOTHING ELSE MAY WRITE THE BUILD WHILE THE CRITERIA RUN. cartoonify finding
+   * 62: a forgotten `next dev` overwrote .next mid-run and the environment fault
+   * was recorded as a failed attempt, counted against the retry ceiling exactly
+   * like a code failure. A refusal here records no verdict and consumes no
+   * attempt - it is a question for the operator, not an answer about the code.
+   * An enumeration that failed refuses too: "could not check" is not "none". */
+  const servers = findNextServers(root, listProcesses ? { list: listProcesses } : {});
+  if (!servers.ok) {
+    return {
+      ok: false,
+      error: `could not establish whether a next server is running in this project (${servers.error}), `
+        + 'so NO criterion was run. Another process writing .next during the run is how an environment '
+        + 'fault gets recorded as a failed attempt (finding 62).',
+    };
+  }
+  if (servers.found.length) {
+    return {
+      ok: false,
+      error: `STOP - a Next.js server is running in this project, and it writes .next, which the `
+        + 'criteria build and serve:\n'
+        + servers.found.map((s) => `  pid ${s.pid}: ${s.cmd.slice(0, 200)}`).join('\n')
+        + '\nOperator: stop it (or confirm it is not yours) and run verify again. NO criterion was run, '
+        + 'no verdict was recorded and no attempt was consumed. (cartoonify finding 62)',
     };
   }
 

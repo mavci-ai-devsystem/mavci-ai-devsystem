@@ -2583,6 +2583,67 @@ second list.
   says so by name. That trade is affordable only because of the message, and if
   the message is ever weakened the heuristic must be revisited with it.
 
+### 0.1.36 — the gate did not read what the verifier wrote, and the build changed under the verifier
+
+**Cut 2026-10-02**, against cartoonify findings 61 and 62, applied with
+`retro --apply` as `docs/lessons/cartoonify-2026-10-02.md`. Both were found on
+task 0015 on the same day, and the second is what produced the verdict the first
+then ignored.
+
+#### 1. Finding 61 — the closing gate reads the verdict
+
+`--advance-phase <id> --from verify --to release` and `--task-status <id>
+--status done` both succeeded on a task whose only verdict was `fail`; the record
+said release/done and was committed. The router had answered "rework" and
+neither transition read what it answered. `assertClosingVerdict` in `state.mjs`
+now requires the CURRENT attempt's verdict - the file named by the identity
+counter, `<id>-attempt-NN.json` - to exist, to name that task and attempt, and to
+say `"pass"` with `summary.blockers === 0`. Absent, another attempt's, `fail`,
+`incomplete`, or pass-with-blockers all refuse, nothing moves, and the message
+names the file it expected. It is advancePhase's fifth refusal and closeTask's
+only one.
+
+**There is no override for `done`, deliberately.** The router's `incomplete` arm
+named `--task-status done` as the operator's exit; it now names it only where the
+gate accepts it (a pre-0.1.33 verdict that says pass) and otherwise names
+`--block <id> --reason`, which records why. A step the gate refuses is a deadlock
+with a map. `skills/ship/` changed with it. `--set-phase` remains the free,
+confirm-gated override for the phase alone.
+
+**Not built:** the finding's third assertion - `--attempt` reopening a done or
+released task without an explicit reopen. Untouched and still open.
+
+#### 2. Finding 62 — nothing else may write the build while the criteria run
+
+A forgotten `next dev` overwrote `.next` mid-run; criterion 50 measured an
+unstyled page and the attempt was recorded as a failure of the code, counted
+against the ceiling. Two halves:
+
+- **Before the first criterion**, `lib/procs.mjs` enumerates processes
+  (PowerShell CIM on Windows, `/proc` on Linux, `ps` elsewhere; zero deps) and
+  `--run-criteria` refuses if a `next dev`/`next start` belongs to the project -
+  named by pid, addressed to the operator, no verdict, no attempt consumed. An
+  enumeration that FAILED refuses too: "could not check" is not "none".
+- **After the build criterion**, `.next/BUILD_ID` is read before and after every
+  later criterion. A change not made by a build command FAILS the criterion it
+  was seen at, the rest are `not_run`, and the verdict is `fail` - the operator's
+  ruling. The finding proposed an environment refusal instead, so the attempt is
+  still consumed in this case; the process guard is what keeps that case rare.
+  The baseline is set by the criterion that produces BUILD_ID or by a build
+  command (`next build`, `npm|pnpm|yarn|bun [run] build`); a BUILD_ID present
+  before the run is not a baseline. **Residual:** a custom build command the
+  regex does not recognise, re-run after the first build, reads as drift.
+
+#### Verification
+
+Both written first and watched failing against 0.1.35:
+`check-state-transition.mjs` section F, 10 red (every refusal case, both
+commands) with F6 - the permission half - green; `check-criteria-runner.mjs`
+section H, H1-H3 red with H4 - the untouched-build control - green. Both green
+after. H1 uses a REAL process, not a fake list: a node process at
+`<fixture>/node_modules/next/dist/bin/next dev`. `check-provenance.mjs` B4/B9
+closed tasks with no verdict and now record a passing one first.
+
 ### Carried forward — still not built
 
 **Items 1–4 and 5–6 below remain unbuilt; item 7 is held deliberately, for the
@@ -2804,6 +2865,48 @@ nobody will notice, which is also the argument for not deferring it twice.
    `skills/release/` exists the references resolve and the build stays green, and
    until then any one of them fails it. The check is the enforcement in both
    directions, which is why no reminder is needed here beyond this paragraph.
+
+9. **A spec's criterion 1 must not hardcode the plugin version.** Logged
+   2026-10-02 at 0.1.36, operator's request. Every approved cartoonify spec from
+   0005 to 0020 opens with
+   `G="$HOME/.claude/plugins/cache/mavci/mavci-core/0.1.35/scripts/gate.mjs"`,
+   so each release makes the next spec's criterion 1 stale, and an approved spec
+   cannot be edited to follow it - the bytes are what the hash approved. The
+   permanent form reads the version from the project's own pin:
+   `V=$(node -p "require('./.mavci/control/state.json').ci_pinned_plugin_version")`
+   and builds the path from `$V`, so `doctor --sync` moves the criterion with the
+   pin and no spec changes. A pin whose version is not installed still fails
+   loudly, which is correct. **Owed:** the architect's contract and
+   `skills/plan/` should give this as the template, with a check that a spec's
+   criteria block names no literal `mavci-core/<x.y.z>/` path. Not built.
+
+10. **Invariant 3 ("no binary files") is enforced in two directories, not in the
+    repository.** Logged 2026-10-02, operator's request. `af4964a` (PR #1,
+    cartoonify-integration, reverted at 0.1.36) added 120 files under
+    `apps/cartoonify/`, 93 of them `.webp`, and `selftest` and `validate` both
+    passed on it. The cause is the scope, not the detector: `check-plugin.mjs`'s
+    NUL scan walks `plugins/` and `scripts/` only, and the `.webp` files do carry
+    NUL bytes (`RIFF..\0\0WEBP` at offset 4) - the same scan over `apps/` would
+    have failed. CLAUDE.md states the invariant as "Enforced by
+    `check-plugin.mjs`", which was true of two directories and read as true of
+    the repository - the adjacent-but-wrong signal at the scale of a sentence.
+
+    **Proposed fix, for the next release:**
+    - Scan what git TRACKS, not two named directories: `git ls-files -z` from
+      the repo root, so a new top-level directory is covered the moment it is
+      added rather than when somebody remembers to list it. A failure of that
+      enumeration is a FAILURE, never an empty clean set (invariant 5).
+    - Fail on a NUL byte in any tracked file, naming the path. Whether BOM and
+      CRLF are enforced repo-wide anywhere was not established while logging
+      this; check before claiming it, and fold them in here if not.
+    - An exemption list, empty, with a reason per entry and stale entries
+      failing (0.1.14's `EXCLUDED_STEPS` shape). Not a skip by extension: an
+      extension list is how `.webp` would have been waved through.
+    - Invariant 4: fixtures under `templates/fixtures/<check_id>/{bad,good}/`,
+      and a negative control that a tracked NUL-carrying file OUTSIDE
+      `plugins/` and `scripts/` fails - the case this finding is, and the one
+      the current check cannot see. Shown failing against 0.1.36 first.
+    - Correct CLAUDE.md invariant 3's "Enforced by" line in the same commit.
 
 ### 0.1.24 — the caller was never asserted, and neither was the report
 

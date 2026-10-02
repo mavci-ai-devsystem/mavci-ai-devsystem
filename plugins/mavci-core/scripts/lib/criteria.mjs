@@ -74,6 +74,8 @@
  * Zero dependencies, Node builtins only (invariant 1).
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {
   CRITERION_NEEDS, CRITERION_TIMEOUT_MS, CRITERION_TIMEOUT_CEILING_MS, EVIDENCE_MAX_CHARS,
@@ -349,16 +351,79 @@ export function runOne(criterion, bash, cwd) {
  * Run every criterion the environment can satisfy, and record the rest as
  * `not_run`. `exec` is injected so the decision is testable without spawning.
  */
-export function runCriteria(criteria, { bash, cwd, have = [], exec = runOne } = {}) {
-  return criteria.map((c) => {
+export function runCriteria(criteria, { bash, cwd, have = [], exec = runOne, buildIdOf = readBuildId } = {}) {
+  /* THE BUILD MUST NOT CHANGE UNDER THE CRITERIA. cartoonify finding 62: a
+   * `next dev` started mid-run replaced the production build criterion 3 made,
+   * and criterion 50 measured the wrong application. The baseline is set by the
+   * criterion that produces (or, being a build command, re-produces)
+   * .next/BUILD_ID; from then on it is read before and after every criterion,
+   * and any change not made by a build criterion FAILS the criterion it was
+   * seen at - its result is about some other build - and the rest are not run.
+   * A BUILD_ID present before the run is not a baseline: nothing in this run
+   * made it. */
+  let baseline = null;
+  let baselineBy = null;
+  let seen = buildIdOf(cwd);
+  let broken = null;
+  const results = [];
+  for (const c of criteria) {
+    if (broken) {
+      results.push({ id: c.id, status: 'not_run', mode: ATTEMPTED_EXECUTION,
+        evidence: clip(`not run: the build changed under the run at criterion ${broken}, so `
+          + 'nothing after it would be measuring the build the criteria were written against.') });
+      continue;
+    }
     const { run, missing } = canRun(c, have);
-    if (run) return exec(c, bash, cwd);
-    return {
-      id: c.id,
-      status: 'not_run',
-      mode: ATTEMPTED_EXECUTION,
-      evidence: clip(`not run here: this criterion declares ${c.needs.join(', ')} and `
-        + `${missing.join(', ')} was not declared available. Nobody decided to skip it.`),
-    };
-  });
+    if (!run) {
+      results.push({
+        id: c.id,
+        status: 'not_run',
+        mode: ATTEMPTED_EXECUTION,
+        evidence: clip(`not run here: this criterion declares ${c.needs.join(', ')} and `
+          + `${missing.join(', ')} was not declared available. Nobody decided to skip it.`),
+      });
+      continue;
+    }
+    const before = buildIdOf(cwd);
+    const drifted = (now) => baseline !== null && now !== baseline;
+    if (drifted(before)) {
+      broken = c.id;
+      results.push(buildChanged(c, baseline, baselineBy, before, 'before it ran'));
+      continue;
+    }
+    const r = exec(c, bash, cwd);
+    const after = buildIdOf(cwd);
+    if (isBuildCommand(c.run)) {
+      baseline = after; baselineBy = c.id;
+    } else if (baseline === null && after !== null && after !== seen) {
+      baseline = after; baselineBy = c.id;
+    } else if (drifted(after)) {
+      broken = c.id;
+      results.push(buildChanged(c, baseline, baselineBy, after, 'while it ran'));
+      continue;
+    }
+    seen = after;
+    results.push(r);
+  }
+  return results;
+}
+
+/** A criterion whose command is a build: it may legitimately replace .next/BUILD_ID. */
+export function isBuildCommand(run) {
+  return /\bnext\s+build\b|\b(npm|pnpm|yarn|bun)\s+(run\s+)?build\b/.test(String(run ?? ''));
+}
+
+export function readBuildId(cwd) {
+  try { return fs.readFileSync(path.join(cwd, '.next', 'BUILD_ID'), 'utf8').trim() || null; } catch { return null; }
+}
+
+function buildChanged(c, baseline, by, now, when) {
+  return {
+    id: c.id,
+    status: 'fail',
+    mode: ATTEMPTED_EXECUTION,
+    evidence: clip(`environment changed: .next/BUILD_ID was ${baseline} after build criterion ${by} `
+      + `and is ${now === null ? 'MISSING' : now} ${when}. Another process wrote .next (a next dev? `
+      + 'finding 62), so this criterion\'s result is about a different build. Stop it and verify again.'),
+  };
 }

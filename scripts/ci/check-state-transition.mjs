@@ -552,6 +552,99 @@ console.log('\nE. an approved spec is recoverable after an agent writes it:');
   } else ok('E7 the scaffold leaves .mavci/ trackable, so a checkout stays a second recovery path');
 }
 
+/* ===================================== F. THE CLOSING GATE READS THE VERDICT
+ *
+ * cartoonify finding 61, 2026-09-30. Task 0015's only verdict was attempt 1's
+ * "fail", and `--advance-phase 0015 --from verify --to release` followed by
+ * `--task-status 0015 --status done` both succeeded: the task said release/done
+ * with a failing verdict as its whole record, and that state was committed. The
+ * router had said "rework"; nothing at the transition read what it said.
+ *
+ * PAIRED, because a gate that always refuses satisfies every refusal case and
+ * a gate that never refuses satisfies the permission case. F6 is the permission
+ * half and is what makes F1-F5 mean anything. */
+
+console.log('\nF. verify -> release and done read the verdict of the CURRENT attempt:');
+
+function verifyPhaseProject() {
+  const p = makeProject();
+  fs.mkdirSync(path.join(p, PATHS.tasks), { recursive: true });
+  const specRel = `${PATHS.tasks}/0001.md`;
+  run(p, ['--begin-plan', 'a task to close', '--spec', specRel]);
+  fs.writeFileSync(path.join(p, specRel), '# 0001\n\nAcceptance: /api/health returns 200.\n');
+  const steps = [
+    ['--approve-spec', '0001'],
+    ['--advance-phase', '0001', '--from', 'plan', '--to', 'build'],
+    ['--attempt', '0001'],
+    ['--advance-phase', '0001', '--from', 'build', '--to', 'verify'],
+  ];
+  for (const s of steps) {
+    const r = run(p, s);
+    if (r.status !== 0) throw new Error(`F setup: ${s.join(' ')} failed: ${r.out.trim().slice(0, 200)}`);
+  }
+  return p;
+}
+const verdictDoc = (verdict, attempt, blockers = 0) => ({
+  schema_version: 1, project_id: MANIFEST.project_id, task_id: '0001', attempt,
+  run_at: new Date().toISOString(), verdict, plugin_version: '0.0.0', scope: 'full', checks: [],
+  summary: { pass: 0, fail: 0, waived: 0, baselined: 0, error: 0, not_checked: 0, blockers },
+  criteria: [{ id: '1', status: verdict === 'pass' ? 'pass' : 'fail', mode: 'executed' }],
+});
+const taskDoc = (p) => JSON.parse(fs.readFileSync(path.join(p, PATHS.controlTasks, '0001.json'), 'utf8'));
+
+/** Both closing commands against one fixture; each on its own fresh copy. */
+function closingRefused(label, prepare, expectFile) {
+  for (const cmd of ['advance', 'done']) {
+    const p = verifyPhaseProject();
+    prepare(p);
+    const args = cmd === 'advance'
+      ? ['--advance-phase', '0001', '--from', 'verify', '--to', 'release']
+      : ['--task-status', '0001', '--status', 'done'];
+    const r = run(p, args);
+    const t = taskDoc(p);
+    const s = readStateDoc(p);
+    const what = cmd === 'advance' ? '--advance-phase verify->release' : '--task-status done';
+    if (r.status === 0) {
+      bad(`${label} ${what} SUCCEEDED (${label.split(' ')[0]}): the task is now phase ${t.phase}, `
+        + `status ${t.status} - finding 61 reproduced`);
+    } else if (t.phase !== 'verify' || s.phase !== 'verify' || t.status === 'done') {
+      bad(`${label} ${what} refused but moved something: task ${t.phase}/${t.status}, project ${s.phase}`);
+    } else if (!r.out.includes(expectFile)) {
+      bad(`${label} ${what} refused without naming the verdict it expected (${expectFile}): `
+        + r.out.trim().slice(0, 200));
+    } else ok(`${label} ${what} refused, nothing moved, and the message names ${expectFile}`);
+    fs.rmSync(p, { recursive: true, force: true });
+  }
+}
+
+const V1 = `${PATHS.verdicts}/0001-attempt-01.json`;
+const V2 = `${PATHS.verdicts}/0001-attempt-02.json`;
+try {
+  closingRefused('F1 fail verdict', (p) => state.recordVerdict(p, verdictDoc('fail', 1, 2)), V1);
+  closingRefused('F2 no verdict', () => {}, V1);
+  closingRefused('F3 other attempt', (p) => {
+    state.recordVerdict(p, verdictDoc('pass', 1));
+    const r = run(p, ['--attempt', '0001']);
+    if (r.status !== 0) throw new Error(`F3 setup --attempt: ${r.out}`);
+  }, V2);
+  closingRefused('F4 pass with blockers', (p) => state.recordVerdict(p, verdictDoc('pass', 1, 1)), V1);
+  closingRefused('F5 incomplete verdict', (p) => state.recordVerdict(p, verdictDoc('incomplete', 1)), V1);
+
+  const p = verifyPhaseProject();
+  state.recordVerdict(p, verdictDoc('pass', 1));
+  const a = run(p, ['--advance-phase', '0001', '--from', 'verify', '--to', 'release']);
+  const d = run(p, ['--task-status', '0001', '--status', 'done']);
+  const t = taskDoc(p);
+  if (a.status !== 0 || d.status !== 0 || t.phase !== 'release' || t.status !== 'done') {
+    bad(`F6 a PASSING verdict for the current attempt could not close the task (advance ${a.status}, `
+      + `done ${d.status}, task ${t.phase}/${t.status}). A gate that refuses everything satisfies F1-F5: `
+      + (a.out + d.out).trim().slice(0, 200));
+  } else ok('F6 a passing, blocker-free verdict for the current attempt closes the task (the permission half)');
+  fs.rmSync(p, { recursive: true, force: true });
+} catch (err) {
+  bad(`F could not build its fixture: ${err.message}`);
+}
+
 if (failures.length) {
   console.error('\nstate transition check FAILED:');
   for (const x of failures) console.error('  - ' + x);

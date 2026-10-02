@@ -445,8 +445,62 @@ function clearActiveTask(root, id) {
 }
 
 export function closeTask(root, id, status) {
+  if (status === 'done') assertClosingVerdict(root, id, `--task-status ${id} --status done`);
   updateControlTask(root, id, { status });
   clearActiveTask(root, id);
+}
+
+/**
+ * THE CLOSING GATE READS THE VERDICT. cartoonify finding 61, 2026-09-30.
+ *
+ * Task 0015's only verdict was attempt 1's `fail`, and `--advance-phase verify
+ * -> release` then `--task-status done` both succeeded: the record said
+ * release/done with a failing verdict as its whole evidence, and it was
+ * committed. The router had answered "rework"; neither transition read what it
+ * answered. A quality gate one operator command can step past, leaving no trace
+ * that it was stepped past, is not a gate.
+ *
+ * The verdict asked for is the CURRENT attempt's, by the identity counter -
+ * the file `recordVerdict` would have written for it. Not "the newest in
+ * `verdicts[]`": after `--attempt` the newest is the previous attempt's, and a
+ * pass from before the rework is not evidence about the code after it.
+ *
+ * Literal `verdict === "pass"` AND `summary.blockers === 0`. `incomplete` is
+ * refused here as well: it is the state where nobody knows whether the
+ * criteria passed, and closing on it is the untruth 0.1.34 moved out of the
+ * verdict. The free `--set-phase` override remains for the phase; there is no
+ * override for `done`, deliberately - a closure on a non-passing verdict is
+ * `--block <id> --reason`, which records why.
+ */
+export function closingVerdictPath(id, task) {
+  return `${PATHS.verdicts}/${id}-attempt-${String(attemptsTotal(task)).padStart(2, '0')}.json`;
+}
+
+export function assertClosingVerdict(root, id, act) {
+  const t = readControlTask(root, id);
+  const n = attemptsTotal(t);
+  const rel = closingVerdictPath(id, t);
+  const refuse = (why) => {
+    throw new Error(`${act} refused: ${why} The closing gate expects ${rel} - the verdict for task `
+      + `${id}'s current attempt (${n}) - to say "pass" with 0 blockers. Verify the current attempt `
+      + `(verify.mjs --run-criteria ${id} --record --task ${id}), or, if the work is to stop here, `
+      + `record why: state.mjs --block ${id} --reason "...". (cartoonify finding 61)`);
+  };
+  if (n < 1) refuse(`task ${id} has made no attempt, so no verdict can be about it.`);
+  const v = readJsonOrNull(abs(root, rel));
+  if (!v) {
+    const last = t.verdicts?.[t.verdicts.length - 1];
+    refuse(`there is no verdict for the current attempt${last ? ` (the newest recorded is ${last}, `
+      + 'which is about another attempt)' : ''}.`);
+  }
+  if (v.task_id !== id || v.attempt !== n) {
+    refuse(`${rel} names task ${v.task_id} attempt ${v.attempt}, not task ${id} attempt ${n}.`);
+  }
+  const blockers = v.summary?.blockers;
+  if (v.verdict !== 'pass' || blockers !== 0) {
+    refuse(`${rel} says "${v.verdict}" with ${blockers ?? 'an unknown number of'} blocker(s).`);
+  }
+  return rel;
 }
 
 /* ============================ SPEC APPROVAL AND THE SCOPED TRANSITION ======
@@ -571,11 +625,12 @@ export function approveSpec(root, id) {
  * The orchestrator's transition. Scoped to one task, directional, and gated on a
  * recorded approval.
  *
- * Four refusals, and each is a way a flat grant would have said yes:
+ * Five refusals, and each is a way a flat grant would have said yes:
  *   1. the task's phase is not `from`      - the caller has stale state
  *   2. `to` is not the phase after `from`  - no skipping verify to reach release
  *   3. no `spec_approved`                  - no decision has been recorded
  *   4. the spec has changed since approval - the decision was about another document
+ *   5. verify -> release without a passing verdict for the current attempt (finding 61)
  */
 export function advancePhase(root, id, from, to) {
   if (!PHASES.includes(from) || !PHASES.includes(to)) {
@@ -623,6 +678,10 @@ export function advancePhase(root, id, from, to) {
       + 'you approved - put the approved bytes back rather than blessing the new ones: '
       + `state.mjs --restore-spec ${id}. Re-approving in order to close a task empties the gate `
       + 'of its meaning, which is why it is not the only exit named here.');
+  }
+  // Fifth refusal (finding 61): a verify that FAILED reaches release this way too.
+  if (from === 'verify' && to === 'release') {
+    assertClosingVerdict(root, id, `--advance-phase ${id} --from verify --to release`);
   }
   /* BOTH HALVES, EXPLICITLY, AND NOT THROUGH `setPhase`.
    *

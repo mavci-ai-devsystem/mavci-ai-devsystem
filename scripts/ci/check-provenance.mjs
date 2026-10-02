@@ -329,6 +329,17 @@ console.log('\nA7. --reset-attempts does not send the verdict numbering back ove
 
 /* =================================================== B. THE TASK LIFECYCLE */
 
+/* Since 0.1.36 `--task-status done` reads the current attempt's verdict and
+ * refuses anything but "pass" with 0 blockers (finding 61, asserted in
+ * check-state-transition.mjs section F). These cases are about the status enum
+ * and the active-task pointer, so they give the gate what it asks for. */
+const passVerdict = (p, attempt) => state.recordVerdict(p, {
+  schema_version: 1, project_id: MANIFEST.project_id, task_id: '0001', attempt,
+  run_at: new Date().toISOString(), verdict: 'pass', plugin_version: '0.0.0', scope: 'full',
+  checks: [], summary: { pass: 0, fail: 0, waived: 0, baselined: 0, error: 0, not_checked: 0, blockers: 0 },
+  criteria: [{ id: '1', status: 'pass', mode: 'executed' }],
+});
+
 console.log('\nB. the task lifecycle can move, and stops where it must:');
 {
   const p = makeProject();
@@ -344,6 +355,7 @@ console.log('\nB. the task lifecycle can move, and stops where it must:');
   check(t1.owner_agent === 'mavci-builder',
     `B3 and records who owns the attempt - owner_agent=${JSON.stringify(t1.owner_agent)}`);
 
+  passVerdict(p, 1);
   const r2 = run(p, STATE, ['--task-status', '0001', '--status', 'done']);
   check(r2.status === 0 && controlTask(p, '0001').status === 'done',
     `B4 --task-status sets a status from the closed enum - exit ${r2.status}`);
@@ -378,6 +390,7 @@ console.log('\nB9. a closed task stops being the active one:');
 for (const [status, shouldClear] of [['done', true], ['failed', true], ['blocked', true], ['in_progress', false]]) {
   const p = makeProject();
   run(p, STATE, ['--begin-plan', 'pointer probe']);
+  if (status === 'done') { run(p, STATE, ['--attempt', '0001']); passVerdict(p, 1); }
   const before = JSON.parse(fs.readFileSync(path.join(p, PATHS.state), 'utf8')).active_task;
   const r = status === 'blocked'
     ? run(p, STATE, ['--block', '0001', '--reason', 'x'])
