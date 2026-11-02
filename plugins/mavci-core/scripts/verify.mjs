@@ -47,6 +47,8 @@ import { verdictOutcome, approvalCurrent } from './lib/route.mjs';
 import { resolveBash, preflight, describeBash } from './lib/shell.mjs';
 import { findNextServers } from './lib/procs.mjs';
 import { parseCriteriaBlock, runCriteria, isShellOnly, CRITERIA_FENCE } from './lib/criteria.mjs';
+import { checkCriteriaLimits, limitsReport } from './lib/criteria-limits.mjs';
+import { buildRedactor } from './redact.mjs';
 import {
   loadContext, validateAll, verifyIntegrity, recordVerdict, readControlTask, attemptsTotal,
   isBaselined, activeWaiver, pluginVersion, projectRoot,
@@ -544,6 +546,28 @@ export function formatGithub(verdict) {
 async function main() {
   const argv = process.argv.slice(2);
   const root = projectRoot();
+
+  /* ---- --check-criteria <id>: the approval's check, before the approval ----
+   * cartoonify finding 4. The architect runs this before handing a spec back, so
+   * a criterion verify cannot run is found while fixing it is free. It is the
+   * SAME function `--approve-spec` calls, so the two cannot disagree: exit 0 the
+   * approval would accept it, 1 it would refuse, 2 the spec could not be read. */
+  const checkIx = argv.indexOf('--check-criteria');
+  if (checkIx !== -1) {
+    const id = argv[checkIx + 1];
+    if (!id || id.startsWith('--')) { console.error('usage: --check-criteria <task-id>'); process.exit(2); }
+    const surface = readJsonOrNull(abs(root, `${PATHS.tasks}/${id}.json`));
+    const specPath = surface?.spec ?? null;
+    const text = specPath ? readTextOrNull(abs(root, specPath)) : null;
+    if (text === null) {
+      console.error(`task ${id}: no readable spec${specPath ? ` at ${specPath}` : ' pointer'}.`);
+      process.exit(2);
+    }
+    const manifest = readJsonOrNull(abs(root, PATHS.manifest));
+    const result = checkCriteriaLimits(text, { scan: buildRedactor(root, manifest).scanRepoText });
+    console.log(limitsReport(result));
+    process.exit(result.errors.length ? 1 : 0);
+  }
   const advisory = argv.includes('--advisory');
   const ci = argv.includes('--ci');
   const scope = argv.includes('--changed') ? 'changed' : 'full';

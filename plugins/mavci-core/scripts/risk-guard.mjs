@@ -506,7 +506,7 @@ function approvedSpecFor(root, rel) {
 
 /* ------------------------------------------------------ tier-3 patterns */
 
-const HARD_BLOCK = [
+export const HARD_BLOCK = [
   { re: /^rm\s+(-[A-Za-z]*r[A-Za-z]*f|-[A-Za-z]*f[A-Za-z]*r|-r\s+-f|-f\s+-r)\b/, why: 'recursive force delete' },
   { re: /^rm\s+-[A-Za-z]*r\b/, why: 'recursive delete' },
   { re: /^git\s+push\s+.*(--force|-f)\b/, why: 'force push rewrites published history' },
@@ -525,7 +525,7 @@ const HARD_BLOCK = [
 
 /** Destructive SQL, blocked in EVERY environment including local: a destructive
  *  migration written locally is a destructive migration that reaches prod later. */
-const DESTRUCTIVE_SQL = [
+export const DESTRUCTIVE_SQL = [
   { re: /\bDROP\s+(TABLE|SCHEMA|DATABASE)\b/i, why: 'DROP TABLE/SCHEMA/DATABASE' },
   { re: /\bTRUNCATE\s+/i, why: 'TRUNCATE' },
   { re: /\bDELETE\s+FROM\s+[\w."]+\s*(;|$)/i, why: 'DELETE with no WHERE clause' },

@@ -61,6 +61,21 @@ that genuinely needs a browser in order to make it look cheap. A criterion the
 operator approved and nobody could run is the failure this whole mechanism was
 built out of.
 
+**BEFORE YOU HAND THE SPEC BACK, RUN THE APPROVAL'S OWN CHECK:**
+
+    node "${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs" --check-criteria <id>
+
+It is the same function `--approve-spec` calls, so exit 1 means the operator's
+approval WILL be refused and nothing recorded. It refuses a block verify cannot
+read (`timeout_ms` above 600000 - ten minutes - is the case that cost task 0034
+a whole task id), a secret written into a command, a secret variable with no
+`live-key`, a machine-specific or home-relative path, a hardcoded
+`mavci-core/<x.y.z>/` path, a tier-3 command, a write into `.mavci/control/`,
+and reading a `.env` file. Fix every blocking line before handing back; do not
+hand back a spec you know will be refused. Its warnings - in Turkish, naming
+who must act - go into your hand-back verbatim, so the operator sees what they
+will be asked to do at verify before they approve.
+
 **And write the command so it can fail.** The rule above - state what a violating
 repo looks like, and confirm the criterion reports it - now has a mechanical
 form: the command's exit code IS the verdict. `grep x file || true` is a

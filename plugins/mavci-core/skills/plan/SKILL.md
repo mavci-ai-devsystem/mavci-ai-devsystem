@@ -44,9 +44,17 @@ project is connected, and do not assume a phase.
    it by hand rebuilds the gap.
 3. Delegate to `@agent-mavci-architect` with: the task id, the request verbatim,
    and the manifest path. It writes the spec to `.mavci/tasks/<id>-<slug>.md`.
-4. When it returns, show the operator the acceptance criteria and **ask whether
-   they are right before building**. A wrong spec is the most expensive thing in
-   this system to discover late.
+4. When it returns, run the approval's own check and show its report **first**:
+
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs" --check-criteria <id>`
+
+   It is in Turkish, names who must act on each warning, and says "bu adımda sen
+   gerekeceksin" when a criterion needs something only the operator can do. Exit 1
+   means `--approve-spec` will refuse the spec: send it back to the architect
+   rather than asking for an approval that cannot be recorded (cartoonify
+   finding 4). Then show the acceptance criteria and **ask whether they are right
+   before building**. A wrong spec is the most expensive thing in this system to
+   discover late.
 5. On approval, RECORD it rather than acting on it directly:
 
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/state.mjs" --approve-spec <id>`

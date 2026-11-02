@@ -30,6 +30,7 @@ import {
 } from './lib/fsx.mjs';
 import { assertValid, validate } from './lib/schema.mjs';
 import { buildRedactor } from './redact.mjs';
+import { checkCriteriaLimits, limitsReport } from './lib/criteria-limits.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(HERE, '..');
@@ -607,6 +608,25 @@ export function approveSpec(root, id) {
     throw new Error(`task ${id} points at ${spec}, which does not exist. Approving a spec that is `
       + 'not on disk would record a decision about a document nobody can read.');
   }
+  /* THE BLOCK IS READ BEFORE ANYTHING IS WRITTEN. cartoonify finding 4.
+   *
+   * Task 0034 was approved with a criterion verify could not read, and the defect
+   * surfaced after build. An approval must accept nothing the next gate rejects,
+   * so the same parser verify uses runs here, with the system limits beside it
+   * (lib/criteria-limits.mjs). A blocking problem refuses the approval with
+   * NOTHING recorded - no snapshot, no `spec_approved`. Warnings do not refuse;
+   * they are returned and printed first, because they are about what the
+   * operator will be asked to do at verify. */
+  const manifest = readJsonOrNull(abs(root, PATHS.manifest));
+  const limits = checkCriteriaLimits(readText(abs(root, spec)), {
+    scan: buildRedactor(root, manifest).scanRepoText,
+  });
+  const report = limitsReport(limits);
+  if (limits.errors.length) {
+    throw new Error(`${report}\n\nONAY VERİLMEDİ: task ${id}'s spec (${spec}) has ${limits.errors.length} `
+      + 'blocking problem(s) above. Nothing was recorded. The architect fixes the spec; then approve again.');
+  }
+
   /* THE SNAPSHOT IS TAKEN BEFORE THE RECORD IS WRITTEN.
    *
    * Finding 8. If the copy fails, no approval is recorded - so there is never a
@@ -618,7 +638,7 @@ export function approveSpec(root, id) {
   updateControlTask(root, id, {
     spec_approved: { at: nowIso(), by: 'operator', spec_path: spec, spec_sha256: hash },
   });
-  return { spec, hash, phase: t.phase, snapshot: snapRel };
+  return { spec, hash, phase: t.phase, snapshot: snapRel, report };
 }
 
 /**
@@ -1419,6 +1439,10 @@ async function main() {
         const id = arg('--approve-spec');
         if (id === true || !id) die('usage: --approve-spec <task-id>');
         const r = approveSpec(root, id);
+        // The limits report FIRST: its warnings are what the operator will be
+        // asked to do at verify, and the operator asked for them at the top.
+        console.log(r.report);
+        console.log('');
         console.log(`task ${id}: spec approved - ${r.spec} @ ${r.hash.slice(0, 12)}`);
         console.log('This records YOUR decision. --advance-phase executes it and cannot make it, '
           + 'and it refuses again if the spec changes.');

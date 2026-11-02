@@ -31,6 +31,8 @@ import path from 'node:path';
 import { PATHS } from './config.mjs';
 import { abs, exists, readJsonOrNull, readTextOrNull } from './lib/fsx.mjs';
 import { route, OWNER } from './lib/route.mjs';
+import { checkCriteriaLimits, limitsReport } from './lib/criteria-limits.mjs';
+import { buildRedactor } from './redact.mjs';
 import { projectRoot } from './state.mjs';
 
 function readJsonStrict(file, label) {
@@ -162,9 +164,27 @@ function main() {
   }
   const decision = route({ ...input, request, specText });
 
+  /* At the approval stop, the same limits check --approve-spec will run, so the
+   * operator reads what will be refused - and what they will be asked to do - BEFORE
+   * deciding. cartoonify finding 4. Gathered here, not in lib/route.mjs, because it
+   * reads the project's secret values; the router stays a pure function. */
+  let limits = null;
+  if (decision.action === 'awaiting_approval' && typeof specText === 'string') {
+    const manifest = readJsonOrNull(abs(root, PATHS.manifest));
+    const r = checkCriteriaLimits(specText, { scan: buildRedactor(root, manifest).scanRepoText });
+    limits = { blocking: r.errors.length, warnings: r.warnings.length, operator_needed: r.operatorIds, report: limitsReport(r) };
+  }
+
   if (argv.includes('--json')) {
-    console.log(JSON.stringify({ ...decision, phase: input.state?.phase ?? null }, null, 2));
+    console.log(JSON.stringify({ ...decision, ...(limits ? { limits } : {}), phase: input.state?.phase ?? null }, null, 2));
   } else {
+    if (limits) {
+      console.log(limits.report);
+      if (limits.blocking) {
+        console.log('\n--approve-spec will REFUSE this spec until the blocking problems above are fixed.');
+      }
+      console.log('');
+    }
     const owner = decision.dispatch ?? 'the operator';
     console.log(`next: ${decision.action}  ->  ${owner}`
       + (decision.task_id ? `   (task ${decision.task_id})` : ''));

@@ -78,6 +78,13 @@ jobs:
       - name: The acceptance criteria are executed, and nobody hands the answer in
         run: node scripts/ci/check-criteria-runner.mjs
 
+      # cartoonify finding 4: an approval accepts nothing verify cannot run. The
+      # 0034 block (timeout_ms 1200000) is refused at --approve-spec with nothing
+      # recorded; L3 and L9 are the permission half, so a check that refuses
+      # everything fails here too.
+      - name: An approval accepts nothing verify cannot run
+        run: node scripts/ci/check-criteria-limits.mjs
+
       # The orchestrator's contract, and the two assertions in it that are not
       # prose: the guard must not deny what ship says it may run, and ship's
       # copy of WORKFLOW_MOVES must be the guard's. A second list of the exempt
