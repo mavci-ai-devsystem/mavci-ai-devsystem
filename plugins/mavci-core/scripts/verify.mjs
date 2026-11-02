@@ -46,7 +46,10 @@ import { rulesFor, ruleById } from './rules/index.mjs';
 import { verdictOutcome, approvalCurrent } from './lib/route.mjs';
 import { resolveBash, preflight, describeBash } from './lib/shell.mjs';
 import { findNextServers } from './lib/procs.mjs';
-import { parseCriteriaBlock, runCriteria, isShellOnly, CRITERIA_FENCE } from './lib/criteria.mjs';
+import {
+  parseCriteriaBlock, runCriteria, runOne, isShellOnly, CRITERIA_FENCE,
+  compareToday, treeSnapshot, treeChanges, todayReport,
+} from './lib/criteria.mjs';
 import { checkCriteriaLimits, limitsReport } from './lib/criteria-limits.mjs';
 import { buildRedactor } from './redact.mjs';
 import {
@@ -468,6 +471,23 @@ export async function resolveCriteria(root, { id, argv = [], execute, supplied =
     };
   }
 
+  const parsedHave = parseHave(argv);
+  if (!parsedHave.ok) return parsedHave;
+  const { have } = parsedHave;
+
+  const results = runCriteria(declared, { bash, cwd: root, have });
+  const ranCount = results.filter((r) => r.status === 'pass' || r.status === 'fail').length;
+  return {
+    ok: true,
+    criteria: results,
+    note: `interpreter ${describeBash(bash)}; ran ${ranCount} of ${declared.length} acceptance `
+      + `criteria from ${specPath}`
+      + (have.length ? ` (declared available: ${have.join(', ')})` : ''),
+  };
+}
+
+/** `--have a,b` (repeatable): what the CALLER says the environment provides. One reader for both commands. */
+export function parseHave(argv) {
   const have = [];
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] !== '--have') continue;
@@ -482,16 +502,93 @@ export async function resolveCriteria(root, { id, argv = [], execute, supplied =
       have.push(cap);
     }
   }
+  return { ok: true, have };
+}
 
-  const results = runCriteria(declared, { bash, cwd: root, have });
-  const ranCount = results.filter((r) => r.status === 'pass' || r.status === 'fail').length;
-  return {
-    ok: true,
-    criteria: results,
-    note: `interpreter ${describeBash(bash)}; ran ${ranCount} of ${declared.length} acceptance `
-      + `criteria from ${specPath}`
-      + (have.length ? ` (declared available: ${have.join(', ')})` : ''),
-  };
+/**
+ * `--check-criteria <id> --against-tree`: run the spec's criteria on the tree as
+ * it is, BEFORE any approval, and say whether each gave the answer it declares
+ * for today (lib/criteria.mjs, "BEFORE THE APPROVAL"). Returns {status, text}:
+ * 0 every answer as declared, 1 a criterion did not (or the limits check
+ * refused), 2 nothing could be established. It writes nothing itself; whatever
+ * the commands write is reported as a failure.
+ */
+export function checkAgainstTree(root, { id, specText, specPath, argv = [], limits, listProcesses = null, git = null }) {
+  if (limits.errors.length) {
+    return {
+      status: 1,
+      text: 'Ölçütler bugünkü kodda ÇALIŞTIRILMADI: yukarıdaki engelleyici satırlar düzeltilmeden hiçbir komut '
+        + 'çalıştırılmaz.',
+    };
+  }
+  const parsed = parseCriteriaBlock(specText);
+  if (!parsed.ok) return { status: 2, text: `task ${id}: the criteria block in ${specPath} could not be read - ${parsed.error}` };
+  if (!parsed.criteria) {
+    return { status: 2, text: `task ${id}: ${specPath} declares no \`${CRITERIA_FENCE}\` block, so there is nothing to run.` };
+  }
+  const parsedHave = parseHave(argv);
+  if (!parsedHave.ok) return { status: 2, text: parsedHave.error };
+
+  let selected = parsed.criteria;
+  const onlyIx = argv.indexOf('--only');
+  if (onlyIx !== -1) {
+    const v = argv[onlyIx + 1];
+    if (!v || v.startsWith('--')) return { status: 2, text: '--only expects a comma-separated list of criterion ids.' };
+    const want = v.split(',').map((x) => x.trim()).filter(Boolean);
+    const unknown = want.filter((w) => !parsed.criteria.some((c) => c.id === w));
+    if (unknown.length) {
+      return {
+        status: 2,
+        text: `--only ${unknown.join(', ')}: no such criterion in ${specPath}. Its ids are `
+          + `${parsed.criteria.map((c) => c.id).join(', ')}.`,
+      };
+    }
+    selected = parsed.criteria.filter((c) => want.includes(c.id));
+  }
+
+  const bash = resolveBash();
+  const pre = preflight(bash);
+  if (!pre.ok) {
+    return {
+      status: 2,
+      text: `the interpreter could not be proven to execute, so NO criterion was run. interpreter `
+        + `${describeBash(bash)}; the probe answered ${JSON.stringify(pre.answer)} (exit ${pre.status}). `
+        + 'Pin a working shell with MAVCI_BASH.',
+    };
+  }
+  const servers = findNextServers(root, listProcesses ? { list: listProcesses } : {});
+  if (!servers.ok) {
+    return {
+      status: 2,
+      text: `could not establish whether a next server is running here (${servers.error}), so NO criterion was `
+        + 'run (finding 62).',
+    };
+  }
+  if (servers.found.length) {
+    return {
+      status: 2,
+      text: 'STOP - a Next.js server is running in this project and writes .next, which the criteria build and '
+        + 'read:\n' + servers.found.map((s) => `  pid ${s.pid}: ${s.cmd.slice(0, 200)}`).join('\n')
+        + '\nStop it and run this again. NO criterion was run. (finding 62)',
+    };
+  }
+  const snapOpts = git ? { git } : {};
+  const before = treeSnapshot(root, snapOpts);
+  if (!before.ok) {
+    return {
+      status: 2,
+      text: `${before.error}. Without it a criterion that changes the tree could not be seen, so NO criterion was run.`,
+    };
+  }
+
+  const results = runCriteria(selected, {
+    bash, cwd: root, have: parsedHave.have, exec: (c, b, cwd) => runOne(c, b, cwd, { capture: true }),
+  });
+  const after = treeSnapshot(root, snapOpts);
+  const changed = after.ok ? treeChanges(before.map, after.map) : ['(git status failed after the run)'];
+  const rows = compareToday(parsed.criteria, results);
+  const report = todayReport(rows, { changed, interpreter: describeBash(bash), total: parsed.criteria.length });
+  return { status: report.bad ? 1 : 0, text: report.text, rows, changed };
 }
 
 /* ------------------------------------------------------------ reporting */
@@ -555,7 +652,10 @@ async function main() {
   const checkIx = argv.indexOf('--check-criteria');
   if (checkIx !== -1) {
     const id = argv[checkIx + 1];
-    if (!id || id.startsWith('--')) { console.error('usage: --check-criteria <task-id>'); process.exit(2); }
+    if (!id || id.startsWith('--')) {
+      console.error('usage: --check-criteria <task-id> [--against-tree [--only <ids>] [--have <caps>]]');
+      process.exit(2);
+    }
     const surface = readJsonOrNull(abs(root, `${PATHS.tasks}/${id}.json`));
     const specPath = surface?.spec ?? null;
     const text = specPath ? readTextOrNull(abs(root, specPath)) : null;
@@ -566,7 +666,16 @@ async function main() {
     const manifest = readJsonOrNull(abs(root, PATHS.manifest));
     const result = checkCriteriaLimits(text, { scan: buildRedactor(root, manifest).scanRepoText });
     console.log(limitsReport(result));
-    process.exit(result.errors.length ? 1 : 0);
+    if (!argv.includes('--against-tree')) {
+      if (argv.includes('--only') || argv.includes('--have')) {
+        console.error('--only and --have apply to --against-tree; without it nothing is run.');
+        process.exit(2);
+      }
+      process.exit(result.errors.length ? 1 : 0);
+    }
+    const tree = checkAgainstTree(root, { id, specText: text, specPath, argv, limits: result });
+    console.log(`\n${tree.text}`);
+    process.exit(tree.status);
   }
   const advisory = argv.includes('--advisory');
   const ci = argv.includes('--ci');

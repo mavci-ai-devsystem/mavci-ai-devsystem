@@ -574,6 +574,213 @@ console.log('\nH. a running next server refuses the run, and a build that change
   }
 }
 
+/* ============================================ T. ON TODAY'S TREE, BEFORE APPROVAL
+ *
+ * Madde 3 of 2026-11-02. `--check-criteria <id> --against-tree` runs the spec's
+ * criteria on the tree as it is and says whether each gave the answer it
+ * declares for today, so the architect's hand-proofs (clones, mutated copies,
+ * servers, Lighthouse - the largest avoidable share of 914 tool calls over 16
+ * runs) become one program call.
+ *
+ * T1 IS THE NEGATIVE CONTROL AND T2/T3 ARE ITS PAIR. A known-red criterion and a
+ * known-green guard in the SAME run both match; a comparison that answered
+ * "match" always passes T1 and fails T2, and one that answered "mismatch" always
+ * fails T1. The "red today" proof is the one the plan said must stay mandatory
+ * when the mutation work leaves the architect, so T2 is the load-bearing case. */
+
+console.log('\nT. the criteria run on today\'s tree before approval, and say whether each answers as declared:');
+
+function gitProject(entries, { extra = '' } = {}) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-today-'));
+  fs.mkdirSync(path.join(tmp, '.mavci', 'tasks'), { recursive: true });
+  fs.writeFileSync(path.join(tmp, '.mavci', 'tasks', '0001.md'), spec(block(entries) + extra));
+  fs.writeFileSync(path.join(tmp, '.mavci', 'tasks', '0001.json'), JSON.stringify({ spec: '.mavci/tasks/0001.md' }));
+  try { execFileSync('git', ['init', '-q'], { cwd: tmp, stdio: ['ignore', 'pipe', 'pipe'] }); } catch { /* T10 covers the absence */ }
+  return tmp;
+}
+const today = (p, extraArgs = []) => run(p, VERIFY, ['--check-criteria', '0001', '--against-tree', ...extraArgs]);
+const MARK = (name) => `node -e "require('fs').writeFileSync('${name}','x')"`;
+const marked = (p, name) => fs.existsSync(path.join(p, name));
+const lineFor = (r, id) => all(r).split('\n').find((l) => l.includes(`ölçüt ${id}:`)) ?? '';
+
+{
+  const p = gitProject([
+    { id: '1', run: FAILS },
+    { id: '2', run: PASSES, today: 'pass' },
+  ]);
+  const r = today(p);
+  if (r.status !== 0) bad(`T1 a known-red criterion and a known-green guard should both match (exit 0), got ${r.status}: ${all(r).trim().slice(-400)}`);
+  else if (!/✓/.test(lineFor(r, '1')) || !/✓/.test(lineFor(r, '2'))) bad(`T1 exit 0 but the rows do not both say match:\n${lineFor(r, '1')}\n${lineFor(r, '2')}`);
+  else ok('T1 control: a red criterion and a green guard in one run both answer as declared, with no approval recorded');
+  rm(p);
+}
+
+{
+  const p = gitProject([{ id: '1', run: PASSES }]);
+  const r = today(p);
+  if (r.status !== 1) bad(`T2 a criterion green on the untouched tree was accepted (exit ${r.status}); it cannot tell finished work from untouched work`);
+  else if (!/BUGÜN ZATEN YEŞİL/.test(lineFor(r, '1'))) bad(`T2 refused, but the line for criterion 1 does not say it is already green: ${lineFor(r, '1')}`);
+  else ok('T2 a criterion expected red that passes today is refused, and the line says why');
+  rm(p);
+}
+
+{
+  const p = gitProject([{ id: '1', run: FAILS, today: 'pass' }]);
+  const r = today(p);
+  if (r.status !== 1 || !/KORUMA BUGÜN KIRMIZI/.test(lineFor(r, '1'))) {
+    bad(`T3 a guard red today should be refused by name (exit ${r.status}): ${lineFor(r, '1')}`);
+  } else ok('T3 a guard that is red today is refused');
+  rm(p);
+}
+
+{
+  const p = gitProject([
+    { id: '1', run: 'node -e "require(\'mavci-no-such-module\')"' },
+    { id: '2', run: 'mavci_no_such_command_xyz' },
+  ]);
+  const r = today(p);
+  const l1 = lineFor(r, '1');
+  const l2 = lineFor(r, '2');
+  if (r.status !== 1) bad(`T4 a red caused by the command itself was accepted as a red (exit ${r.status})`);
+  else if (!/KOMUTUN KENDİSİ/.test(l1) || !/KOMUTUN KENDİSİ/.test(l2)) bad(`T4 a broken command was not named as broken:\n${l1}\n${l2}`);
+  else ok('T4 a red from a missing module or a missing command is refused as proving nothing');
+  rm(p);
+}
+
+{
+  const p = gitProject([
+    { id: '1', run: FAILS },
+    { id: '2', needs: ['shell', 'server'], run: MARK('ran-server.txt') },
+  ]);
+  const r = today(p);
+  if (marked(p, 'ran-server.txt')) bad('T5 a criterion declaring `server` was EXECUTED with no --have');
+  else if (r.status !== 0 || !/verify sırasında/.test(lineFor(r, '2'))) {
+    bad(`T5 a server criterion should be listed as left to verify and not fail the run (exit ${r.status}): ${lineFor(r, '2')}`);
+  } else ok('T5 a criterion needing a server is not run, is listed as left to verify, and does not fail the check');
+  rm(p);
+}
+
+{
+  const p = gitProject([{ id: '1', run: `${MARK('left-behind.txt')} && exit 1` }]);
+  const r = today(p);
+  if (r.status !== 1 || !/AĞAÇTA 1 DOSYAYI DEĞİŞTİRDİ: left-behind\.txt/.test(all(r))) {
+    bad(`T6 a criterion that wrote into the tree was not reported by name (exit ${r.status}): ${all(r).trim().slice(-300)}`);
+  } else ok('T6 a criterion that changes the tree fails the check and names the file');
+  rm(p);
+}
+
+{
+  const p = gitProject([
+    { id: '1', run: MARK('ran-limits.txt'), timeout_ms: 1_200_000 },
+  ]);
+  const r = today(p);
+  if (marked(p, 'ran-limits.txt')) bad('T7 a spec with a blocking limits line was EXECUTED anyway');
+  else if (r.status !== 1) bad(`T7 a spec the approval would refuse should exit 1, got ${r.status}`);
+  else if (!/ÇALIŞTIRILMADI/.test(all(r))) bad('T7 exit 1, but the output does not say the criteria were NOT run because of the limits line - a build that never runs anything passes the rest of T7');
+  else ok('T7 nothing runs while the limits check has a blocking line');
+  rm(p);
+}
+
+{
+  const p = gitProject([
+    { id: '1', run: FAILS },
+    { id: '2', run: MARK('ran-other.txt') },
+  ]);
+  const r = today(p, ['--only', '1']);
+  const u = today(p, ['--only', '9']);
+  if (marked(p, 'ran-other.txt')) bad('T8 --only 1 also ran criterion 2');
+  else if (r.status !== 0 || !lineFor(r, '1')) bad(`T8 --only 1 did not run criterion 1 cleanly (exit ${r.status})`);
+  else if (u.status !== 2 || !/no such criterion/.test(all(u))) bad(`T8 --only with an unknown id should refuse with exit 2, got ${u.status}`);
+  else ok('T8 --only runs the named criteria and nothing else, and refuses an unknown id');
+  rm(p);
+}
+
+{
+  /* A real connected project, so "writes nothing" is asserted against the files
+   * that would carry a verdict, an attempt or an approval - not against a
+   * directory that never existed. */
+  const p = makeProject(spec(block([{ id: '1', run: FAILS }])), { approve: false });
+  try { execFileSync('git', ['init', '-q'], { cwd: p, stdio: ['ignore', 'pipe', 'pipe'] }); } catch { /* */ }
+  const ctl = path.join(p, PATHS.controlTasks, '0001.json');
+  const st = path.join(p, PATHS.state);
+  const before = [fs.readFileSync(ctl, 'utf8'), fs.readFileSync(st, 'utf8')];
+  const vdir = path.join(p, PATHS.verdicts);
+  const vBefore = fs.existsSync(vdir) ? fs.readdirSync(vdir).length : 0;
+  const r = today(p);
+  const vAfter = fs.existsSync(vdir) ? fs.readdirSync(vdir).length : 0;
+  if (r.status !== 0) bad(`T9 the run itself did not succeed (exit ${r.status}): ${all(r).trim().slice(-300)}`);
+  else if (!/✓/.test(lineFor(r, '1'))) bad('T9 exit 0 but criterion 1 has no row: nothing ran, so "wrote nothing" proves nothing');
+  else if (vAfter !== vBefore) bad(`T9 a verdict was written (${vBefore} -> ${vAfter}); this check must record nothing`);
+  else if (fs.readFileSync(ctl, 'utf8') !== before[0] || fs.readFileSync(st, 'utf8') !== before[1]) {
+    bad('T9 the control task or state.json changed; this check must not touch the control plane');
+  } else ok('T9 on a connected project with no approval it runs, and writes no verdict, attempt or state');
+  rm(p);
+}
+
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-nogit-'));
+  fs.mkdirSync(path.join(tmp, '.mavci', 'tasks'), { recursive: true });
+  fs.writeFileSync(path.join(tmp, '.mavci', 'tasks', '0001.md'), spec(block([{ id: '1', run: MARK('ran-nogit.txt') }])));
+  fs.writeFileSync(path.join(tmp, '.mavci', 'tasks', '0001.json'), JSON.stringify({ spec: '.mavci/tasks/0001.md' }));
+  const r = run(tmp, VERIFY, ['--check-criteria', '0001', '--against-tree'], { GIT_CEILING_DIRECTORIES: path.dirname(tmp) });
+  if (marked(tmp, 'ran-nogit.txt')) bad('T10 with no git to detect tree changes, a criterion was executed anyway');
+  else if (r.status !== 2) bad(`T10 outside a git repository the check should refuse with exit 2, got ${r.status}`);
+  else ok('T10 where tree changes cannot be seen, nothing runs (could-not-check is not a pass)');
+  rm(tmp);
+}
+
+{
+  const p = gitProject([{ id: '1', run: FAILS, today: 'red' }]);
+  const r = today(p);
+  if (r.status === 0 || !/today/.test(all(r))) bad(`T11 an unrecognised \`today\` value was accepted (exit ${r.status})`);
+  else ok('T11 `today` is a closed vocabulary; a typo is refused, not read as the default');
+  rm(p);
+}
+
+{
+  const p = gitProject([{ id: '1', run: `${MARK('ran-plain.txt')} && exit 1` }]);
+  const plain = run(p, VERIFY, ['--check-criteria', '0001']);
+  const stray = run(p, VERIFY, ['--check-criteria', '0001', '--only', '1']);
+  if (marked(p, 'ran-plain.txt')) bad('T12 plain --check-criteria EXECUTED a criterion; only --against-tree may');
+  else if (plain.status !== 0) bad(`T12 plain --check-criteria changed its answer (exit ${plain.status})`);
+  else if (stray.status !== 2) bad(`T12 --only without --against-tree should refuse, got ${stray.status}`);
+  else ok('T12 plain --check-criteria still runs nothing, and --only without --against-tree is refused');
+  rm(p);
+}
+
+if (typeof (await import(pathToFileURL(VERIFY).href)).checkAgainstTree !== 'function') {
+  bad('T13 verify.mjs exports no checkAgainstTree');
+} else {
+  const { checkAgainstTree } = await import(pathToFileURL(VERIFY).href);
+  const p = gitProject([{ id: '1', run: MARK('ran-server-up.txt') }]);
+  const text = fs.readFileSync(path.join(p, '.mavci', 'tasks', '0001.md'), 'utf8');
+  const fake = () => ({ ok: true, procs: [{ pid: 4242, cmd: `node ${p.replace(/\\/g, '/')}/node_modules/next/dist/bin/next dev`, cwd: null }] });
+  const r = checkAgainstTree(p, { id: '0001', specText: text, specPath: '.mavci/tasks/0001.md', limits: { errors: [] }, listProcesses: fake });
+  if (marked(p, 'ran-server-up.txt')) bad('T13 a next dev running in the project did not stop the run');
+  else if (r.status !== 2 || !/4242/.test(r.text)) bad(`T13 a running next server should refuse with exit 2 naming the pid, got ${r.status}`);
+  else ok('T13 a next server running in the project stops the run before anything executes (finding 62)');
+  rm(p);
+}
+
+{
+  /* PROSE, AND SAID SO: these prove the instructions name the command and the
+   * budget. They do not prove an architect obeys them - the turn count measured
+   * on a real re-plan is what does, and it is recorded in the madde 3 commit. */
+  const role = JSON.parse(fs.readFileSync(path.join(ROOT, 'agent-defs', 'architect.json'), 'utf8')).role.replace(/\s+/g, ' ');
+  const planSkill = fs.readFileSync(path.join(ROOT, 'plugins/mavci-core/skills/plan/SKILL.md'), 'utf8').replace(/\s+/g, ' ');
+  const shipSkill = fs.readFileSync(path.join(ROOT, 'plugins/mavci-core/skills/ship/SKILL.md'), 'utf8').replace(/\s+/g, ' ');
+  const cmd = '--check-criteria <id> --against-tree';
+  const misses = [];
+  if (!role.includes(cmd)) misses.push('the architect role does not name the command');
+  if (!/30 TURNS/.test(role)) misses.push('the architect role states no turn budget');
+  if (!/Do not\*\* clone the repository/.test(role) || !/Lighthouse/.test(role)) misses.push('the architect role does not forbid hand-proofs');
+  if (!/"today": "pass"/.test(role)) misses.push('the architect role does not explain `today`');
+  if (!planSkill.includes(cmd)) misses.push('skills/plan step 4 does not run it');
+  if (!shipSkill.includes(cmd)) misses.push('skills/ship awaiting_approval does not run it');
+  if (misses.length) bad(`T14 ${misses.join('; ')}`);
+  else ok('T14 the architect, plan and ship all name the one command, and the architect states the 30-turn budget');
+}
+
 if (failures.length) {
   console.error('\ncriteria runner check FAILED:');
   for (const x of failures) console.error('  - ' + x);

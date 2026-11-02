@@ -35,7 +35,7 @@ what a program runs. One fenced block per spec, holding a JSON array:
 
     ```mavci-criteria
     [
-      { "id": "1", "run": "npx tsc --noEmit" },
+      { "id": "1", "run": "npx tsc --noEmit", "today": "pass" },
       { "id": "2", "needs": ["shell"], "run": "grep -q \"force-dynamic\" app/api/x/route.ts" },
       { "id": "3", "needs": ["server"], "run": "curl -sf localhost:3000/api/x", "expect_exit": 0 }
     ]
@@ -44,7 +44,7 @@ what a program runs. One fenced block per spec, holding a JSON array:
 `id` matches the number in your prose. `run` is a shell command executed at the
 repository root. `needs` defaults to `["shell"]` and is otherwise a subset of
 `shell, server, browser, network, live-key, write-outside-tree`. `expect_exit`
-defaults to 0; `timeout_ms` defaults to two minutes.
+defaults to 0; `timeout_ms` defaults to two minutes. `today` is explained below.
 
 **IT GOES IN THE `.md`, NEVER THE `.json` SIDECAR.** The operator's approval
 hashes the `.md` and nothing else, and that hash is the only thing authorising a
@@ -61,26 +61,72 @@ that genuinely needs a browser in order to make it look cheap. A criterion the
 operator approved and nobody could run is the failure this whole mechanism was
 built out of.
 
-**BEFORE YOU HAND THE SPEC BACK, RUN THE APPROVAL'S OWN CHECK:**
+**BEFORE YOU HAND THE SPEC BACK, RUN THE APPROVAL'S OWN CHECK ON TODAY'S TREE - ONCE:**
 
-    node "${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs" --check-criteria <id>
+    node "${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs" --check-criteria <id> --against-tree
 
-It is the same function `--approve-spec` calls, so exit 1 means the operator's
-approval WILL be refused and nothing recorded. It refuses a block verify cannot
-read (`timeout_ms` above 600000 - ten minutes - is the case that cost task 0034
-a whole task id), a secret written into a command, a secret variable with no
+It first runs the same limits check `--approve-spec` calls, so a blocking line
+there means the operator's approval WILL be refused: it refuses a block verify
+cannot read (`timeout_ms` above 600000 - ten minutes - is the case that cost task
+0034 a whole task id), a secret written into a command, a secret variable with no
 `live-key`, a machine-specific or home-relative path, a hardcoded
-`mavci-core/<x.y.z>/` path, a tier-3 command, a write into `.mavci/control/`,
-and reading a `.env` file. Fix every blocking line before handing back; do not
-hand back a spec you know will be refused. Its warnings - in Turkish, naming
-who must act - go into your hand-back verbatim, so the operator sees what they
-will be asked to do at verify before they approve.
+`mavci-core/<x.y.z>/` path, a tier-3 command, a write into `.mavci/control/`, and
+reading a `.env` file. If there is one, nothing runs.
 
-**And write the command so it can fail.** The rule above - state what a violating
-repo looks like, and confirm the criterion reports it - now has a mechanical
-form: the command's exit code IS the verdict. `grep x file || true` is a
-criterion that cannot fail. So is any command whose non-zero path you have not
-thought about.
+Then it EXECUTES every criterion this shell can run, on the tree exactly as it
+is, and prints one line per criterion saying whether it gave the answer you
+declared for today. Exit 0 means every one did; exit 1 means one did not, and the
+line says which and why; exit 2 means nothing could be established. It writes no
+verdict and needs no approval. Fix every line marked with a cross, then re-run
+only those with `--only <ids>`, not the whole set. Do not hand back a spec that
+does not exit 0. Its output - the limits warnings in Turkish, naming who must act,
+and the table - goes into your hand-back verbatim, so the operator sees it before
+they approve.
+
+**`today` - the proof you used to do by hand.** Every entry in the block may
+carry `"today": "fail"` (the default) or `"today": "pass"`. A criterion for new
+behaviour must be RED on today's tree, because the unchanged tree is exactly the
+repo that has not done the work: if it is green today, it cannot tell a finished
+task from an untouched one, and the check refuses it. A guard - typecheck, build,
+tests, "nothing outside scope changed" - is green today on purpose, and you say so
+with `"today": "pass"`. The check also refuses a red caused by the command itself
+(a syntax error, a module not found, a command not found), because that red proves
+nothing. Criteria that need `server`, `browser`, `network` or `live-key` are not
+run here; the table lists them as left to verify. Do not pass `--have`.
+
+**And write the command so it can fail.** The command's exit code IS the verdict.
+`grep x file || true` is a criterion that cannot fail. So is any command whose
+non-zero path you have not thought about. Being red today is necessary, not
+sufficient: a criterion that is red today for a reason unrelated to the task is
+still not a criterion, so read the red line's evidence and confirm it is red for
+the reason you meant.
+
+**YOUR BUDGET IS 30 TURNS AND IT IS NOT RAISED. Spend it on the spec, not on
+proof.** Measured on 16 planning runs (cartoonify, 2026-10-22 to 11-02): 14 ran
+past 30, and the largest avoidable share was proof work done by hand. So:
+
+- **Read** in a few batched calls: the manifest, the request, the files the task
+  touches. One `Bash` with several `cat`/`grep`/`sed -n` is one turn; ten single
+  reads are ten.
+- **Write** the spec with the `Write` tool, straight to `.mavci/tasks/<id>-<slug>.md`,
+  in one call or very few. Do not assemble it from heredoc fragments in a scratch
+  directory: your write scope is `.mavci/tasks/**` and `.mavci/decisions/**`, the
+  guard refuses everything else, and every refusal is another turn.
+- **Check** with the one command above, fix with `Edit`, re-run with `--only`.
+- **Do not** clone the repository, plant mutated copies, start `next dev` or
+  `next start`, run Lighthouse, install packages, or write a "Proof" section by
+  hand. The table is the proof, it is produced by a program, and it is
+  reproducible; your narration of a run is neither. A criterion that can only be
+  shown green after the builder's change is shown green at verify - that is what
+  verify is for.
+- **Keep the spec small.** Aim for under 40 KB. Long prose costs the operator
+  reading time and you turns. A criterion that needs hundreds of lines of harness
+  code is usually several criteria, or one that should be declared `server` or
+  `browser` and kept short. If the spec is too large to write in one `Write`
+  call, it is too large.
+- If the work genuinely cannot be specified inside the budget, hand back what you
+  have with `escalate: true` and say what is left, rather than running out
+  mid-edit.
 
 **A criterion must be able to fail.** Checkable is not enough on its own: before you write a criterion down, state what a violating repo would look like, and confirm the criterion would actually report that repo as failing. A criterion nothing can fail is not a weak criterion, it is not a criterion at all, and it is more dangerous than an absent one because it reports a pass.
 

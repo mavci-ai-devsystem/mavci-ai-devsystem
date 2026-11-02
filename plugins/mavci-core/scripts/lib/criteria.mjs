@@ -69,7 +69,10 @@
  *       "needs": ["shell"],            optional; defaults to ["shell"]
  *       "run": "npm run typecheck",    executed at the project root
  *       "expect_exit": 0,              optional; defaults to 0
- *       "timeout_ms": 120000 }         optional; defaults to CRITERION_TIMEOUT_MS
+ *       "timeout_ms": 120000,          optional; defaults to CRITERION_TIMEOUT_MS
+ *       "today": "fail" }              optional; "fail" (default) or "pass" - what it
+ *                                      must answer BEFORE the work, checked by
+ *                                      `--check-criteria <id> --against-tree`
  *
  * Zero dependencies, Node builtins only (invariant 1).
  */
@@ -77,6 +80,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   CRITERION_NEEDS, CRITERION_TIMEOUT_MS, CRITERION_TIMEOUT_CEILING_MS, EVIDENCE_MAX_CHARS,
 } from '../config.mjs';
@@ -219,7 +223,23 @@ export function parseCriteriaBlock(specText) {
       return { ok: false, error: `criterion ${id}: \`expect_exit\` must be an integer in 0..255` };
     }
 
-    criteria.push({ id, needs, run: raw.run, expect_exit: expect, timeout_ms: timeout });
+    /* `today`: what this criterion must answer on the tree BEFORE the work is
+     * done. Read only by `verify.mjs --check-criteria <id> --against-tree`, never
+     * by the verdict. Default `fail`, because a criterion that already passes on
+     * the unchanged tree cannot tell a finished task from an untouched one. A
+     * guard (typecheck, build, "nothing else changed") passes today on purpose
+     * and says so with `pass`. Closed, and refused rather than ignored: a typo
+     * here would silently turn a guard into a criterion expected to be red. */
+    const today = raw.today === undefined ? 'fail' : raw.today;
+    if (today !== 'fail' && today !== 'pass') {
+      return {
+        ok: false,
+        error: `criterion ${id}: \`today\` must be "fail" (red before the work, the default) or `
+          + `"pass" (a guard that is already green), got ${JSON.stringify(raw.today)}`,
+      };
+    }
+
+    criteria.push({ id, needs, run: raw.run, expect_exit: expect, timeout_ms: timeout, today });
   }
 
   if (!criteria.length) {
@@ -307,7 +327,7 @@ function clip(s) {
  * enforces it. And `not_run`, never `skipped`: skipped is a decision recorded in
  * advance, and nothing here decided anything.
  */
-export function runOne(criterion, bash, cwd) {
+export function runOne(criterion, bash, cwd, { capture = false } = {}) {
   const t0 = Date.now();
   let status;
   let out = '';
@@ -324,27 +344,31 @@ export function runOne(criterion, bash, cwd) {
     status = typeof err.status === 'number' ? err.status : null;
   }
   const ms = Date.now() - t0;
+  // The whole output, for `--against-tree` only: it reads it for the signs of a
+  // command that is broken rather than red. Never recorded - a verdict carries
+  // the clipped `evidence` and nothing else (the schema is closed).
+  const keep = (r) => (capture ? { ...r, output: legible(out), exit: status } : r);
 
   if (timedOut || status === null) {
-    return {
+    return keep({
       id: criterion.id,
       status: 'not_run',
       mode: ATTEMPTED_EXECUTION,
       evidence: clip(timedOut
         ? `timed out after ${criterion.timeout_ms} ms, so it never answered: ${out}`
         : `the interpreter could not run it, so it never answered: ${out}`),
-    };
+    });
   }
 
   const passed = status === criterion.expect_exit;
-  return {
+  return keep({
     id: criterion.id,
     status: passed ? 'pass' : 'fail',
     mode: 'executed',
     evidence: clip(passed
       ? `exit ${status} in ${ms} ms: ${criterion.run}`
       : `exit ${status}, expected ${criterion.expect_exit}, in ${ms} ms: ${criterion.run} -- ${out}`),
-  };
+  });
 }
 
 /**
@@ -426,4 +450,155 @@ function buildChanged(c, baseline, by, now, when) {
       + `and is ${now === null ? 'MISSING' : now} ${when}. Another process wrote .next (a next dev? `
       + 'finding 62), so this criterion\'s result is about a different build. Stop it and verify again.'),
   };
+}
+
+/* ======================================================= BEFORE THE APPROVAL
+ *
+ * `verify.mjs --check-criteria <id> --against-tree`. Madde 3 of 2026-11-02.
+ *
+ * WHY THIS IS A PROGRAM. Across 16 architect runs on cartoonify (2026-10-22 to
+ * 11-02) 14 went past the 30-turn ceiling, and task 0033 made 131 tool calls over
+ * 7 hand-backs. The largest avoidable share was proof work done by hand: running
+ * each criterion on today's tree to show it is red, cloning the repo, planting
+ * mutated copies, starting servers and Lighthouse, then deleting what was left -
+ * and the guard refused 9 of those clean-ups and 19 scratch writes, each refusal
+ * another turn. None of it needs judgement. "Is this criterion red on the tree as
+ * it is" is an exit code, so a program answers it in one call.
+ *
+ * WHAT IT DOES NOT CHANGE. It runs no command the architect could not already
+ * run with its own Bash: the commands come out of a spec the architect wrote, and
+ * the architect already executes them through `node -e`, which the risk guard
+ * passes when no control path is named. So it grants nothing. The limits check
+ * runs first and nothing executes if it has a blocking line - tier-3 commands and
+ * control-plane writes are refused there. It writes no verdict, consumes no
+ * attempt and needs no approval: it is evidence for the operator BEFORE they
+ * decide, and the approved run at verify is still the one that counts.
+ *
+ * WHAT STAYS MANDATORY - the risk the plan named. Taking mutation proofs away
+ * from the architect means less evidence that a criterion can fail. So the one
+ * proof that is cheap and decisive stays compulsory and becomes mechanical: a
+ * criterion declared `today: "fail"` (the default) that PASSES on the unchanged
+ * tree is refused, because it cannot tell a finished task from an untouched one.
+ * A red that comes from the command being broken (a syntax error, a missing
+ * module, a command not found) is refused too - that red proves nothing either.
+ */
+
+/** Signs that a red came from the command itself, not from the tree. */
+const BROKEN_COMMAND_RE = /SyntaxError|ReferenceError|Cannot find module|ERR_MODULE_NOT_FOUND|command not found|unexpected EOF while looking for matching/;
+
+/** Exit 126/127 or a known crash text: the command did not test anything. */
+export function brokenCommand(result) {
+  if (result?.status !== 'fail') return null;
+  if (result.exit === 127 || result.exit === 126) return `exit ${result.exit}`;
+  const m = String(result.output ?? '').match(BROKEN_COMMAND_RE);
+  return m ? m[0] : null;
+}
+
+/**
+ * One row per criterion, each saying whether today's answer is the declared one.
+ * `results` may be a subset (`--only`). Pure.
+ */
+export function compareToday(declared, results) {
+  const byId = new Map(declared.map((c) => [c.id, c]));
+  return results.map((r) => {
+    const c = byId.get(r.id);
+    const want = c?.today ?? 'fail';
+    let verdict;
+    let why = null;
+    if (r.status === 'not_run') {
+      verdict = /was not declared available/.test(r.evidence ?? '') ? 'deferred' : 'no_answer';
+      why = r.evidence;
+    } else if (r.status === 'fail' && brokenCommand(r)) {
+      verdict = 'broken';
+      why = brokenCommand(r);
+    } else if (r.status === want) {
+      verdict = 'match';
+    } else {
+      verdict = 'mismatch';
+    }
+    return { id: r.id, want, got: r.status, verdict, why, needs: c?.needs ?? ['shell'], evidence: r.evidence };
+  });
+}
+
+/** Paths git reports as changed, with a content hash each. `git` is injectable. */
+export function treeSnapshot(root, { git = defaultGit } = {}) {
+  let out;
+  try {
+    out = git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  } catch (err) {
+    return { ok: false, error: `git status failed: ${String(err.message ?? err).split('\n')[0]}` };
+  }
+  const map = new Map();
+  const parts = out.split('\0');
+  for (let i = 0; i < parts.length; i += 1) {
+    const entry = parts[i];
+    if (entry.length < 4) continue;
+    const code = entry.slice(0, 2);
+    const p = entry.slice(3);
+    if (code[0] === 'R' || code[0] === 'C') i += 1; // the next token is the source path
+    let h = 'missing';
+    try {
+      const st = fs.statSync(path.join(root, p));
+      h = st.isFile() ? hashFile(path.join(root, p)) : 'dir';
+    } catch { /* deleted */ }
+    map.set(p, h);
+  }
+  return { ok: true, map };
+}
+
+function defaultGit(root, args) {
+  return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+/** Content, not mtime: a build that rewrites a file with the same bytes changed nothing. */
+function hashFile(p) {
+  return createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+}
+
+/** Every path whose state differs between two snapshots, sorted. */
+export function treeChanges(before, after) {
+  const keys = new Set([...before.keys(), ...after.keys()]);
+  return [...keys].filter((k) => before.get(k) !== after.get(k)).sort();
+}
+
+const WANT_TR = { fail: 'kırmızı olmalı', pass: 'yeşil olmalı (koruma)' };
+const GOT_TR = { pass: 'yeşil', fail: 'kırmızı', not_run: 'çalışmadı' };
+
+/**
+ * The operator's table, in Turkish. `rows` from compareToday; `changed` the tree
+ * paths the run altered; `interpreter` names the shell, because a check that
+ * does not say which interpreter it used asserts more than it verified (0.1.22).
+ */
+export function todayReport(rows, { changed = [], interpreter = '', total = rows.length } = {}) {
+  const out = [];
+  out.push(`BUGÜNKÜ KODDA ÇALIŞTIRMA (onaydan önce; kayıt yazılmadı, deneme harcanmadı). Kabuk: ${interpreter}`);
+  out.push(`Bu çalıştırmada ${rows.length} / ${total} ölçüt.`);
+  for (const r of rows) {
+    const head = `  ölçüt ${r.id}: ${GOT_TR[r.got] ?? r.got} - beklenen: ${WANT_TR[r.want]}`;
+    if (r.verdict === 'match') out.push(`${head}  ✓`);
+    else if (r.verdict === 'deferred') {
+      out.push(`${head}  - bu adımda çalıştırılmadı (${r.needs.join(', ')} gerekiyor); verify sırasında çalışacak.`);
+    } else if (r.verdict === 'no_answer') {
+      out.push(`${head}  ✗ CEVAP YOK: komut bitmedi ya da başlamadı. ${r.why}`);
+    } else if (r.verdict === 'broken') {
+      out.push(`${head}  ✗ KIRMIZI AMA SEBEBİ KOMUTUN KENDİSİ (${r.why}): bu kırmızı hiçbir şey kanıtlamıyor. `
+        + `Komutu düzeltin. ${r.evidence}`);
+    } else if (r.want === 'fail') {
+      out.push(`${head}  ✗ BUGÜN ZATEN YEŞİL: iş yapılmadan geçiyor, yani işin yapılıp yapılmadığını ayırt `
+        + 'edemiyor. Komutu düzeltin; bilerek koruma ise "today": "pass" yazın.');
+    } else {
+      out.push(`${head}  ✗ KORUMA BUGÜN KIRMIZI: ya komut yanlış ya da bugünkü kod zaten bozuk. ${r.evidence}`);
+    }
+  }
+  if (changed.length) {
+    out.push(`✗ BU ÇALIŞTIRMA AĞAÇTA ${changed.length} DOSYAYI DEĞİŞTİRDİ: `
+      + changed.slice(0, 20).join(', ') + (changed.length > 20 ? ` ... ve ${changed.length - 20} tane daha` : '')
+      + '. Ölçüt komutları ağacı değiştirmemeli; değişikliği geri alın ve komutu düzeltin.');
+  }
+  const bad = rows.filter((r) => !['match', 'deferred'].includes(r.verdict)).length;
+  const deferred = rows.filter((r) => r.verdict === 'deferred').length;
+  out.push(bad || changed.length
+    ? `SONUÇ: ${bad} ölçüt beklenen cevabı vermedi${changed.length ? ', ağaç değişti' : ''}. Spec bu haliyle geri gönderilmeli.`
+    : `SONUÇ: çalışan her ölçüt beklenen cevabı verdi.${deferred ? ` ${deferred} ölçüt verify'a kaldı.` : ''}`);
+  return { text: out.join('\n'), bad: bad + (changed.length ? 1 : 0) };
 }
