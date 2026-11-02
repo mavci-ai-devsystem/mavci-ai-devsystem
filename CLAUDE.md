@@ -2644,6 +2644,35 @@ after. H1 uses a REAL process, not a fake list: a node process at
 `<fixture>/node_modules/next/dist/bin/next dev`. `check-provenance.mjs` B4/B9
 closed tasks with no verdict and now record a passing one first.
 
+### 0.1.37 — four findings from cartoonify's 0033-0036 run, in the order 4, 2, 1, 3
+
+**Cut 2026-11-03.** Each item is its own commit and carries its full record in
+the commit message; this entry names them so the log does not skip a release.
+
+- **9cfb594 — finding 9.** `retro --apply` reaches the source checkout from a
+  cache install through `~/.claude/mavci-system-repo.json`, written once by the
+  operator with `retro.mjs --set-system-repo <path>` and verified on every read;
+  `doctor` warns while it is absent.
+- **45b80e1 — finding 4.** `verify.mjs --check-criteria <id>` is the approval's
+  own limits check, run before the approval: a block verify cannot read (0034's
+  `timeout_ms` 1200000), secrets, machine paths, tier-3 commands and control
+  writes refuse `--approve-spec`; warnings are Turkish and name who must act.
+- **33a0625 — 0034.** `state.mjs --revise-spec <id> --reason <file>`
+  (operator-only) withdraws an approval instead of blocking the task and
+  re-planning it: the approved bytes are kept, the reason is recorded in the new
+  optional `spec_revisions`, and re-approval shows the diff after the limits
+  report.
+- **0ee8258 — madde 3, the architect's 30-turn ceiling, kept.** Measured: 14 of
+  16 architect runs went past it, mostly on hand-made proof. `--check-criteria
+  <id> --against-tree` runs the criteria on today's tree and refuses a criterion
+  green before the work (`today`, default `fail`), a red caused by the command
+  itself, and a run that changes the tree. A fresh architect re-planned 0034 in
+  8 tool calls.
+
+**Propagation note:** a task approved before 0.1.37 may carry a spec whose block
+has no `today`; it only matters to `--against-tree`, which nothing runs after
+approval. Restart sessions after propagating, as always.
+
 ### Carried forward — still not built
 
 **Items 1–4 and 5–6 below remain unbuilt; item 7 is held deliberately, for the
