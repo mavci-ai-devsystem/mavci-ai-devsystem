@@ -39,7 +39,7 @@ import {
 // The queue is a directory, and retro.mjs is the one place that says what is in
 // it. doctor used to compose its own path to the same file, which is how it came
 // to answer "is anything queued?" by testing a name nobody had used.
-import { queuedLessons, parseFindings, PENDING_STEM } from './retro.mjs';
+import { queuedLessons, parseFindings, PENDING_STEM, applyReachability } from './retro.mjs';
 // The library the corpus result claims to have graded. Imported rather than
 // re-hashed here: two implementations of one hash drift, and the half that drifts
 // is the READER - the half that reports green.
@@ -1332,6 +1332,21 @@ function checkLessons(root, out) {
       + '\n         record that the problem exists.'
       + `\n         Every ${PATHS.lessons}/${PENDING_STEM}*.md is counted, whoever wrote it.`),
   });
+
+  // cartoonify finding 9 fix 4. The escrow made a failed --apply survivable;
+  // this makes it visible BEFORE anyone tries, while something is waiting to be
+  // applied. Silent when nothing is queued (the return above): an unreachable
+  // repo with nothing to carry is not this project's problem. A probe that
+  // throws is NOT CHECKED, never OK (invariant 5).
+  let reach;
+  try {
+    reach = applyReachability({ configDir: configDir() });
+  } catch (err) {
+    reach = { ok: false, text: `whether --apply can reach the system repository was NOT CHECKED: ${err.message}` };
+  }
+  if (!reach.ok) {
+    out.push({ status: WARN, text: line(WARN, 'queued findings cannot be applied from this machine', reach.text) });
+  }
 }
 
 /**

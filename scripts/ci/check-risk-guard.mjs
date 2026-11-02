@@ -252,6 +252,12 @@ const CASES = [
     'an agent deletes a NAMED queued file'],
   ['ask', bash('node scripts/retro.mjs --clear pending-system-change-0.1.12.md'),
     'the operator clears a named file'],
+  // 0.1.37 (cartoonify finding 9): the setting decides which repository --apply
+  // writes into, so naming it is the operator's, and a deliberate act.
+  ['deny', { ...bash('node scripts/retro.mjs --set-system-repo C:/x'), agent_type: 'mavci-builder' },
+    'an agent repoints where --apply writes'],
+  ['ask', bash('node scripts/retro.mjs --set-system-repo C:/x'),
+    'the operator names the source checkout - deliberate act'],
 
   // must NOT be blocked - a guard that blocks everything is useless
   ['allow', bash('npm run build'), 'ordinary build'],

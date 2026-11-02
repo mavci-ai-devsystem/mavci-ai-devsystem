@@ -291,7 +291,10 @@ try {
   const fakeHere = path.join(tmp, "cache", "mavci", "mavci-core", "0.1.24", "scripts");
   fs.mkdirSync(fakeHere, { recursive: true });
 
-  const target = retro.systemRepo({ here: fakeHere, clone: fakeClone });
+  // configDir pinned to the temp tree: from 0.1.37 the resolver also reads an
+  // operator setting under <config>, and this machine's real one must not answer
+  // a question about a fake install.
+  const target = retro.systemRepo({ here: fakeHere, clone: fakeClone, configDir: tmp });
 
   if (target === null) {
     ok("--apply refuses when the only candidate is the marketplace clone");
@@ -771,6 +774,183 @@ try {
       bad('--apply did not carry the queue into a resolvable system repo ('
         + `${landed.length} file(s) in docs/lessons, escrow used: ${escrowedAnyway}). An escrow that `
         + 'fires unconditionally satisfies every assertion above and has replaced the command.');
+    }
+  }
+}
+
+/* --- 10. the source checkout is named by the operator, and checked --------
+ * cartoonify finding 9's other half, 2026-11-02. 0.1.33 made the refusal
+ * survivable (the escrow, section 9); it did not make --apply WORK from a cache
+ * install, which is every install. Five escrow files sat in <config>/mavci-lessons
+ * for two months and each was carried into docs/lessons by hand.
+ *
+ * The fix is a setting the operator writes once - <config>/mavci-system-repo.json,
+ * outside <config>/plugins so propagation cannot reset it - and that setting is
+ * VERIFIED, never trusted: the marker, the marketplace name, the origin remote,
+ * and that the path is not generated state. A setting is a way to name the
+ * clone by accident, and section 7 is what happens then.
+ *
+ * Every case runs with an injected `originOf`, so the decision is asserted
+ * without a network or a real second checkout. A10h is the round trip: the
+ * finding lands in the setting's docs/lessons. A10b/A10g are the pair that keep
+ * it honest - a resolver that accepts any setting passes A10a and A10h alone.
+ */
+{
+  const ORIGIN_OK = 'https://github.com/mavci-ai-devsystem/mavci-ai-devsystem.git';
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-set-')); cleanup.push(home);
+  const mkCheckout = (dir, name = 'mavci') => {
+    fs.mkdirSync(path.join(dir, '.claude-plugin'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.claude-plugin', 'marketplace.json'), JSON.stringify({ name }));
+    return dir;
+  };
+  const source = mkCheckout(path.join(home, 'src', 'Mavci-AI-Development-System'));
+  const clone = mkCheckout(path.join(home, 'plugins', 'marketplaces', 'mavci'));
+  const foreign = mkCheckout(path.join(home, 'src', 'someone-else'));
+  const cacheHere = path.join(home, 'plugins', 'cache', 'mavci', 'mavci-core', '0.1.36', 'scripts');
+  fs.mkdirSync(cacheHere, { recursive: true });
+  const originOf = (dir) => (path.resolve(dir) === path.resolve(foreign)
+    ? 'https://github.com/someone/else.git' : ORIGIN_OK);
+  const settingFile = path.join(home, 'mavci-system-repo.json');
+  const writeSetting = (p) => fs.writeFileSync(settingFile, JSON.stringify({ path: p }) + '\n');
+  const has = typeof retro.resolveSystemRepo === 'function' && typeof retro.setSystemRepo === 'function';
+  if (!has) {
+    bad('retro.mjs exports no resolveSystemRepo/setSystemRepo: --apply has no way to reach the source '
+      + 'checkout from a cache install, which is every install, so every apply is an escrow.');
+  } else {
+    const resolve = (opts = {}) => retro.resolveSystemRepo({ here: cacheHere, configDir: home, originOf, ...opts });
+
+    /* A10a - a valid setting resolves, and says where the answer came from. */
+    writeSetting(source);
+    let r = resolve();
+    if (r.repo && path.resolve(r.repo) === path.resolve(source) && r.via === 'setting') {
+      ok('a verified setting resolves the source checkout from a cache install');
+    } else {
+      bad(`a valid setting did not resolve (repo=${r.repo}, via=${r.via}, problem=${r.problem}).`);
+    }
+
+    /* A10b - the setting names the clone: refused, and the reason is generated state. */
+    writeSetting(clone);
+    r = resolve();
+    if (r.repo === null && /generated state|propagation/i.test(r.problem || '')) {
+      ok('a setting that names the marketplace clone is refused as generated state');
+    } else {
+      bad(`a setting naming the clone resolved or was refused for the wrong reason (repo=${r.repo}, `
+        + `problem=${r.problem}). That is section 7's defect arriving through the setting.`);
+    }
+
+    /* A10c - another repository's origin: refused, naming the origin it saw. */
+    writeSetting(foreign);
+    r = resolve();
+    if (r.repo === null && (r.problem || '').includes('someone/else')) {
+      ok('a setting whose origin is another repository is refused, naming that origin');
+    } else {
+      bad(`a foreign checkout resolved or the refusal did not name its origin (repo=${r.repo}, problem=${r.problem}).`);
+    }
+
+    /* A10d - the origin could not be read: refused, never assumed (invariant 5). */
+    writeSetting(source);
+    r = resolve({ originOf: () => { throw new Error('git not found'); } });
+    if (r.repo === null && /could not/i.test(r.problem || '')) {
+      ok('an origin that could not be read refuses the setting rather than trusting it');
+    } else {
+      bad(`an unreadable origin was treated as a match (repo=${r.repo}, problem=${r.problem}).`);
+    }
+
+    /* A10e - no setting: unresolved, and the reachability line names the fix. */
+    fs.rmSync(settingFile, { force: true });
+    r = resolve();
+    const line = retro.applyReachability ? retro.applyReachability({ here: cacheHere, configDir: home, originOf }) : null;
+    if (r.repo === null && line && line.ok === false && line.text.includes('--set-system-repo')
+      && line.text.includes(settingFile)) {
+      ok('with no setting, the reachability report names --set-system-repo and the setting file');
+    } else {
+      bad(`with no setting, nothing named the one-time fix (repo=${r.repo}, line=${line && line.text}).`);
+    }
+
+    /* A10f - setSystemRepo writes only a target that passes; an invalid one writes nothing. */
+    const bad1 = retro.setSystemRepo(clone, { configDir: home, originOf });
+    const wroteBad = fs.existsSync(settingFile);
+    const good1 = retro.setSystemRepo(source, { configDir: home, originOf });
+    let stored = null; try { stored = JSON.parse(fs.readFileSync(settingFile, 'utf8')).path; } catch { /* below */ }
+    if (bad1.ok === false && !wroteBad && good1.ok === true && stored && path.resolve(stored) === path.resolve(source)) {
+      ok('--set-system-repo writes a verified target and refuses the clone without writing');
+    } else {
+      bad(`--set-system-repo: bad.ok=${bad1.ok}, wrote on refusal=${wroteBad}, good.ok=${good1.ok}, stored=${stored}.`);
+    }
+
+    /* A10g - the RUNNING checkout is held to the same class rule. A script run
+     * from inside the clone has the marker at ../../.. and must not resolve. */
+    fs.rmSync(settingFile, { force: true });
+    const cloneHere = path.join(clone, 'plugins', 'mavci-core', 'scripts');
+    fs.mkdirSync(cloneHere, { recursive: true });
+    r = resolve({ here: cloneHere });
+    if (r.repo === null) {
+      ok('a running copy inside <config>/plugins is not a write target either');
+    } else {
+      bad(`the running copy inside the clone resolved as the system repo (${r.repo}).`);
+    }
+
+    /* A10h - THE ROUND TRIP. apply() with no repo argument reaches the setting's docs/lessons. */
+    writeSetting(source);
+    const proj = makeProject(); cleanup.push(proj);
+    fs.writeFileSync(queuedPath(proj, 'pending-system-change.md'), '# Queued\n\nbody ten\n');
+    let res = null;
+    try { res = retro.apply(proj, { here: cacheHere, configDir: home, originOf }); } catch (err) { res = { err }; }
+    const destDir = path.join(source, 'docs', 'lessons');
+    const landed = fs.existsSync(destDir) ? fs.readdirSync(destDir) : [];
+    const body = landed.length ? fs.readFileSync(path.join(destDir, landed[0]), 'utf8') : '';
+    const escrowed = fs.existsSync(path.join(home, 'mavci-lessons'));
+    if (res && res.ok === true && landed.length === 1 && body.includes('body ten') && !escrowed) {
+      ok('--apply from a cache install carries the finding into the setting\'s docs/lessons');
+    } else {
+      bad(`--apply did not reach the configured checkout (ok=${res && res.ok}, landed=${landed.length}, `
+        + `escrowed=${escrowed}${res && res.err ? ', threw ' + res.err.message : ''}).`);
+    }
+
+    /* A10j - THE WIRING. doctor, run from a copy of the plugin installed the way
+     * every install is (under <config>/plugins/cache), in a project with a queue
+     * and no setting, must say --apply cannot reach the repo and name the fix.
+     * The pure function above passing says nothing about whether doctor calls it. */
+    {
+      const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-cfg-')); cleanup.push(cfg);
+      const cached = path.join(cfg, 'plugins', 'cache', 'mavci', 'mavci-core', '0.0.0');
+      fs.cpSync(path.join(ROOT, 'plugins', 'mavci-core'), cached, { recursive: true });
+      const proj3 = makeProject(); cleanup.push(proj3);
+      fs.writeFileSync(queuedPath(proj3, 'pending-system-change.md'), '# Queued\n\nbody twelve\n');
+      let out = '';
+      try {
+        out = execFileSync(process.execPath, [path.join(cached, 'scripts', 'doctor.mjs')], {
+          cwd: proj3, encoding: 'utf8', timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'],
+          env: { ...process.env, CLAUDE_PROJECT_DIR: proj3, CLAUDE_CONFIG_DIR: cfg, CLAUDE_CODE_SESSION_ID: '', CLAUDE_PID: '' },
+        });
+      } catch (err) {
+        out = (err.stdout?.toString() ?? '') + (err.stderr?.toString() ?? '');
+      }
+      if (out.includes('cannot be applied from this machine') && out.includes('--set-system-repo')) {
+        ok('doctor, run from a cache install with a queue and no setting, names the one-time fix');
+      } else {
+        bad('doctor run from a cache install did not report that --apply cannot reach the system repo '
+          + '(no "--set-system-repo" in its output). The operator then finds out at --apply time, which '
+          + 'is finding 9 fix 4 unbuilt.');
+      }
+    }
+
+    /* A10i - a refused setting still escrows, and the message says WHY it was refused. */
+    writeSetting(clone);
+    const proj2 = makeProject(); cleanup.push(proj2);
+    fs.writeFileSync(queuedPath(proj2, 'pending-system-change.md'), '# Queued\n\nbody eleven\n');
+    let res2 = null;
+    try { res2 = retro.apply(proj2, { here: cacheHere, configDir: home, originOf }); } catch (err) { res2 = { err }; }
+    const msg = (res2 && res2.message) || '';
+    if (res2 && res2.ok === false && (res2.escrow?.written || []).length === 1
+      // Matched on "was refused" + "generated state", NOT on "propagation": the
+      // escrow message always says the clone is reset by propagation, so that
+      // word passed with the reason deleted (mutation M4, 0.1.37).
+      && msg.includes(settingFile) && msg.includes('was refused') && /generated state/i.test(msg)) {
+      ok('a refused setting escrows the queue and the message names the setting and the reason');
+    } else {
+      bad(`a refused setting: ok=${res2 && res2.ok}, escrowed=${(res2?.escrow?.written || []).length}, `
+        + 'message did not name the setting file and why it was refused.');
     }
   }
 }

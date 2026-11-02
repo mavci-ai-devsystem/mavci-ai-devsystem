@@ -978,6 +978,9 @@ function main() {
       const RETRO_PRIVILEGED = {
         '--apply': 'carry a finding into the system repository, which governs every project',
         '--clear': 'delete the record of a problem that has not been fixed',
+        // 0.1.37, cartoonify finding 9: the setting decides WHICH repository
+        // --apply writes into. Repointing it is choosing where system findings land.
+        '--set-system-repo': 'choose which repository --apply writes system findings into',
       };
       const flags = cmd.match(/--[a-z-]+/g) ?? [];
       const privileged = flags.filter((f) => f in RETRO_PRIVILEGED);
@@ -1041,6 +1044,10 @@ function main() {
       if (!agent && privileged.includes('--clear')) {
         confirm('this deletes the queued system findings. Do it after applying them, not instead: '
           + 'the file is the record of what is still unfixed.');
+      }
+      if (!agent && privileged.includes('--set-system-repo')) {
+        confirm('this names the repository every later --apply on this machine writes system '
+          + 'findings into. It is verified first, but approve only the checkout you edit and push in.');
       }
     }
 

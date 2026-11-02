@@ -56,7 +56,10 @@
  *                      refuses to edit provenance at all - see "amending" below.
  *   --list             one line per queued file, then one per finding in it
  *   --show             every queued file, each under its own path
- *   --apply            copy them all into the system repo clone, print next steps
+ *   --apply            copy them all into the system repo, print next steps
+ *   --set-system-repo <path>
+ *                      name the source checkout --apply writes into, once per
+ *                      machine. Verified before it is written (operator only)
  *   --clear [<name>]   delete a queued file (after it has been applied). The name
  *                      is required whenever more than one is queued.
  */
@@ -64,8 +67,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { PATHS, MARKETPLACE_NAME, COMMAND_PREFIX } from './config.mjs';
+import { PATHS, MARKETPLACE_NAME, COMMAND_PREFIX, SYSTEM_REPO } from './config.mjs';
 import { abs, exists, readJsonOrNull, readTextOrNull, writeTextAtomic, nowIso } from './lib/fsx.mjs';
 import { buildRedactor } from './redact.mjs';
 import { pluginVersion, projectRoot } from './state.mjs';
@@ -590,49 +594,158 @@ export function amend(root, { file, number, title, text, was = null, agent = nul
 
 /* ---------------------------------------------------------------- apply */
 
+/** ~/.claude, or wherever CLAUDE_CONFIG_DIR points. Mirrors doctor.mjs `configDir`
+ *  (retro cannot import doctor: doctor imports queuedLessons from here). */
+function configBase(configDir) {
+  return configDir ?? (process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'));
+}
+
 /** Where `/plugin` keeps marketplace clones. Mirrors doctor.mjs `clonePath`. */
-function clonePath() {
-  const base = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-  return path.join(base, 'plugins', 'marketplaces', MARKETPLACE_NAME);
+function clonePath(configDir) {
+  return path.join(configBase(configDir), 'plugins', 'marketplaces', MARKETPLACE_NAME);
 }
 
 /**
- * The system repository this plugin is RUNNING FROM.
- *
- * Two candidates, and the order matters. First the checkout this file lives in
- * (`<plugin>/../..`); only then the marketplace clone.
- *
- * A normal install makes those the same directory - the plugin runs from inside
- * the clone - so the order is invisible there. It stops being invisible on a
- * development machine, where the operator has both a working checkout and a
- * clone. The first draft preferred the clone and wrote the lesson into
- * `~/.claude/plugins/marketplaces/mavci`, which is a real git checkout but not
- * the one the operator is editing: the finding would have landed in a directory
- * they were never going to open, and `git status` in the repo they WERE editing
- * would have shown nothing.
- *
- * Preferring the running copy makes the rule simple and always true: a finding
- * is applied to the repository whose code produced it.
- *
- * Both candidates are confirmed by a marker file rather than by path shape,
- * because a wrong guess writes a lesson into some unrelated repository.
+ * `<config>/mavci-system-repo.json` - the operator's one-line answer to "where is
+ * the source checkout". OUTSIDE `<config>/plugins`, so propagation cannot reset
+ * it, and beside the escrow directory for the same reason.
  */
-export function systemRepo({ here = HERE, clone = clonePath() } = {}) {
-  // The clone is NOT a candidate, and its absence here is the whole fix.
-  // gate5 2026-09-03: with it in this list, an agent running from
-  // ~/.claude/plugins/cache/ missed on the first candidate and applied a
-  // finding into ~/.claude/plugins/marketplaces/mavci, which the next
-  // propagation resets. --apply reported success. The documented workflow is
-  // apply THEN clear, so an operator following it destroys the only durable
-  // copy. Refusing is correct when no source checkout is found: writing to a
-  // tree that will be reset looks like it worked, and the loss is invisible
-  // until someone goes looking for a finding that is gone. `clone` is still
-  // a parameter so the refusal can NAME the path it declined to write to.
-  const candidates = [path.resolve(here, '..', '..', '..')];
-  for (const c of candidates) {
-    if (exists(path.join(c, '.claude-plugin', 'marketplace.json'))) return c;
+export function settingFile({ configDir } = {}) {
+  return path.join(configBase(configDir), 'mavci-system-repo.json');
+}
+
+/** The origin URL of a checkout. THROWS when it cannot be read: a caller must
+ *  treat that as "could not check", never as a match (invariant 5). */
+function gitOrigin(dir) {
+  return execFileSync('git', ['-C', dir, 'remote', 'get-url', 'origin'], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000,
+  }).trim();
+}
+
+/** Canonical, so a junction or symlink to the clone is still the clone. */
+function canonical(p) {
+  let r = path.resolve(p);
+  try { r = fs.realpathSync.native(r); } catch { /* absent paths are refused by the caller */ }
+  return process.platform === 'win32' ? r.toLowerCase() : r;
+}
+
+function within(dir, p) {
+  const rel = path.relative(canonical(dir), canonical(p));
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/** The class rule from 0.1.25 and check-pretag's generatedStateVerdict, as a reason or null. */
+function generatedStateProblem(dir, configDir) {
+  const plugins = path.join(configBase(configDir), 'plugins');
+  if (!within(plugins, dir)) return null;
+  return `${dir} is inside ${plugins}, which is generated state: propagation resets the clone and `
+    + 'install re-populates the cache, so a finding written there is lost unread. Name the '
+    + 'checkout you edit, commit and push in.';
+}
+
+/** The marker, and the marketplace NAME in it - any plugin marketplace has a marker. */
+function markerProblem(dir) {
+  const mf = readJsonOrNull(path.join(dir, '.claude-plugin', 'marketplace.json'));
+  if (!mf) return `${dir} has no readable .claude-plugin/marketplace.json, so it is not a marketplace checkout.`;
+  if (mf.name !== MARKETPLACE_NAME) return `${dir} is the marketplace "${mf.name}", not "${MARKETPLACE_NAME}".`;
+  return null;
+}
+
+/**
+ * May --apply write a finding into `dir`? Null when it may, else the reason.
+ * Each question is a way a wrong directory looks right: not absolute or absent;
+ * no marker or another marketplace's; generated state; an origin that is not
+ * SYSTEM_REPO - or that could not be read, which refuses rather than trusts.
+ */
+export function systemRepoProblem(dir, { configDir, originOf = gitOrigin } = {}) {
+  if (typeof dir !== 'string' || !path.isAbsolute(dir)) return `${dir || '(empty)'} is not an absolute path.`;
+  if (!exists(dir)) return `${dir} does not exist.`;
+  const p = markerProblem(dir) ?? generatedStateProblem(dir, configDir);
+  if (p) return p;
+  let origin;
+  try { origin = String(originOf(dir)).trim(); } catch (err) {
+    return `could not read the origin remote of ${dir} (${String(err?.message ?? err).split('\n')[0]}), `
+      + `so it could not be confirmed as ${SYSTEM_REPO}. Not trusted.`;
+  }
+  const norm = origin.toLowerCase().replace(/\/+$/, '').replace(/\.git$/, '');
+  if (!norm.endsWith(`/${SYSTEM_REPO}`) && !norm.endsWith(`:${SYSTEM_REPO}`)) {
+    return `${dir}'s origin is ${origin || '(empty)'}, not ${SYSTEM_REPO}.`;
   }
   return null;
+}
+
+/**
+ * The system repository --apply writes into, and how it was found.
+ *
+ * Two sources, in order. First the checkout this file is RUNNING from
+ * (`<plugin>/../..`): on a development machine running from source, a finding
+ * is applied to the repository whose code produced it. Then the operator's
+ * setting.
+ *
+ * THE MARKETPLACE CLONE IS NOT A SOURCE. gate5 2026-09-03: with it as a
+ * fallback, an agent running from ~/.claude/plugins/cache/ applied a finding
+ * into the clone, --apply reported success, and the next propagation would have
+ * erased it - and the documented workflow is apply THEN clear. From 0.1.37 the
+ * running copy is held to the same class rule, so a script run from inside the
+ * clone cannot resolve the clone through the first door. The running copy's
+ * ORIGIN is not re-read: it is the code that is executing, and CI runs it from
+ * checkouts whose remotes this file has no business predicting.
+ *
+ * A cache install - every install - misses the first source by construction.
+ * Until 0.1.37 that meant every --apply escrowed (cartoonify finding 9: five
+ * escrow files in two months, each carried into docs/lessons by hand). The
+ * setting is that half of the finding, and it is VERIFIED, never trusted: a
+ * setting is a way to name the clone by accident.
+ *
+ * Returns { repo, via: 'running'|'setting'|null, setting, problem }.
+ */
+export function resolveSystemRepo({ here = HERE, configDir, originOf = gitOrigin } = {}) {
+  const setting = settingFile({ configDir });
+  const running = path.resolve(here, '..', '..', '..');
+  if (!markerProblem(running) && !generatedStateProblem(running, configDir)) {
+    return { repo: running, via: 'running', setting, problem: null };
+  }
+  if (!exists(setting)) {
+    return { repo: null, via: null, setting, problem:
+      `this install is not running from a source checkout, and there is no operator setting at ${setting}.` };
+  }
+  const named = readJsonOrNull(setting)?.path;
+  if (typeof named !== 'string' || !named) {
+    return { repo: null, via: null, setting, problem:
+      `the setting at ${setting} is unreadable or has no "path". Rewrite it with --set-system-repo.` };
+  }
+  const problem = systemRepoProblem(named, { configDir, originOf });
+  if (problem) return { repo: null, via: null, setting, problem: `the setting at ${setting} was refused: ${problem}` };
+  return { repo: named, via: 'setting', setting, problem: null };
+}
+
+/** The path, or null - for callers that need only that. `clone` is accepted and
+ *  ignored: it was never a candidate after 0.1.25. */
+export function systemRepo({ here = HERE, configDir, originOf } = {}) {
+  return resolveSystemRepo({ here, configDir, originOf }).repo;
+}
+
+/** Verify, then write. A target that fails verification writes nothing. */
+export function setSystemRepo(dir, { configDir, originOf = gitOrigin } = {}) {
+  const file = settingFile({ configDir });
+  const problem = systemRepoProblem(dir, { configDir, originOf });
+  if (problem) return { ok: false, file, repo: null, problem };
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  writeTextAtomic(file, JSON.stringify({ path: dir }, null, 2) + '\n');
+  return { ok: true, file, repo: dir, problem: null };
+}
+
+/**
+ * Can --apply reach the system repository from here? For doctor, which asks it
+ * while a queue is waiting - cartoonify finding 9 fix 4: the escrow made the
+ * refusal survivable, and this makes it visible BEFORE an apply is attempted.
+ */
+export function applyReachability({ here = HERE, configDir, originOf } = {}) {
+  const r = resolveSystemRepo({ here, configDir, originOf });
+  if (r.repo) return { ok: true, text: `--apply writes into ${r.repo} (found via ${r.via})` };
+  return { ok: false, text: `--apply cannot reach the system repository from this machine: ${r.problem}`
+    + `\n         Name the source checkout once: node "${path.join(HERE, 'retro.mjs')}" --set-system-repo <path>`
+    + `\n         (it writes ${r.setting}). Until then --apply escrows instead of applying.` };
 }
 
 /**
@@ -695,14 +808,18 @@ export function escrowDir({ configDir } = {}) {
  * run. Same split as `lib/release-gate.mjs` and `cutTag`: the decision is
  * testable, the exit is the CLI's.
  */
-export function apply(root, { repo = systemRepo(), configDir } = {}) {
+export function apply(root, { repo, configDir, here, originOf } = {}) {
   const plan = applyPlan(root);
+  // `repo` undefined means RESOLVE. An explicit null means "there is none", which
+  // is how a test reaches the escrow branch without going through the resolver.
+  const resolved = repo === undefined ? resolveSystemRepo({ here, configDir, originOf }) : null;
+  if (resolved) repo = resolved.repo;
   if (!plan.length) {
     return { ok: false, written: [], escrow: { dir: null, written: [] },
       message: `nothing to apply: no ${PENDING_STEM}*.md in ${PATHS.lessons}. File a finding first `
         + `with \`${COMMAND_PREFIX}retro\`.` };
   }
-  if (!repo) return escrowQueue(root, plan, { configDir });
+  if (!repo) return escrowQueue(root, plan, { configDir, here, resolved });
 
   const projectId = readJsonOrNull(abs(root, PATHS.manifest))?.project_id ?? 'unknown-project';
   const destDir = path.join(repo, 'docs', 'lessons');
@@ -748,10 +865,11 @@ export function apply(root, { repo = systemRepo(), configDir } = {}) {
  * the first. Nothing is written when any destination is taken - the operator is
  * told, and the queue in the project is left exactly as it was.
  */
-function escrowQueue(root, plan, { configDir } = {}) {
+function escrowQueue(root, plan, { configDir, here, resolved } = {}) {
   const dir = escrowDir({ configDir });
   const projectId = readJsonOrNull(abs(root, PATHS.manifest))?.project_id ?? 'unknown-project';
-  const looked = path.resolve(HERE, '..', '..', '..');
+  const looked = path.resolve(here ?? HERE, '..', '..', '..');
+  const why = resolved?.problem ? `${resolved.problem}\n\n` : '';
 
   const clash = plan.filter((x) => exists(path.join(dir, x.destName)));
   if (clash.length) {
@@ -780,14 +898,17 @@ function escrowQueue(root, plan, { configDir } = {}) {
   return { ok: false, written: [], escrow: { dir, written },
     message: 'could not locate the system repository. Looked for .claude-plugin/marketplace.json in:'
       + `\n  ${looked}\n`
+      + `and for the operator setting at:\n  ${settingFile({ configDir })}\n\n`
+      + why
       + 'It is NOT written to the marketplace clone, which propagation resets:\n'
-      + `  ${clonePath()}\n\n`
+      + `  ${clonePath(configDir)}\n\n`
       + 'THE FINDINGS ARE SAFE. They were written, before this message, to:\n'
       + written.map((f) => `  ${f}`).join('\n')
       + '\n\nThat directory is outside the project and outside <config>/plugins, so it survives both '
       + 'the project being deleted and the next propagation.\n'
-      + 'NOT APPLIED: the findings have not reached the system repository. Carry them there from a '
-      + 'machine holding the source checkout.\n'
+      + 'NOT APPLIED: the findings have not reached the system repository. Name the source '
+      + 'checkout once (operator only; it is verified before it is written), then re-run --apply:\n'
+      + `  node "${path.join(HERE, 'retro.mjs')}" --set-system-repo <path to the checkout>\n`
       + `Do NOT run \`${COMMAND_PREFIX}retro --clear\` yet - the queue in this project is still the `
       + 'record of an unfixed problem, and clearing it now leaves only the escrow.' };
 }
@@ -906,6 +1027,16 @@ function main() {
   // The decision is `apply`'s; the exit is the CLI's. A non-zero status on the
   // escrow path is deliberate: the bytes are durable, and the finding has still
   // not reached the repository that governs every project.
+  if (argv.includes('--set-system-repo')) {
+    const target = arg('--set-system-repo');
+    if (!target || target.startsWith('--')) die('--set-system-repo needs the path of the source checkout.', 2);
+    const r = setSystemRepo(path.resolve(target));
+    if (!r.ok) die(`not written: ${r.problem}`, 1);
+    console.log(`wrote ${r.file}`);
+    console.log(`--apply now carries findings into ${r.repo}`);
+    return;
+  }
+
   if (argv.includes('--apply')) {
     const r = apply(root);
     if (r.ok) return;
@@ -956,6 +1087,8 @@ function main() {
     '  --list                         every queued file, and the findings in it',
     '  --show                         print every queued file',
     '  --apply                        carry them into the system repo  (operator only)',
+    '  --set-system-repo <path>       name the source checkout --apply writes into, once per',
+    '                                 machine; verified before written (operator only)',
     '  --clear [<name>]               delete one queued file           (operator only)',
     '                                 the name is required when more than one is queued',
   ].join('\n'));
