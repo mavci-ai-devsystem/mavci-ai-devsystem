@@ -228,6 +228,11 @@ const CASES = [
   // applied. Real containment here rests on the deny rules, not on this confirm.
   ['ask', bash('node scripts/state.mjs --migrate-manifest'), 'MAIN SESSION migrates the manifest (operator, per doctor)'],
   ['ask', bash('node scripts/state.mjs --reset-attempts 0001'), 'main session resets the ceiling - deliberate act'],
+  // --revise-spec withdraws an operator approval: the operator's, never an agent's.
+  ['deny', { ...bash('node scripts/state.mjs --revise-spec 0001 --reason r.txt'), agent_type: 'mavci-architect' },
+    'architect may not withdraw the approval of the spec it would then rewrite'],
+  ['ask', bash('node scripts/state.mjs --revise-spec 0001 --reason r.txt'),
+    'main session revises an approved spec - the operator confirms the withdrawal'],
   ['ask', bash('node scripts/state.mjs --reseal'), 'main session reseals - deliberate act'],
 
   /* --- retro.mjs, the escalation channel (Gate 4c, finding 4) ----------

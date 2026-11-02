@@ -874,6 +874,7 @@ function main() {
         '--approve-spec': 'record the operator decision that unlocks every phase transition on a task',
         '--advance-phase': 'move one task from a named phase to the next, which for build means making application code writable',
         '--restore-spec': 'overwrite a spec in the working tree with the bytes an approval names, which is a whole-document write and is needed exactly when an agent has already written that document once',
+        '--revise-spec': 'withdraw the operator approval of a spec and send the task back to plan, which re-opens an approved document to the architect',
       };
 
       const flags = cmd.match(/--[a-z-]+/g) ?? [];

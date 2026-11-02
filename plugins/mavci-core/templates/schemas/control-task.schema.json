@@ -27,6 +27,26 @@
         "spec_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       }
     },
+    "spec_revisions": {
+      "type": "array",
+      "description": "History of operator decisions to REVISE an approved spec (cartoonify finding: task 0034 had to be blocked and replanned as 0035 because an approved spec could not be changed). Written ONLY by --revise-spec, which is operator-only. Each entry records the approval it withdrew: the old hash names the snapshot under control/specs/ (derived, never stored - specSnapshotPath), so the old version is kept and the diff can be shown at re-approval. APPEND-ONLY by convention of its one writer. OPTIONAL, not required: a required field under additionalProperties:false invalidates every record written before it (0.1.21), and every task predating this field has simply never been revised.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["at", "by", "reason", "from_phase", "from_status", "previous_spec_path", "previous_sha256", "previous_approved_at"],
+        "properties": {
+          "at": { "type": "string", "format": "date-time" },
+          "by": { "type": "string", "enum": ["operator"] },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "from_phase": { "type": "string", "enum": ["plan", "build", "verify", "release"] },
+          "from_status": { "type": "string", "enum": ["pending", "in_progress", "done", "failed", "blocked"] },
+          "previous_blocked_by": { "type": ["string", "null"], "maxLength": 200 },
+          "previous_spec_path": { "type": "string" },
+          "previous_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "previous_approved_at": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
     "owner_agent": { "type": ["string", "null"] },
     "blocked_by": { "type": ["string", "null"], "maxLength": 200 },
     "verdicts": { "type": "array", "items": { "type": "string" } },

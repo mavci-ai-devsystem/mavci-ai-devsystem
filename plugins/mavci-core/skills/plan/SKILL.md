@@ -77,3 +77,17 @@ project is connected, and do not assume a phase.
    chain carry it the rest of the way.
 
 If the architect escalates, relay the question rather than deciding for them.
+
+## Changing a spec that is already approved
+
+Do not block the task and open a new one for the same work. The operator withdraws
+the approval, with a reason written to a file:
+
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/state.mjs" --revise-spec <id> --reason <file>`
+
+That is the operator's command - you do not run it. It keeps the approved version
+under `.mavci/control/specs/`, records the reason on the task, and moves the task
+back to `plan` (a blocked task becomes pending again). Then the architect revises
+the spec in place for that reason, and steps 4 and 5 run again: the same criteria
+check, and `--approve-spec`, whose output now also shows the difference from the
+version approved before. Nothing moves past `plan` until that second approval.

@@ -85,6 +85,13 @@ jobs:
       - name: An approval accepts nothing verify cannot run
         run: node scripts/ci/check-criteria-limits.mjs
 
+      # cartoonify 0034: an approved spec is revised on purpose instead of the task being
+      # blocked and re-planned. Old task records (no spec_revisions) and new ones both
+      # validate - tested on a verbatim copy of the real 0034 record - the old version is
+      # kept, the revised spec passes the same limits check, and re-approval shows the diff.
+      - name: An approved spec can be revised, and re-approval shows what changed
+        run: node scripts/ci/check-spec-revision.mjs
+
       # The orchestrator's contract, and the two assertions in it that are not
       # prose: the guard must not deny what ship says it may run, and ship's
       # copy of WORKFLOW_MOVES must be the guard's. A second list of the exempt

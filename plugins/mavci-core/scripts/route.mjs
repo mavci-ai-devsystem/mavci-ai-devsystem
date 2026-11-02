@@ -33,7 +33,7 @@ import { abs, exists, readJsonOrNull, readTextOrNull } from './lib/fsx.mjs';
 import { route, OWNER } from './lib/route.mjs';
 import { checkCriteriaLimits, limitsReport } from './lib/criteria-limits.mjs';
 import { buildRedactor } from './redact.mjs';
-import { projectRoot } from './state.mjs';
+import { projectRoot, revisionDiff, revisionReport } from './state.mjs';
 
 function readJsonStrict(file, label) {
   try {
@@ -173,6 +173,14 @@ function main() {
     const manifest = readJsonOrNull(abs(root, PATHS.manifest));
     const r = checkCriteriaLimits(specText, { scan: buildRedactor(root, manifest).scanRepoText });
     limits = { blocking: r.errors.length, warnings: r.warnings.length, operator_needed: r.operatorIds, report: limitsReport(r) };
+    /* A REVISED spec: show what changed against the version approved before, so
+     * the operator reads the difference rather than the whole document again. */
+    const t = input.tasks.find((x) => x.id === decision.task_id);
+    const rd = revisionDiff(root, t, specText);
+    if (rd) {
+      limits.revision = { previous_sha256: rd.previous_sha256, reason: rd.reason, added: rd.added ?? null,
+        removed: rd.removed ?? null, error: rd.error ?? null, report: revisionReport(rd) };
+    }
   }
 
   if (argv.includes('--json')) {
@@ -180,6 +188,7 @@ function main() {
   } else {
     if (limits) {
       console.log(limits.report);
+      if (limits.revision) console.log(`\n${limits.revision.report}`);
       if (limits.blocking) {
         console.log('\n--approve-spec will REFUSE this spec until the blocking problems above are fixed.');
       }

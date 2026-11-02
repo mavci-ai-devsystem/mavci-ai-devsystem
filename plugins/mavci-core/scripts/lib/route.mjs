@@ -565,6 +565,27 @@ export function route(input) {
      * emitting a step that cannot succeed. This is the gate that makes the
      * orchestrator an executor of decisions rather than a maker of them, and it
      * is the one place in the chain where a written spec waits on a person. */
+    /* A REVISION THAT HAS NOT BEEN WRITTEN YET. `--revise-spec` withdrew the
+     * approval with a reason, and the spec on disk is still byte-for-byte the
+     * version that was withdrawn. Asking the operator to approve it again would
+     * be asking them to re-approve the document they just sent back, so the
+     * architect goes first, carrying the operator's reason. */
+    const revs = Array.isArray(task.spec_revisions) ? task.spec_revisions : [];
+    const lastRev = revs[revs.length - 1];
+    if (lastRev && !task.spec_approved && typeof specText === 'string'
+      && createHash('sha256').update(specText).digest('hex') === lastRev.previous_sha256) {
+      return out('plan', {
+        task_id: id,
+        why: `the operator withdrew the approval of task ${id}'s spec (${task.spec}) to revise it, and `
+          + 'the spec has not changed since. Their reason, verbatim: '
+          + JSON.stringify(lastRev.reason),
+        steps: [
+          step('dispatch mavci-architect', `it revises ${task.spec} in place for the reason above, `
+            + 'keeping every criterion the reason does not touch, and runs verify.mjs --check-criteria '
+            + `${id} before returning`),
+        ],
+      });
+    }
     if (!approvalCurrent(task, specText)) {
       const stale = !!task.spec_approved;
       return out('awaiting_approval', {

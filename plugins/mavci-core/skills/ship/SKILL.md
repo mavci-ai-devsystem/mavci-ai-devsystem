@@ -151,7 +151,7 @@ omission.
 | `verify` | run the steps, then delegate to `@agent-mavci-verifier` with the task id. It runs `verify.mjs --record --task <id>`; you do not run it for it. |
 | `document` | run the steps, then delegate to `@agent-mavci-scribe` with the task id, the verdict path and the spec path, asking for a changelog entry and a task summary. Run the closing steps after it returns, not before. |
 | `incomplete` | **stop.** The verdict does not say whether the acceptance criteria were met. Run step 1 — `verify.mjs --run-criteria <id>` EXECUTES them and computes the answer — and consult the router again. If it refuses because the spec declares no `mavci-criteria` block, **stop and say so**: nothing can execute that spec's criteria, retrofitting it would break its approval, and the remaining exit is the operator's and the router names it: `--task-status <id> --status done` only where the verdict says "pass" with 0 blockers (it refuses anything else since 0.1.36), otherwise `--block <id> --reason`, which records why. That is theirs to spend, not yours. |
-| `awaiting_approval` | **stop.** A spec is written and the operator has not approved it, or it changed after approval. Print `limits.report` **first** - the Turkish check of the criteria against the system limits, warnings on top, naming who must act - then `why` and the acceptance criteria. If `limits.blocking` is above zero, `--approve-spec` will refuse: say so, and dispatch the architect to fix the spec rather than asking for an approval that cannot be recorded. **You may not run `--approve-spec` yourself** - it records the operator's decision, and a decision recorded without them is not a record of anything. |
+| `awaiting_approval` | **stop.** A spec is written and the operator has not approved it, or it changed after approval. Print `limits.report` **first** - the Turkish check of the criteria against the system limits, warnings on top, naming who must act - then `why` and the acceptance criteria. If `limits.revision` is present the spec was revised after an earlier approval: print `limits.revision.report` next - the reason and the diff against the version approved before - so the operator reads the change, not the whole spec again. If `limits.blocking` is above zero, `--approve-spec` will refuse: say so, and dispatch the architect to fix the spec rather than asking for an approval that cannot be recorded. **You may not run `--approve-spec` yourself** - it records the operator's decision, and a decision recorded without them is not a record of anything. |
 | `blocked` | **stop.** Print `why` and every step verbatim. Do not retry, do not reset attempts, do not waive. |
 | `release_gate` | **stop.** Print `why` and the steps. The release gate and the deploy behind it are the operator's. |
 | `unverified` | **stop.** Enforcement did not run. Print `why`. Nothing may be built on unchecked code. |
@@ -193,6 +193,10 @@ with no ceiling one level up.
   reads `--set-phase`, that is a defect in the router - report it, do not run it.
 - **Do not run `--approve-spec`.** It is the one command in the chain whose whole
   purpose is to record that a person decided something.
+- **Do not run `--revise-spec`.** It withdraws an approval the operator gave, with
+  their reason; it is the same decision in the other direction. If an approved spec
+  turns out to need changing, say so and hand the operator
+  `state.mjs --revise-spec <id> --reason <file>` - the reason is a file they write.
 - **Do not run `--reset-attempts`, `--waive`, `--reseal`, `--baseline-init`,
   `--set-phase` or `retro.mjs --apply`.** Those are the operator's, they are gated
   by caller, and the router never names them as a step you take — only as a move

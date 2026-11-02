@@ -93,12 +93,13 @@ const banBlock = (shipRaw.match(/\*\*Do not run `--reset-attempts`[\s\S]*?\n\n/)
 
 /* --- C3. the decision-recording commands are still handed over --------- */
 {
-  const banned = ['--approve-spec', '--waive'].filter((v) => banBlock.includes(v)
+  const MUST_BAN = ['--approve-spec', '--waive', '--revise-spec'];
+  const banned = MUST_BAN.filter((v) => banBlock.includes(v)
     || new RegExp(`Do not run \`${v}\``).test(ship));
-  if (banned.length === 2) {
-    ok('ship still hands --approve-spec and --waive to the operator as commands');
+  if (banned.length === MUST_BAN.length) {
+    ok('ship still hands --approve-spec, --waive and --revise-spec to the operator as commands');
   } else {
-    bad(`ship no longer bans ${['--approve-spec', '--waive'].filter((v) => !banned.includes(v)).join(', ')}. `
+    bad(`ship no longer bans ${MUST_BAN.filter((v) => !banned.includes(v)).join(', ')}. `
       + "`state.mjs` writes `by: 'operator'` as a constant, so a record made by the orchestrator is "
       + 'byte-identical to one the operator typed. Lifting the ban before the record can carry who '
       + 'was asked and what they answered trades a weak guarantee for none.');
@@ -202,7 +203,7 @@ const banBlock = (shipRaw.match(/\*\*Do not run `--reset-attempts`[\s\S]*?\n\n/)
   } else {
     const actual = [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
     const missing = actual.filter((v) => !ship.includes(v));
-    const extra = ['--approve-spec', '--waive', '--set-phase', '--reseal']
+    const extra = ['--approve-spec', '--waive', '--revise-spec', '--set-phase', '--reseal']
       .filter((v) => new RegExp(`WORKFLOW_MOVES[\\s\\S]{0,300}\`${v}\``).test(ship));
     if (!missing.length && !extra.length) {
       ok(`ship names all ${actual.length} WORKFLOW_MOVES verbs and claims no others`);

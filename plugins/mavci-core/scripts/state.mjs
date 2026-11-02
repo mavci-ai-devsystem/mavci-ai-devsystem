@@ -31,6 +31,7 @@ import {
 import { assertValid, validate } from './lib/schema.mjs';
 import { buildRedactor } from './redact.mjs';
 import { checkCriteriaLimits, limitsReport } from './lib/criteria-limits.mjs';
+import { renderDiff } from './lib/textdiff.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(HERE, '..');
@@ -595,6 +596,133 @@ export function restoreSpec(root, id) {
   return { spec: a.spec_path, sha: after, changed: before !== after, from: snapRel };
 }
 
+/* ================================================= REVISING AN APPROVED SPEC
+ *
+ * cartoonify task 0034. An approved spec turned out to need changing (criterion 8
+ * asked for 20 minutes; the runner allows 10). There was no sanctioned way to
+ * change an approved document: the guard denies every agent a write to it, and
+ * re-approving a spec an agent was not allowed to edit is not a path. So the task
+ * was BLOCKED and the same work was re-planned as a new task, 0035 - a second id
+ * for one piece of work, and a blocked task that reads, to the next person, as a
+ * failure.
+ *
+ * `--revise-spec <id> --reason <file>` is the operator WITHDRAWING an approval on
+ * purpose, with the reason recorded. It is one write to the control task:
+ *
+ *   - the approved bytes are KEPT (the snapshot under control/specs/ is verified,
+ *     or taken now if the spec on disk still is those bytes) - refused otherwise;
+ *   - `spec_approved` becomes null, which re-opens the spec to the architect and
+ *     closes every phase transition until the operator approves again;
+ *   - the task goes back to `plan`; a blocked or failed task becomes pending, so
+ *     the router selects it again; an in_progress task keeps its status and takes
+ *     the project phase back to plan with it;
+ *   - one entry is APPENDED to `spec_revisions[]`, naming the approval withdrawn.
+ *
+ * Re-approval is the ordinary `--approve-spec`: the same criteria limits check
+ * runs (a revised spec gets no shortcut), and the output shows the DIFF against
+ * the version that was approved before.
+ *
+ * NOT ALLOWED on a `done` task. Reopening a closed task is a different decision
+ * (cartoonify finding 61, third assertion) and is not smuggled in here.
+ */
+export const REVISION_REASON_MAX = 2000;
+
+export function reviseSpec(root, id, reason) {
+  const t = readControlTask(root, id);
+  const a = t.spec_approved;
+  if (!a?.spec_path || !a?.spec_sha256) {
+    throw new Error(`task ${id} has no recorded spec approval, so there is nothing to revise. `
+      + 'An unapproved spec is still the architect\'s to edit directly.');
+  }
+  if (t.status === 'done') {
+    throw new Error(`task ${id} is done. Revising its spec would reopen a closed task, which is a `
+      + 'different decision from revising a spec and is not made by this command. Open a new task.');
+  }
+  const text = typeof reason === 'string' ? reason.trim() : '';
+  if (!text) {
+    throw new Error('a revision needs a reason. A withdrawn approval with no reason is a future '
+      + 'mystery: the next reader sees the approval gone and cannot tell why.');
+  }
+  if (text.length > REVISION_REASON_MAX) {
+    throw new Error(`the reason is ${text.length} characters; the limit is ${REVISION_REASON_MAX}. `
+      + 'Put the detail in the spec and keep the reason to what changed and why.');
+  }
+  if (t.status === 'in_progress') assertSoleInProgress(root, id);
+
+  /* THE OLD VERSION IS KEPT BEFORE THE APPROVAL IS WITHDRAWN - finding 8's order.
+   * A revision that lost the approved bytes would leave nothing to diff against
+   * and nothing to restore, which is exactly gate5's state. */
+  const snapRel = specSnapshotPath(id, a.spec_sha256);
+  const snapAbs = abs(root, snapRel);
+  if (exists(snapAbs)) {
+    const have = sha256(readText(snapAbs));
+    if (have !== a.spec_sha256) {
+      throw new Error(`the snapshot at ${snapRel} hashes to ${have.slice(0, 12)}, not the approved `
+        + `${a.spec_sha256.slice(0, 12)}. The approved version is not reliably kept, so the approval `
+        + 'is not withdrawn. Nothing was changed.');
+    }
+  } else {
+    const cur = specHash(root, { spec: a.spec_path });
+    if (cur !== a.spec_sha256) {
+      throw new Error(`task ${id}'s approved version (${a.spec_sha256.slice(0, 12)}) is not kept: there `
+        + `is no snapshot at ${snapRel}, and ${a.spec_path} has changed since approval `
+        + `(${cur ? cur.slice(0, 12) : 'MISSING'}). Withdrawing the approval now would lose the only `
+        + `record of what was approved. Recover it first: git log -- ${a.spec_path}. Nothing was changed.`);
+    }
+    writeTextAtomic(snapAbs, readText(abs(root, a.spec_path)));
+  }
+
+  const entry = {
+    at: nowIso(), by: 'operator', reason: text,
+    from_phase: t.phase, from_status: t.status,
+    previous_blocked_by: t.blocked_by ?? null,
+    previous_spec_path: a.spec_path, previous_sha256: a.spec_sha256, previous_approved_at: a.at,
+  };
+  const status = t.status === 'in_progress' ? 'in_progress' : 'pending';
+  updateControlTask(root, id, {
+    phase: 'plan', status, blocked_by: null, spec_approved: null,
+    spec_revisions: [...(Array.isArray(t.spec_revisions) ? t.spec_revisions : []), entry],
+  });
+  // Task half first, state last (advancePhase's order). Only the task that owns
+  // the project phase moves it.
+  if (status === 'in_progress') setState(root, { phase: 'plan' });
+  return { id, from_phase: t.phase, from_status: t.status, status, snapshot: snapRel, spec: a.spec_path };
+}
+
+/**
+ * The diff between the version approved before the latest revision and the spec
+ * now on disk - or null when the task has never been revised. A snapshot that is
+ * missing or does not hash to the withdrawn approval yields `{ error }`, never an
+ * empty diff: "no changes" is a real answer and must not stand in for "unknown".
+ */
+export function revisionDiff(root, task, specText) {
+  const revs = Array.isArray(task?.spec_revisions) ? task.spec_revisions : [];
+  if (!revs.length || typeof specText !== 'string') return null;
+  const last = revs[revs.length - 1];
+  const snapRel = specSnapshotPath(task.id, last.previous_sha256);
+  const snapAbs = abs(root, snapRel);
+  const base = { previous_sha256: last.previous_sha256, reason: last.reason, revised_at: last.at, snapshot: snapRel };
+  if (!exists(snapAbs)) return { ...base, error: `the previous approved version is not at ${snapRel}` };
+  const old = readText(snapAbs);
+  if (sha256(old) !== last.previous_sha256) {
+    return { ...base, error: `the snapshot at ${snapRel} does not hash to the withdrawn approval` };
+  }
+  const d = renderDiff(old, specText);
+  return { ...base, ...d };
+}
+
+/** The diff as the operator reads it, in Turkish. */
+export function revisionReport(rd) {
+  if (!rd) return '';
+  const head = `Bu spec ${rd.revised_at} tarihinde yeniden açıldı. Gerekçe: ${rd.reason}`;
+  if (rd.error) return `${head}\nÖNCEKİ ONAYLI SÜRÜMLE FARK GÖSTERİLEMİYOR: ${rd.error}.`;
+  if (!rd.added && !rd.removed) {
+    return `${head}\nFark yok: spec, önceki onaylı sürümle (${rd.previous_sha256.slice(0, 12)}) aynı.`;
+  }
+  return `${head}\nÖnceki onaylı sürüme (${rd.previous_sha256.slice(0, 12)}) göre değişiklik: `
+    + `${rd.removed} satır çıkarıldı, ${rd.added} satır eklendi (- eski, + yeni):\n${rd.text}`;
+}
+
 export function approveSpec(root, id) {
   const t = readControlTask(root, id);
   const surface = readJsonOrNull(abs(root, surfaceTaskPath(id)));
@@ -621,7 +749,8 @@ export function approveSpec(root, id) {
   const limits = checkCriteriaLimits(readText(abs(root, spec)), {
     scan: buildRedactor(root, manifest).scanRepoText,
   });
-  const report = limitsReport(limits);
+  const rd = revisionDiff(root, t, readText(abs(root, spec)));
+  const report = limitsReport(limits) + (rd ? `\n\n${revisionReport(rd)}` : '');
   if (limits.errors.length) {
     throw new Error(`${report}\n\nONAY VERİLMEDİ: task ${id}'s spec (${spec}) has ${limits.errors.length} `
       + 'blocking problem(s) above. Nothing was recorded. The architect fixes the spec; then approve again.');
@@ -1458,6 +1587,33 @@ async function main() {
           + 'the document on disk hashing to what the operator approved.');
         return;
       }
+      case '--revise-spec': {
+        const id = arg('--revise-spec');
+        const src = arg('--reason');
+        if (id === true || !id || typeof src !== 'string') {
+          die('usage: --revise-spec <task-id> --reason <file|->\n'
+            + 'The reason is read from a FILE (or stdin with -), never from the argument itself: '
+            + 'an argument goes through a shell, and prose about code does not survive one.');
+        }
+        let reason;
+        if (src === '-') {
+          reason = fs.readFileSync(0, 'utf8');
+        } else {
+          const p = path.isAbsolute(src) ? src : path.resolve(process.cwd(), src);
+          if (!exists(p)) {
+            die(`--reason takes a PATH, and ${src} is not a file. Write the reason to a file `
+              + 'and pass its path, or pipe it in with --reason -.');
+          }
+          reason = readText(p);
+        }
+        const r = reviseSpec(root, id, reason);
+        console.log(`task ${id}: approval WITHDRAWN - ${r.spec}; phase ${r.from_phase} -> plan, `
+          + `status ${r.from_status} -> ${r.status}`);
+        console.log(`The approved version is kept at ${r.snapshot}. The architect may now revise the spec; `
+          + `nothing moves past plan until you run --approve-spec ${id} again, and that run shows `
+          + 'the difference from the version you approved before.');
+        return;
+      }
       case '--advance-phase': {
         const id = arg('--advance-phase');
         const from = arg('--from');
@@ -1636,6 +1792,7 @@ async function main() {
           '  --baseline-prune               retire baseline entries that now pass',
           '  --new-task "<title>"           allocate an id and create both task halves',
           '  --begin-plan "<title>"         enter the plan phase AND allocate the task, as one write',
+          '  --revise-spec <id> --reason <file|->   withdraw a spec approval on purpose, keep the old version, back to plan (operator)',
           '  --show                         one-line status as JSON',
         ].join('\n'), 2);
     }

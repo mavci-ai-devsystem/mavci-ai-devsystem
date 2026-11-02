@@ -61,6 +61,7 @@ jobs:
           node scripts/ci/check-route.mjs
           node scripts/ci/check-criteria-runner.mjs
           node scripts/ci/check-criteria-limits.mjs
+          node scripts/ci/check-spec-revision.mjs
           node scripts/ci/check-ship-contract.mjs
           node scripts/ci/check-gate.mjs
           node scripts/ci/check-plugin.mjs
