@@ -2733,6 +2733,18 @@ form was observed in an auto-mode session, where no prompt appearing does not
 prove the rule matched; and agy's quota-exhausted message has still not been
 seen.
 
+### 0.1.40 — small agy jobs are batched or go to Haiku
+
+**Cut 2026-11-06, at the operator's request.** Prose only, in
+`skills/orkestra/SKILL.md`; no script, hook, rule or check changed.
+
+Measured: every agy call carries a ~15,000-token fixed cost — a 10-line README
+summary (438 bytes in) cost 15,922. So small jobs are never sent to agy one by
+one: jobs of the same kind are batched into one input and one call, and a job
+whose own estimated cost is under 5,000 tokens with nothing to batch it with
+goes to a Claude Haiku subagent instead. The 5,000 threshold is the
+operator's; nothing enforces it in `orkestra-kayit.mjs`.
+
 ### Carried forward — still not built
 
 **Items 1–4 and 5–6 below remain unbuilt; item 7 is held deliberately, for the

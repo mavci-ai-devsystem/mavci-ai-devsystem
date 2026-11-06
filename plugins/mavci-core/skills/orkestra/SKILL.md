@@ -25,7 +25,7 @@ kişisel hesaplara kapalı; Google işçisi artık agy.)
    - Basit/toplu veri işleri (temizleme, çeviri, toplu metin) → **agy
      `gemini-3.8-flash-low`** → Gemini kotası dolarsa **agy
      `gpt-oss-120b-medium`** (Claude/GPT grubu) → o da olmazsa **Claude Haiku
-     alt ajan**.
+     alt ajan**. Küçük işte önce "Sabit maliyet" kuralına bak.
    - Uzun belge / büyük repo okuma → **agy `gemini-3.8-flash-high`** (yalnız
      gereken dosyalar) → kota yoksa **Claude Sonnet alt ajan**.
    - Orta seviye kod → ÖNCE **agy `claude-sonnet-4-6`** (Google kotasından
@@ -69,6 +69,19 @@ kişisel hesaplara kapalı; Google işçisi artık agy.)
 - agy'ye her işte yalnız gereken dosyaların listesi verilir; "repoyu gez"
   denmez.
 - Gemini grubu ve Claude/GPT grubu kotaları ayrı, haftalık yenilenir.
+
+## Sabit maliyet: küçük işler agy'ye tek tek gönderilmez
+
+- agy'nin her çağrısında **~15.000 token sabit maliyet** var (2026-11-06
+  ölçümü: README'nin 10 satırını tek cümlede özetlemek 15.922 token tuttu,
+  girdi 438 bayttı). Maliyetin neredeyse tamamı çağrının kendisi, girdi değil.
+- Bu yüzden **küçük işler agy'ye tek tek gönderilmez.** Aynı türden işler
+  (ör. birkaç dosyanın özeti, birkaç metnin çevirisi) tek girdi dosyasında
+  toplanır ve **tek çağrıda** verilir; istem her parçanın sonucunu ayrı
+  başlıkla döndürmesini ister.
+- Tahmini iş maliyeti (sabit maliyet hariç, yalnız işin kendisi) **5.000
+  token'ın altındaysa** ve aynı türden toplanacak başka iş yoksa agy
+  çağrılmaz; iş **Claude Haiku alt ajana** verilir.
 
 ## Görsel akışı
 
