@@ -2673,6 +2673,29 @@ the commit message; this entry names them so the log does not skip a release.
 has no `today`; it only matters to `--against-tree`, which nothing runs after
 approval. Restart sessions after propagating, as always.
 
+### 0.1.38 — orkestra: the session leads, agy and Claude subagents work
+
+**Cut 2026-11-06, at the operator's request.** Two new skills, 17 in total
+(`ls plugins/mavci-core/skills/`). No script, hook, rule or check changed.
+
+- `orkestra` (model-invocable): the session is the leader; work is split and
+  sent to agy (bulk text, long reads, second opinion) or to Claude Haiku /
+  Sonnet subagents; outputs go to `.mavci/orkestra/<job>/`, the leader reads at
+  most five lines and verifies every result itself. The operator's seven rules
+  are in it verbatim, in Turkish.
+- `agy-cli`: how to call Antigravity CLI 1.5.2, everything in it observed on
+  this machine. Gemini CLI was dropped because Google closed it to personal
+  accounts on 2026-06-18. Three behaviours a reader would not guess: agy does
+  NOT read stdin, exits 0 when a permission denial produced no output, and in
+  `--mode plan` wraps its answer in a plan file unless told not to. It has no
+  image-generation tool, so orkestra has none.
+- `.mavci/orkestra/` is gitignored here. Its presence makes
+  `check-scribe-refs.mjs` treat this repo as a project locally; the skill says to
+  remove it after a run. CI is unaffected (the directory is never committed).
+
+No check covers the skills' prose; they declare no standard (invariant 4 does
+not apply) and contain no inline shell blocks.
+
 ### Carried forward — still not built
 
 **Items 1–4 and 5–6 below remain unbuilt; item 7 is held deliberately, for the

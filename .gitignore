@@ -146,3 +146,6 @@ vite.config.ts.timestamp-*
 .DS_Store
 .claude/settings.local.json
 tmp/
+
+# orkestra working files (outputs of /mavci-core:orkestra; images are binary)
+.mavci/orkestra/
