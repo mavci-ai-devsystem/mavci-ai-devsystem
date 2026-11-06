@@ -2696,6 +2696,43 @@ approval. Restart sessions after propagating, as always.
 No check covers the skills' prose; they declare no standard (invariant 4 does
 not apply) and contain no inline shell blocks.
 
+### 0.1.39 — orkestra v2: a token ceiling a program holds, not a model
+
+**Cut 2026-11-06, at the operator's request.** One agy README summary cost
+780,173 tokens, ~44% of the weekly Gemini quota, and nothing stopped it.
+
+- **`scripts/orkestra-kayit.mjs`** (new, zero deps, `--selftest` wired into both
+  workflows). Machine-wide ledgers under `~/.mavci/`: `agy-kota.md` (one row per
+  agy call: date, project, job, model, tokens) and `bekleyen-gorseller.md`
+  (images waiting for Nim credit or a Gemini key). `--agy-record` extracts the
+  response, records the tokens and exits **3 = stop and ask** when the job's
+  7-day total passes **200,000** or the token count cannot be read — "could not
+  check" is never "under the ceiling" (invariant 5). `--estimate` refuses before
+  the call, `--week` splits the Gemini quota from the Claude/GPT one. Two
+  mutations (per-call instead of per-job ceiling; unreadable count treated as
+  fine) each redden exactly their assertion.
+- **New distribution in `orkestra`:** simple work agy flash-low → agy
+  `gpt-oss-120b-medium` → Haiku; long reads agy flash-high (named files only) →
+  Sonnet; medium code agy `claude-sonnet-4-6` first (Google quota, spares Claude
+  Pro) → Sonnet subagent, leader always checks; images Nim (credit checked,
+  never purchased) → Gemini API (only if `GEMINI_API_KEY` is set; untested) →
+  pending list.
+- **`agy-cli`'s call is three Bash calls** — `cd`, then a command that begins
+  `agy -p`, then the record. The old `( cd … && agy … )` form began with a
+  parenthesis and `Bash(agy -p:*)` could not match it. agy has no cwd flag.
+  A Git Bash shim `~/.local/bin/agy` was added on this machine (outside the
+  repo) so a session with a stale PATH still resolves `agy`.
+- **`check-scribe-refs.mjs`:** a `.mavci/` holding only `orkestra/` is not a
+  project (`isProjectRoot`), three assertions, two mutations, one red each.
+  Before this, orkestra's scratch folder made it verify this repo's docs as a
+  project's and fail locally while CI stayed green.
+
+Measured: agy Sonnet 4.6, one helper + test, 6,857 tokens, 7/7 tests passed
+when run by the leader. Not established: the permission rule matching the new
+form was observed in an auto-mode session, where no prompt appearing does not
+prove the rule matched; and agy's quota-exhausted message has still not been
+seen.
+
 ### Carried forward — still not built
 
 **Items 1–4 and 5–6 below remain unbuilt; item 7 is held deliberately, for the

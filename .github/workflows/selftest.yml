@@ -225,6 +225,12 @@ jobs:
       - name: Scribe citations resolve, and a document that cites nothing fails
         run: node scripts/ci/check-scribe-refs.mjs --selftest
 
+      # orkestra's machine-wide agy ledger: the 200k-per-job ceiling stops with
+      # exit 3, an unreadable token count is a stop rather than a pass, and the
+      # weekly totals split the Gemini quota from the Claude/GPT one.
+      - name: orkestra ledger, ceiling and weekly totals
+        run: node plugins/mavci-core/scripts/orkestra-kayit.mjs --selftest
+
       # Same defect as check-command-refs, different namespace. A /mavci-core:<name>
       # that does not resolve was covered since 0.1.12; a check-*.mjs named in a
       # comment as the thing that guarantees a property was not - and one had dangled

@@ -137,6 +137,17 @@ export function verify(root, rel, text, { git = true } = {}) {
 
 /* ------------------------------------------------------------------ selftest */
 
+// Is this directory a project whose documents this check should verify? A
+// `.mavci/` holding only `orkestra/` is NOT one: orkestra writes its scratch
+// files there in any repository, this one included, and treating that as a
+// project made the check verify this repo's docs against project paths and fail
+// locally while CI (where the folder never exists) stayed green.
+export function isProjectRoot(root) {
+  const d = path.join(root, '.mavci');
+  if (!fs.existsSync(d)) return false;
+  return fs.readdirSync(d).some((e) => e !== 'orkestra');
+}
+
 function selftest() {
   const failures = [];
   const ok = (m) => console.log(`  ok   ${m}`);
@@ -178,6 +189,13 @@ function selftest() {
   check(V('Task 0001 - "Add billing page". Detail in docs/real.md.').length === 0,
     'a path that EXISTS but may be the wrong file passes - existence only, and the header says so');
 
+  // Project detection: orkestra's scratch folder alone is not a project.
+  const od = fs.mkdtempSync(path.join(os.tmpdir(), 'mavci-scribe-ork-'));
+  fs.mkdirSync(path.join(od, '.mavci/orkestra/test2'), { recursive: true });
+  check(!isProjectRoot(od), 'a .mavci/ holding only orkestra/ is NOT a project - the check ignores it');
+  check(isProjectRoot(tmp), 'a .mavci/ holding control/ IS a project - the ignore did not widen to everything');
+  check(!isProjectRoot(path.join(od, 'nope')), 'no .mavci/ at all is not a project');
+
   // git-backed half, against this repository.
   // stdio pinned: Node forwards a child's stderr to this process by default, which
   // annotates a passing job red. Unpinned here since 0.1.14 declared it fixed "as a
@@ -202,7 +220,7 @@ function selftest() {
 }
 
 if (path.basename(process.argv[1] ?? '') === 'check-scribe-refs.mjs') {
-  if (process.argv.includes('--selftest') || !fs.existsSync(path.join(process.cwd(), '.mavci'))) selftest();
+  if (process.argv.includes('--selftest') || !isProjectRoot(process.cwd())) selftest();
   else {
     const root = process.cwd();
     const all = [];
