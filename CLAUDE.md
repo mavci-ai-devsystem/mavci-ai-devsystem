@@ -2745,6 +2745,29 @@ whose own estimated cost is under 5,000 tokens with nothing to batch it with
 goes to a Claude Haiku subagent instead. The 5,000 threshold is the
 operator's; nothing enforces it in `orkestra-kayit.mjs`.
 
+### 0.1.41 — two lost-backslash paths, and one script for the propagation visit
+
+**Cut 2026-11-06, at the operator's request.**
+
+- `skills/orkestra/SKILL.md` named the ledgers as `%USERPROFILE%.mavciagy-kota.md`
+  and `%USERPROFILE%.mavci<U+0008>ekleyen-gorseller.md`: the backslashes were
+  eaten when the text passed through an escape-interpreting writer, and in the
+  second one `\b` became a BACKSPACE byte. `check-plugin.mjs` did not see it —
+  invariant 3's scan looks for NUL only, so other C0 control bytes pass. Every
+  tracked file was swept for C0 bytes other than tab/LF/CR after the fix: none.
+  Not turned into a check in this release; it belongs with carried-forward
+  item 10.
+- `scripts/mavci-guncelle.ps1` runs the five propagation commands (cd to the
+  marketplace clone, fetch, `checkout -B main origin/main`, uninstall, install
+  `--scope user`), one Turkish line per step, stops on the first non-zero exit
+  naming the step and git's own last line, then prints the user-scope version
+  from `installed_plugins.json` and the restart warning. The file is pure ASCII
+  with Turkish letters as `\uXXXX` decoded at run time, because the repo forbids
+  a BOM and Windows PowerShell 5.1 reads a BOM-less file as ANSI. Paths and
+  command output are never passed through the decoder. Tested on 5.1 for a
+  missing clone and a non-git clone; the success path is the operator's next
+  propagation. No CI check covers it.
+
 ### Carried forward — still not built
 
 **Items 1–4 and 5–6 below remain unbuilt; item 7 is held deliberately, for the

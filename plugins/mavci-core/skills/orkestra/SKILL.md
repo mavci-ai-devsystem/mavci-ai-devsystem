@@ -63,7 +63,7 @@ kişisel hesaplara kapalı; Google işçisi artık agy.)
   al; tavan aşılacak gibiyse ya da bir çağrıdan sonra kayıt komutu `DUR`
   (çıkış 3) derse **dur, kullanıcıya sor, onay almadan devam etme.**
 - Her agy çağrısının token'ı makine genelindeki
-  `%USERPROFILE%.mavciagy-kota.md` kaydına yazılır; tüm projeler aynı kaydı
+  `%USERPROFILE%\.mavci\agy-kota.md` kaydına yazılır; tüm projeler aynı kaydı
   kullanır. Haftalık toplam bu kayıttan hesaplanır (`--week`). Komutlar
   `agy-cli` skill'inde.
 - agy'ye her işte yalnız gereken dosyaların listesi verilir; "repoyu gez"
@@ -97,7 +97,7 @@ kişisel hesaplara kapalı; Google işçisi artık agy.)
 4. O da yoksa ya da çalışmazsa görseli bekleme listesine yaz ve kullanıcıya
    bildir. İstemi önce bir dosyaya yaz, sonra:
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/orkestra-kayit.mjs" --image-pending --project <proje> --target <hedef-dosya> --prompt-file <istem-dosyası>`
-   Liste: `%USERPROFILE%.mavciekleyen-gorseller.md`.
+   Liste: `%USERPROFILE%\.mavci\bekleyen-gorseller.md`.
 5. Nim kredisi gelince ya da anahtar tanımlanınca `--image-list` ile bekleyenleri
    sırayla üret; her biri üretilip dosyası doğrulanınca `--image-done <no>`.
 
